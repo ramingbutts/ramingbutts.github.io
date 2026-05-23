@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello World</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header>
+<p><a href="/">&larr; home</a></p>
+<h1>Hello World</h1>
+<p class="post-date">2026-05-23</p>
+</header>
+<main>
+<p>This is the first post. It was written in plain Markdown and</p>
+<p>turned into HTML by a shell script.</p>
+<h2>How it works</h2>
+<p>Each post is a <code>.md</code> file with a small header (title, date)</p>
+<p>separated from the body by <code>---</code>. The build script:</p>
+<p>1. Reads the header to extract metadata</p>
+<p>2. Converts the Markdown body to HTML through <code>sed</code> transforms</p>
+<p>3. Pipes the result into a template</p>
+<p>No dependencies. No magic. Just text in, text out.</p>
+<h2>Why the Unix way?</h2>
+<li><strong>Do one thing well</strong> — each file has one job</li>
+<li><strong>Text streams</strong> — data flows through pipelines</li>
+<li><strong>Composability</strong> — swap any piece without breaking the rest</li>
+<li><strong>Simplicity</strong> — you can read every line of the build script</li>
+</main>
+<footer>
+<p>Built with <code>/bin/sh</code></p>
+</footer>
+</body>
+</html>
