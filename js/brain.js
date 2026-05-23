@@ -21,8 +21,8 @@ App.registerPage('brain', {
           ${categories.map(c => {
             const count = notes.filter(n => n.categoryId === c.id).length;
             return `
-              <div class="note-category-card" onclick="location.hash='#/brain/${c.id}'">
-                <div class="note-category-icon">${c.icon}</div>
+              <div class="note-category-card" data-cid="${App.escAttr(c.id)}">
+                <div class="note-category-icon">${this._esc(c.icon)}</div>
                 <div class="note-category-name">${this._esc(c.name)}</div>
                 <div class="note-category-count">${count} note${count !== 1 ? 's' : ''}</div>
               </div>
@@ -43,6 +43,9 @@ App.registerPage('brain', {
 
     document.getElementById('add-category').onclick = () => this._editCategory();
     document.getElementById('add-note-uncat').onclick = () => this._editNote(null, null);
+    container.querySelectorAll('.note-category-card').forEach(el => {
+      el.addEventListener('click', () => { location.hash = '#/brain/' + el.dataset.cid; });
+    });
   },
 
   _renderCategory(container, catId) {
@@ -54,7 +57,7 @@ App.registerPage('brain', {
       <div class="section-header">
         <div style="display:flex;align-items:center;gap:12px">
           <button class="btn btn-ghost btn-sm" onclick="location.hash='#/brain'">&larr; Back</button>
-          <span class="section-title">${cat ? cat.icon + ' ' + this._esc(cat.name) : 'Category'}</span>
+          <span class="section-title">${cat ? this._esc(cat.icon) + ' ' + this._esc(cat.name) : 'Category'}</span>
         </div>
         <div style="display:flex;gap:8px">
           ${cat ? `<button class="btn btn-secondary btn-sm" id="edit-cat">Edit Category</button>` : ''}
@@ -72,9 +75,9 @@ App.registerPage('brain', {
     if (!notes.length) {
       return '<div class="card"><div class="empty-state" style="padding:32px"><div class="empty-state-text">No notes yet</div></div></div>';
     }
-    return `<div class="card">
+    const html = `<div class="card brain-notes-list">
       ${[...notes].sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '')).map(n => `
-        <div style="padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="App.pages.brain._viewNote('${n.id}')">
+        <div style="padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer" class="brain-note-row" data-nid="${App.escAttr(n.id)}">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <span style="font-size:14px;font-weight:600">${this._esc(n.title)}</span>
             <span style="font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace">${n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : ''}</span>
@@ -84,6 +87,12 @@ App.registerPage('brain', {
         </div>
       `).join('')}
     </div>`;
+    setTimeout(() => {
+      document.querySelectorAll('.brain-note-row').forEach(el => {
+        el.addEventListener('click', () => this._viewNote(el.dataset.nid));
+      });
+    }, 0);
+    return html;
   },
 
   _viewNote(id) {
@@ -99,11 +108,13 @@ App.registerPage('brain', {
       <div style="font-size:14px;line-height:1.7;white-space:pre-wrap">${this._esc(n.content)}</div>
       <div style="margin-top:12px;display:flex;gap:4px">${(n.tags || []).map(t => `<span class="badge badge-accent">${this._esc(t)}</span>`).join('')}</div>
       <div class="modal-actions">
-        <button class="btn btn-danger" onclick="App.pages.brain._deleteNote('${id}');App.closeModal()">Delete</button>
+        <button class="btn btn-danger" id="bn-delete">Delete</button>
         <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
-        <button class="btn btn-primary" onclick="App.closeModal();App.pages.brain._editNote('${id}')">Edit</button>
+        <button class="btn btn-primary" id="bn-edit">Edit</button>
       </div>
     `);
+    document.getElementById('bn-delete').addEventListener('click', () => { this._deleteNote(id); App.closeModal(); });
+    document.getElementById('bn-edit').addEventListener('click', () => { App.closeModal(); this._editNote(id); });
   },
 
   _editNote(id, categoryId) {
@@ -121,12 +132,14 @@ App.registerPage('brain', {
         </select>
       </div>
       <div class="form-group"><label>Content</label><textarea id="fb-content" style="min-height:150px">${this._esc(n?.content || '')}</textarea></div>
-      <div class="form-group"><label>Tags (comma separated)</label><input id="fb-tags" value="${(n?.tags || []).join(', ')}"></div>
+      <div class="form-group"><label>Tags (comma separated)</label><input id="fb-tags"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
         <button class="btn btn-primary" id="fb-save">Save</button>
       </div>
     `);
+
+    document.getElementById('fb-tags').value = (n?.tags || []).join(', ');
 
     document.getElementById('fb-save').onclick = () => {
       const title = document.getElementById('fb-title').value.trim();

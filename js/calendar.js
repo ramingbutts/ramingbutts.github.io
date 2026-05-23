@@ -13,22 +13,29 @@ App.registerPage('calendar', {
     const daysInPrev = new Date(year, month, 0).getDate();
     const monthName = new Date(year, month).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-    const todayEvents = events.filter(e => e.date === today).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    const eventsByDate = {};
+    events.forEach(e => {
+      if (!eventsByDate[e.date]) eventsByDate[e.date] = [];
+      eventsByDate[e.date].push(e);
+    });
+
+    const todayEvents = (eventsByDate[today] || []).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 
     const cells = [];
+    const localDate = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
     for (let i = firstDay - 1; i >= 0; i--) {
       const d = daysInPrev - i;
       const dt = new Date(year, month - 1, d);
-      cells.push({ day: d, date: dt.toISOString().slice(0, 10), other: true });
+      cells.push({ day: d, date: localDate(dt), other: true });
     }
     for (let d = 1; d <= daysInMonth; d++) {
       const dt = new Date(year, month, d);
-      cells.push({ day: d, date: dt.toISOString().slice(0, 10), other: false });
+      cells.push({ day: d, date: localDate(dt), other: false });
     }
     const remaining = 42 - cells.length;
     for (let d = 1; d <= remaining; d++) {
       const dt = new Date(year, month + 1, d);
-      cells.push({ day: d, date: dt.toISOString().slice(0, 10), other: true });
+      cells.push({ day: d, date: localDate(dt), other: true });
     }
 
     container.innerHTML = `
@@ -50,7 +57,7 @@ App.registerPage('calendar', {
               <div class="cal-grid">
                 ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => `<div class="cal-header">${d}</div>`).join('')}
                 ${cells.map(c => {
-                  const dayEvents = events.filter(e => e.date === c.date);
+                  const dayEvents = eventsByDate[c.date] || [];
                   return `
                     <div class="cal-day ${c.other ? 'other-month' : ''} ${c.date === today ? 'today' : ''}" onclick="App.pages.calendar._dayClick('${c.date}')">
                       <div class="cal-day-num">${c.day}</div>

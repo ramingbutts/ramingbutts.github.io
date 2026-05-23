@@ -6,7 +6,7 @@ App.registerPage('habits', {
     for (let i = 6; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
+      days.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
     const dayLabels = days.map(d => {
       const dt = new Date(d + 'T00:00:00');
@@ -57,19 +57,19 @@ App.registerPage('habits', {
           ${habits.map(h => `
             <div class="habit-row">
               <div class="habit-name">
-                <span>${h.icon || '&#9733;'}</span> ${this._esc(h.name)}
-                <div style="font-size:10px;color:var(--text-muted)">${h.category}</div>
+                <span>${this._esc(h.icon || '★')}</span> ${this._esc(h.name)}
+                <div style="font-size:10px;color:var(--text-muted)">${this._esc(h.category)}</div>
               </div>
               <div class="habit-days">
                 ${days.map(d => {
                   const done = h.completed && h.completed[d];
-                  return `<div class="habit-day ${done ? 'completed' : ''}" onclick="App.pages.habits._toggle('${h.id}','${d}')">${done ? '&#10003;' : ''}</div>`;
+                  return `<div class="habit-day ${done ? 'completed' : ''} habit-toggle" data-hid="${App.escAttr(h.id)}" data-date="${d}">${done ? '&#10003;' : ''}</div>`;
                 }).join('')}
               </div>
               <div class="habit-streak">${h.streak || 0}&#128293;</div>
               <div style="width:60px;text-align:right">
-                <button class="btn btn-ghost btn-sm" onclick="App.pages.habits._edit('${h.id}')">&#9998;</button>
-                <button class="btn btn-ghost btn-sm" onclick="App.pages.habits._delete('${h.id}')" style="color:var(--red)">&#10005;</button>
+                <button class="btn btn-ghost btn-sm habit-edit-btn" data-hid="${App.escAttr(h.id)}">&#9998;</button>
+                <button class="btn btn-ghost btn-sm habit-del-btn" data-hid="${App.escAttr(h.id)}" style="color:var(--red)">&#10005;</button>
               </div>
             </div>
           `).join('')}
@@ -88,6 +88,15 @@ App.registerPage('habits', {
     `;
 
     document.getElementById('add-habit').onclick = () => this._edit();
+    container.querySelectorAll('.habit-toggle').forEach(el => {
+      el.addEventListener('click', () => this._toggle(el.dataset.hid, el.dataset.date));
+    });
+    container.querySelectorAll('.habit-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._edit(btn.dataset.hid));
+    });
+    container.querySelectorAll('.habit-del-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._delete(btn.dataset.hid));
+    });
   },
 
   _categoryStats(habits, cat, label, color) {
@@ -121,7 +130,7 @@ App.registerPage('habits', {
     for (let i = 0; i < 365; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       if (habit.completed && habit.completed[key]) streak++;
       else break;
     }

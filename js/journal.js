@@ -45,11 +45,12 @@ App.registerPage('journal', {
           <span class="section-title">Journal Entries</span>
           <button class="btn btn-primary btn-sm" id="add-journal">+ New Entry</button>
         </div>
+        <div id="journal-entries-list">
         ${sorted.length ? sorted.map(e => `
-          <div class="journal-entry" onclick="App.pages.journal._view('${e.id}')">
+          <div class="journal-entry journal-view-btn" data-id="${App.escAttr(e.id)}">
             <div class="journal-entry-header">
               <div class="journal-entry-date">${e.date || (e.createdAt ? e.createdAt.slice(0, 10) : '')}</div>
-              <div class="journal-entry-mood">${e.mood || ''}</div>
+              <div class="journal-entry-mood">${this._esc(e.mood || '')}</div>
             </div>
             <div class="journal-entry-title">${this._esc(e.title)}</div>
             <div class="journal-entry-preview">${this._esc(e.content)}</div>
@@ -58,10 +59,14 @@ App.registerPage('journal', {
             </div>
           </div>
         `).join('') : '<div class="card"><div class="empty-state"><div class="empty-state-icon">&#9998;</div><div class="empty-state-text">Start journaling to track your thoughts and growth</div></div></div>'}
+        </div>
       </div>
     `;
 
     document.getElementById('add-journal').onclick = () => this._edit();
+    container.querySelectorAll('.journal-view-btn').forEach(el => {
+      el.addEventListener('click', () => this._view(el.dataset.id));
+    });
   },
 
   _calcStreak(entries) {
@@ -71,7 +76,8 @@ App.registerPage('journal', {
     for (let i = 0; i < 365; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      if (dates.has(d.toISOString().slice(0, 10))) streak++;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (dates.has(key)) streak++;
       else break;
     }
     return streak;
@@ -85,18 +91,20 @@ App.registerPage('journal', {
     App.openModal('', `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-muted)">${e.date || ''}</span>
-        <span style="font-size:24px">${e.mood || ''}</span>
+        <span style="font-size:24px">${this._esc(e.mood || '')}</span>
       </div>
       <h2 style="font-size:20px;font-weight:700;margin-bottom:16px">${this._esc(e.title)}</h2>
       <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;color:var(--text-secondary)">${this._esc(e.content)}</div>
       <div style="margin-top:16px;display:flex;gap:4px">${(e.tags || []).map(t => `<span class="badge badge-purple">${this._esc(t)}</span>`).join('')}</div>
       <div class="modal-actions">
-        <button class="btn btn-danger" onclick="App.pages.journal._delete('${id}');App.closeModal()">Delete</button>
+        <button class="btn btn-danger" id="jv-delete">Delete</button>
         <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
-        <button class="btn btn-primary" onclick="App.closeModal();App.pages.journal._edit('${id}')">Edit</button>
+        <button class="btn btn-primary" id="jv-edit">Edit</button>
       </div>
     `);
     document.getElementById('modal-title').textContent = '';
+    document.getElementById('jv-delete').addEventListener('click', () => { this._delete(id); App.closeModal(); });
+    document.getElementById('jv-edit').addEventListener('click', () => { App.closeModal(); this._edit(id); });
   },
 
   _edit(id) {
@@ -116,12 +124,14 @@ App.registerPage('journal', {
         </div>
       </div>
       <div class="form-group"><label>Write your thoughts...</label><textarea id="fj-content" style="min-height:180px">${this._esc(e?.content || '')}</textarea></div>
-      <div class="form-group"><label>Tags (comma separated)</label><input id="fj-tags" value="${(e?.tags || []).join(', ')}"></div>
+      <div class="form-group"><label>Tags (comma separated)</label><input id="fj-tags"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
         <button class="btn btn-primary" id="fj-save">Save</button>
       </div>
     `);
+
+    document.getElementById('fj-tags').value = (e?.tags || []).join(', ');
 
     document.getElementById('fj-save').onclick = () => {
       const title = document.getElementById('fj-title').value.trim();

@@ -87,8 +87,8 @@ App.registerPage('tasks', {
                   <td style="color:var(--text-secondary)">${this._esc(t.category || '-')}</td>
                   <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${t.dueDate || '-'}</td>
                   <td>
-                    <button class="btn btn-ghost btn-sm" onclick="App.pages.tasks._openForm('${t.id}')">Edit</button>
-                    <button class="btn btn-danger btn-sm" onclick="App.pages.tasks._delete('${t.id}')">&#10005;</button>
+                    <button class="btn btn-ghost btn-sm task-edit-btn" data-id="${App.escAttr(t.id)}">Edit</button>
+                    <button class="btn btn-danger btn-sm task-del-btn" data-id="${App.escAttr(t.id)}">&#10005;</button>
                   </td>
                 </tr>
               `).join('')}
@@ -97,6 +97,13 @@ App.registerPage('tasks', {
         </div>
       </div>
     `;
+
+    el.querySelectorAll('.task-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._openForm(btn.dataset.id));
+    });
+    el.querySelectorAll('.task-del-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._delete(btn.dataset.id));
+    });
   },
 
   _initDragDrop() {
@@ -175,14 +182,19 @@ App.registerPage('tasks', {
       </div>
       <div class="form-group">
         <label>Blockers (one per line)</label>
-        <textarea id="f-blockers" placeholder="What's blocking this task?">${(task?.blockers || []).join('\n')}</textarea>
+        <textarea id="f-blockers" placeholder="What's blocking this task?"></textarea>
       </div>
       <div class="modal-actions">
-        ${isEdit ? `<button class="btn btn-danger" onclick="App.pages.tasks._delete('${id}');App.closeModal()">Delete</button>` : ''}
+        ${isEdit ? `<button class="btn btn-danger" id="f-delete">Delete</button>` : ''}
         <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
         <button class="btn btn-primary" id="f-save">Save</button>
       </div>
     `);
+
+    document.getElementById('f-blockers').value = (task?.blockers || []).join('\n');
+    if (isEdit) {
+      document.getElementById('f-delete').addEventListener('click', () => { this._delete(id); App.closeModal(); });
+    }
 
     document.getElementById('f-save').onclick = () => {
       const title = document.getElementById('f-title').value.trim();

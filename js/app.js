@@ -142,7 +142,13 @@ const App = {
   },
 
   getToday() {
-    return new Date().toISOString().slice(0, 10);
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  escAttr(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   },
 
   uid() {

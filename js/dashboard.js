@@ -100,13 +100,13 @@ App.registerPage('dashboard', {
               <span class="section-title">Quick Habits</span>
               <a href="#/habits" class="btn btn-ghost btn-sm">All &rarr;</a>
             </div>
-            <div class="card">
+            <div class="card" id="dash-habits-list">
               ${habits.slice(0, 4).map(h => `
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-                  <span style="font-size:13px">${h.name}</span>
+                  <span style="font-size:13px">${this._esc(h.name)}</span>
                   <div style="display:flex;align-items:center;gap:8px">
                     <span style="font-size:11px;color:var(--amber)">${h.streak} day streak</span>
-                    <button class="btn btn-sm ${h.completed && h.completed[today] ? 'btn-primary' : 'btn-secondary'}" data-habit="${h.id}" onclick="App.pages.dashboard._toggleHabit('${h.id}')">${h.completed && h.completed[today] ? '&#10003;' : '&#9675;'}</button>
+                    <button class="btn btn-sm ${h.completed && h.completed[today] ? 'btn-primary' : 'btn-secondary'} dash-habit-btn" data-habit="${App.escAttr(h.id)}">${h.completed && h.completed[today] ? '&#10003;' : '&#9675;'}</button>
                   </div>
                 </div>
               `).join('')}
@@ -131,6 +131,10 @@ App.registerPage('dashboard', {
         </div>
       </div>
     `;
+
+    container.querySelectorAll('.dash-habit-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._toggleHabit(btn.dataset.habit));
+    });
   },
 
   _renderBlockers(tasks) {
@@ -158,13 +162,22 @@ App.registerPage('dashboard', {
     if (!h) return;
     if (!h.completed) h.completed = {};
     h.completed[today] = !h.completed[today];
-    if (h.completed[today]) {
-      h.streak = (h.streak || 0) + 1;
-    } else {
-      h.streak = Math.max(0, (h.streak || 1) - 1);
-    }
+    h.streak = this._calcStreak(h);
     Storage.set('habits', habits);
     this.render(document.getElementById('page-content'));
+  },
+
+  _calcStreak(habit) {
+    let streak = 0;
+    const today = new Date();
+    for (let i = 0; i < 365; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (habit.completed && habit.completed[key]) streak++;
+      else break;
+    }
+    return streak;
   },
 
   _esc(s) {

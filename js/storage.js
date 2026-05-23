@@ -52,8 +52,11 @@ const Storage = {
   },
 
   importAll(jsonStr) {
+    const allowedKeys = ['tasks', 'finance', 'habits', 'nutrition', 'calendar_events', 'brain_categories', 'brain_notes', 'journal'];
     const data = JSON.parse(jsonStr);
-    Object.entries(data).forEach(([k, v]) => this.set(k, v));
+    Object.entries(data).forEach(([k, v]) => {
+      if (allowedKeys.includes(k) || k.startsWith('water_')) this.set(k, v);
+    });
   },
 
   async _syncToSupabase(key, value) {
