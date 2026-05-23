@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal OS</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <nav id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">&#9670;</span>
+          <span class="logo-text">Personal OS</span>
+        </div>
+      </div>
+      <ul class="nav-links">
+        <li><a href="#/" class="nav-link active" data-page="dashboard">
+          <span class="nav-icon">&#9632;</span> Dashboard
+        </a></li>
+        <li><a href="#/tasks" class="nav-link" data-page="tasks">
+          <span class="nav-icon">&#9744;</span> Task CRM
+        </a></li>
+        <li><a href="#/finance" class="nav-link" data-page="finance">
+          <span class="nav-icon">&#9650;</span> Finance Pulse
+        </a></li>
+        <li><a href="#/habits" class="nav-link" data-page="habits">
+          <span class="nav-icon">&#9733;</span> Habit Tracker
+        </a></li>
+        <li><a href="#/nutrition" class="nav-link" data-page="nutrition">
+          <span class="nav-icon">&#9829;</span> Nutrition
+        </a></li>
+        <li><a href="#/calendar" class="nav-link" data-page="calendar">
+          <span class="nav-icon">&#9783;</span> Calendar
+        </a></li>
+        <li><a href="#/brain" class="nav-link" data-page="brain">
+          <span class="nav-icon">&#9672;</span> Second Brain
+        </a></li>
+        <li><a href="#/journal" class="nav-link" data-page="journal">
+          <span class="nav-icon">&#9998;</span> Journal
+        </a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <button id="btn-export" class="sidebar-btn">Export Data</button>
+        <button id="btn-import" class="sidebar-btn">Import Data</button>
+        <input type="file" id="import-file" accept=".json" style="display:none">
+      </div>
+    </nav>
+    <main id="content">
+      <header id="topbar">
+        <button id="sidebar-toggle" class="topbar-btn">&#9776;</button>
+        <div id="page-title">Dashboard</div>
+        <div class="topbar-right">
+          <span id="current-date"></span>
+          <span id="current-time"></span>
+        </div>
+      </header>
+      <div id="page-content"></div>
+    </main>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal" class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button id="modal-close" class="modal-close">&times;</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="js/storage.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/tasks.js"></script>
+  <script src="js/finance.js"></script>
+  <script src="js/habits.js"></script>
+  <script src="js/nutrition.js"></script>
+  <script src="js/calendar.js"></script>
+  <script src="js/brain.js"></script>
+  <script src="js/journal.js"></script>
+</body>
+</html>
