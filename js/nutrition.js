@@ -61,7 +61,7 @@ App.registerPage('nutrition', {
             </div>
             <div class="card">
               <div style="display:flex;align-items:center;gap:16px">
-                <div style="font-size:32px">&#128167;</div>
+                <div style="font-size:32px">💧</div>
                 <div style="flex:1">
                   <div style="font-size:18px;font-weight:700;color:var(--accent)">${waterLogged} / ${goals.water || 8} glasses</div>
                   <div class="progress-bar" style="margin-top:8px"><div class="progress-fill accent" style="width:${waterPct}%"></div></div>

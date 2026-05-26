@@ -106,7 +106,7 @@ App.registerPage('dashboard', {
                   <span style="font-size:13px">${this._esc(h.name)}</span>
                   <div style="display:flex;align-items:center;gap:8px">
                     <span style="font-size:11px;color:var(--amber)">${h.streak} day streak</span>
-                    <button class="btn btn-sm ${h.completed && h.completed[today] ? 'btn-primary' : 'btn-secondary'} dash-habit-btn" data-habit="${App.escAttr(h.id)}">${h.completed && h.completed[today] ? '&#10003;' : '&#9675;'}</button>
+                    <button class="btn btn-sm ${h.completed && h.completed[today] ? 'btn-primary' : 'btn-secondary'} dash-habit-btn" data-habit="${App.escAttr(h.id)}">${h.completed && h.completed[today] ? '✓' : '○'}</button>
                   </div>
                 </div>
               `).join('')}

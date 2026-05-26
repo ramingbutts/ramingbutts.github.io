@@ -72,8 +72,41 @@ const Storage = {
     }
   },
 
+  _migrateHtmlEntities() {
+    const entityMap = {
+      '&#9829;': '❤️', '&#9733;': '⭐', '&#9650;': '📊', '&#9672;': '🚀',
+      '&#9998;': '✍️', '&#9744;': '📵', '&#128640;': '🚀', '&#128513;': '😁',
+      '&#128522;': '😊', '&#128528;': '😐', '&#128533;': '😕', '&#128555;': '😫',
+      '&#129300;': '🤔', '&#128170;': '💪', '&#127775;': '🌟', '&#128147;': '💓'
+    };
+    const fix = (val) => {
+      if (typeof val !== 'string') return val;
+      let out = val;
+      Object.entries(entityMap).forEach(([ent, emoji]) => { out = out.split(ent).join(emoji); });
+      return out;
+    };
+    const habits = this.get('habits');
+    if (habits) {
+      let changed = false;
+      habits.forEach(h => { const f = fix(h.icon); if (f !== h.icon) { h.icon = f; changed = true; } });
+      if (changed) this.set('habits', habits);
+    }
+    const cats = this.get('brain_categories');
+    if (cats) {
+      let changed = false;
+      cats.forEach(c => { const f = fix(c.icon); if (f !== c.icon) { c.icon = f; changed = true; } });
+      if (changed) this.set('brain_categories', cats);
+    }
+    const journal = this.get('journal');
+    if (journal) {
+      let changed = false;
+      journal.forEach(e => { const f = fix(e.mood); if (f !== e.mood) { e.mood = f; changed = true; } });
+      if (changed) this.set('journal', journal);
+    }
+  },
+
   _seedIfEmpty() {
-    if (this.get('tasks') !== null) return;
+    if (this.get('tasks') !== null) { this._migrateHtmlEntities(); return; }
 
     this.set('tasks', [
       { id: this._id(), title: 'Set up Personal OS', description: 'Configure all dashboard modules', priority: 'high', status: 'done', category: 'Setup', dueDate: new Date().toISOString().slice(0,10), blockers: [], createdAt: new Date().toISOString() },
@@ -107,12 +140,12 @@ const Storage = {
     });
 
     this.set('habits', [
-      { id: this._id(), name: 'Morning workout', category: 'health', icon: '&#9829;', streak: 5, completed: {} },
-      { id: this._id(), name: 'Read 30 min', category: 'productivity', icon: '&#9733;', streak: 12, completed: {} },
-      { id: this._id(), name: 'Finance check', category: 'finance', icon: '&#9650;', streak: 3, completed: {} },
-      { id: this._id(), name: 'Meditation', category: 'health', icon: '&#9672;', streak: 8, completed: {} },
-      { id: this._id(), name: 'Journal entry', category: 'productivity', icon: '&#9998;', streak: 7, completed: {} },
-      { id: this._id(), name: 'No social media before noon', category: 'productivity', icon: '&#9744;', streak: 2, completed: {} },
+      { id: this._id(), name: 'Morning workout', category: 'health', icon: '💪', streak: 5, completed: {} },
+      { id: this._id(), name: 'Read 30 min', category: 'productivity', icon: '📖', streak: 12, completed: {} },
+      { id: this._id(), name: 'Finance check', category: 'finance', icon: '📊', streak: 3, completed: {} },
+      { id: this._id(), name: 'Meditation', category: 'health', icon: '🧘', streak: 8, completed: {} },
+      { id: this._id(), name: 'Journal entry', category: 'productivity', icon: '✍️', streak: 7, completed: {} },
+      { id: this._id(), name: 'No social media before noon', category: 'productivity', icon: '📵', streak: 2, completed: {} },
     ]);
 
     this.set('nutrition', {
@@ -127,10 +160,10 @@ const Storage = {
     ]);
 
     this.set('brain_categories', [
-      { id: this._id(), name: 'Business', icon: '&#9650;', color: 'accent' },
-      { id: this._id(), name: 'Personal', icon: '&#9829;', color: 'pink' },
-      { id: this._id(), name: 'Learning', icon: '&#9733;', color: 'amber' },
-      { id: this._id(), name: 'Projects', icon: '&#9672;', color: 'purple' },
+      { id: this._id(), name: 'Business', icon: '💼', color: 'accent' },
+      { id: this._id(), name: 'Personal', icon: '🏠', color: 'pink' },
+      { id: this._id(), name: 'Learning', icon: '🎓', color: 'amber' },
+      { id: this._id(), name: 'Projects', icon: '🚀', color: 'purple' },
     ]);
 
     this.set('brain_notes', [
@@ -138,7 +171,7 @@ const Storage = {
     ]);
 
     this.set('journal', [
-      { id: this._id(), date: new Date().toISOString().slice(0,10), title: 'Getting started', content: 'Set up my Personal OS today. Excited to see how this transforms my daily workflow and productivity.', mood: '&#128640;', tags: ['start', 'productivity'], createdAt: new Date().toISOString() },
+      { id: this._id(), date: new Date().toISOString().slice(0,10), title: 'Getting started', content: 'Set up my Personal OS today. Excited to see how this transforms my daily workflow and productivity.', mood: '🚀', tags: ['start', 'productivity'], createdAt: new Date().toISOString() },
     ]);
   },
 

@@ -110,7 +110,7 @@ App.registerPage('journal', {
   _edit(id) {
     const entries = Storage.get('journal') || [];
     const e = id ? entries.find(e => e.id === id) : null;
-    const moods = ['&#128640;', '&#128513;', '&#128522;', '&#128528;', '&#128533;', '&#128555;', '&#129300;', '&#128170;', '&#127775;', '&#128147;'];
+    const moods = ['🚀', '😁', '😊', '😐', '😕', '😫', '🤔', '💪', '🌟', '💓'];
 
     App.openModal(e ? 'Edit Entry' : 'New Journal Entry', `
       <div class="form-group"><label>Title</label><input id="fj-title" value="${this._esc(e?.title || '')}"></div>

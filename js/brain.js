@@ -66,7 +66,7 @@ App.registerPage('brain', {
               </div>
             `;
           }).join('')}
-          ${!categories.length ? '<div class="empty-state" style="grid-column:1/-1"><div class="empty-state-icon">&#9672;</div><div class="empty-state-text">Create your first category or import Obsidian notes</div></div>' : ''}
+          ${!categories.length ? '<div class="empty-state" style="grid-column:1/-1"><div class="empty-state-icon">🧠</div><div class="empty-state-text">Create your first category or import Obsidian notes</div></div>' : ''}
         </div>` : ''}
       </div>
 

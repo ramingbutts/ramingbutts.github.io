@@ -63,13 +63,13 @@ App.registerPage('habits', {
               <div class="habit-days">
                 ${days.map(d => {
                   const done = h.completed && h.completed[d];
-                  return `<div class="habit-day ${done ? 'completed' : ''} habit-toggle" data-hid="${App.escAttr(h.id)}" data-date="${d}">${done ? '&#10003;' : ''}</div>`;
+                  return `<div class="habit-day ${done ? 'completed' : ''} habit-toggle" data-hid="${App.escAttr(h.id)}" data-date="${d}">${done ? '✓' : ''}</div>`;
                 }).join('')}
               </div>
-              <div class="habit-streak">${h.streak || 0}&#128293;</div>
+              <div class="habit-streak">${h.streak || 0}🔥</div>
               <div style="width:60px;text-align:right">
-                <button class="btn btn-ghost btn-sm habit-edit-btn" data-hid="${App.escAttr(h.id)}">&#9998;</button>
-                <button class="btn btn-ghost btn-sm habit-del-btn" data-hid="${App.escAttr(h.id)}" style="color:var(--red)">&#10005;</button>
+                <button class="btn btn-ghost btn-sm habit-edit-btn" data-hid="${App.escAttr(h.id)}">✏️</button>
+                <button class="btn btn-ghost btn-sm habit-del-btn" data-hid="${App.escAttr(h.id)}" style="color:var(--red)">✕</button>
               </div>
             </div>
           `).join('')}
@@ -151,7 +151,7 @@ App.registerPage('habits', {
             <option value="finance" ${h?.category === 'finance' ? 'selected' : ''}>Finance</option>
           </select>
         </div>
-        <div class="form-group"><label>Icon (emoji/symbol)</label><input id="fh-icon" value="${h?.icon || '&#9733;'}" maxlength="8"></div>
+        <div class="form-group"><label>Icon (emoji)</label><input id="fh-icon" value="${h?.icon || '⭐'}" maxlength="8"></div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
