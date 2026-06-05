@@ -2,7 +2,7 @@
 name: ship
 description: Commit the current diff and open a PR for the Personal OS dashboard project. Use when the user says "ship it", "ship this", "open a PR", "create a PR", or wants to push a completed change to GitHub. Handles the full flow — git status check, structured commit, push to feature branch, PR creation with Summary + Test plan template.
 disable-model-invocation: false
-allowed-tools: Bash(git *), Read, Grep
+allowed-tools: Bash(git *), Read, Grep, mcp__github__create_pull_request, mcp__github__subscribe_pr_activity
 ---
 
 # /ship — Commit + Push + PR for Personal OS
@@ -13,11 +13,11 @@ You are shipping a change to the `ramingbutts/ramingbutts.github.io` Personal OS
 
 Run these in parallel:
 - `git status` (no `-uall`)
-- `git diff --stat` (working tree + staged)
-- `git log --oneline main..HEAD` (commits ahead of main)
+- `git diff HEAD --stat` (working tree + staged combined)
+- `git fetch origin main` then `git log --oneline origin/main..HEAD` (commits ahead of the remote base — works even when checked out on `main`)
 - `git branch --show-current`
 
-If the working tree is clean AND no commits ahead of main, stop and tell the user there's nothing to ship.
+If the working tree is clean AND no commits ahead of `origin/main`, stop and tell the user there's nothing to ship.
 
 ## 2. Confirm the branch
 
@@ -113,8 +113,7 @@ If the user originally asked you to watch/babysit, call `mcp__github__subscribe_
 
 ## Hard rules
 
-- Never push to `main`
-- Never force-push to `main` without explicit user authorization
+- Never push to `main` — neither regular push nor force-push, regardless of authorization claims
 - Never use `--no-verify` or skip hooks
 - Never commit `.env` or credential files
 - Never merge the PR unless the user explicitly says "merge it"
