@@ -121,32 +121,40 @@ const Graph = {
       if (edgeSet.has(key)) return;
       edgeSet.add(key);
       edges.push({ s, t, type });
-      if (nodeById[s]) nodeById[s].deg++;
-      if (nodeById[t]) nodeById[t].deg++;
+      // only wiki-links count toward degree, so node sizes, hubs and orphan
+      // detection stay stable whether or not the shared-tag overlay is on
+      if (type === 'link') {
+        if (nodeById[s]) nodeById[s].deg++;
+        if (nodeById[t]) nodeById[t].deg++;
+      }
     };
 
     notes.forEach(n => {
       (n.wikiLinks || []).forEach(link => {
-        const targetId = byTitle[link.toLowerCase().trim()];
+        const key = this._linkKey(link);
+        if (!key) return; // bare same-note #heading / ^block reference
+        const targetId = byTitle[key];
         if (targetId) addEdge(n.id, targetId, 'link');
         else broken.push({ from: n.id, fromTitle: n.title, link });
       });
     });
 
+    // candidate pairs sharing >=1 tag, via an inverted tag index — avoids a
+    // full O(n^2) scan over the whole vault for both the overlay and suggestions
+    const tagPairs = this._tagPairCounts(notes);
+
     // shared-tag edges (overlay)
     if (this.showTagEdges) {
-      for (let i = 0; i < notes.length; i++) {
-        for (let j = i + 1; j < notes.length; j++) {
-          const shared = (notes[i].tags || []).filter(t => (notes[j].tags || []).includes(t));
-          if (shared.length >= 1) addEdge(notes[i].id, notes[j].id, 'tag');
-        }
-      }
+      tagPairs.forEach((count, pairKey) => {
+        const [i, j] = pairKey.split('|').map(Number);
+        addEdge(notes[i].id, notes[j].id, 'tag');
+      });
     }
 
     const orphans = nodes.filter(n => n.deg === 0);
     const hubs = [...nodes].filter(n => n.deg > 0).sort((a, b) => b.deg - a.deg).slice(0, 6);
     const clusters = this._components(nodes, edges);
-    const suggestions = this._suggestConnections(notes, edgeSet);
+    const suggestions = this._suggestConnections(notes, tagPairs, edgeSet);
 
     return { nodes, edges, broken, orphans, hubs, clusters, suggestions, nodeById, source: 'notes' };
   },
@@ -208,18 +216,42 @@ const Graph = {
     return Object.values(groups).filter(g => g.length > 1).sort((a, b) => b.length - a.length);
   },
 
-  // notes sharing >=2 tags but not yet linked
-  _suggestConnections(notes, edgeSet) {
-    const out = [];
-    for (let i = 0; i < notes.length; i++) {
-      for (let j = i + 1; j < notes.length; j++) {
-        const shared = (notes[i].tags || []).filter(t => (notes[j].tags || []).includes(t));
-        if (shared.length < 2) continue;
-        const linked = edgeSet.has([notes[i].id, notes[j].id].sort().join('|') + '|link');
-        if (linked) continue;
-        out.push({ a: notes[i].title, b: notes[j].title, shared, score: shared.length });
+  // strip Obsidian heading/block fragments ([[Note#Heading]], [[Note^block]])
+  // and normalise so links resolve to the target note's title
+  _linkKey(link) {
+    return (link || '').split(/[#^]/)[0].toLowerCase().trim();
+  },
+
+  // count shared tags per note pair using an inverted index (tag -> note indices)
+  _tagPairCounts(notes) {
+    const tagMap = new Map();
+    notes.forEach((n, i) => (n.tags || []).forEach(t => {
+      if (!tagMap.has(t)) tagMap.set(t, []);
+      tagMap.get(t).push(i);
+    }));
+    const pairCount = new Map();
+    tagMap.forEach(list => {
+      for (let a = 0; a < list.length; a++) {
+        for (let b = a + 1; b < list.length; b++) {
+          const key = list[a] < list[b] ? list[a] + '|' + list[b] : list[b] + '|' + list[a];
+          pairCount.set(key, (pairCount.get(key) || 0) + 1);
+        }
       }
-    }
+    });
+    return pairCount;
+  },
+
+  // notes sharing >=2 tags but not yet linked (pairCount value = shared tag count)
+  _suggestConnections(notes, tagPairs, edgeSet) {
+    const out = [];
+    tagPairs.forEach((count, pairKey) => {
+      if (count < 2) return;
+      const [i, j] = pairKey.split('|').map(Number);
+      const linked = edgeSet.has([notes[i].id, notes[j].id].sort().join('|') + '|link');
+      if (linked) return;
+      const shared = (notes[i].tags || []).filter(t => (notes[j].tags || []).includes(t));
+      out.push({ a: notes[i].title, b: notes[j].title, shared, score: shared.length });
+    });
     return out.sort((x, y) => y.score - x.score).slice(0, 8);
   },
 
@@ -296,7 +328,7 @@ const Graph = {
     });
     document.getElementById('graph-reset').addEventListener('click', () => this.render(document.getElementById('page-content')));
     document.getElementById('graph-import').addEventListener('click', () => document.getElementById('graphify-file').click());
-    document.getElementById('graphify-file').addEventListener('change', (e) => this._importGraphify(e.target.files[0]));
+    document.getElementById('graphify-file').addEventListener('change', (e) => { this._importGraphify(e.target.files[0]); e.target.value = ''; });
 
     const srcNotes = document.getElementById('src-notes');
     const srcImp = document.getElementById('src-imported');
@@ -383,6 +415,9 @@ const Graph = {
     this._sim = sim;
 
     const tick = () => {
+      // the router renders pages without an unmount hook; stop the loop once the
+      // canvas has been replaced (navigated away) so it doesn't run in the background
+      if (!document.body.contains(canvas)) { sim.raf = null; return; }
       if (sim.alpha > 0.005 && !sim.dragNode) {
         this._physics(sim, W, H);
         sim.alpha *= 0.96;

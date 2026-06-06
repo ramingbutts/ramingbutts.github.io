@@ -312,7 +312,8 @@ App.registerPage('brain', {
     const byTitle = {};
     notes.forEach(x => { byTitle[(x.title || '').toLowerCase().trim()] = x.id; });
     const linkHtml = (n.wikiLinks || []).map(l => {
-      const targetId = byTitle[l.toLowerCase().trim()];
+      // strip Obsidian heading/block fragments ([[Note#Heading]], [[Note^block]])
+      const targetId = byTitle[l.split(/[#^]/)[0].toLowerCase().trim()];
       return targetId
         ? `<span class="badge badge-purple brain-link" data-target="${App.escAttr(targetId)}" style="cursor:pointer">${this._esc(l)}</span>`
         : `<span class="badge" style="opacity:.55" title="No note named &quot;${App.escAttr(l)}&quot;">${this._esc(l)} &#9888;</span>`;
