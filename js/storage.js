@@ -52,7 +52,7 @@ const Storage = {
   },
 
   importAll(jsonStr) {
-    const allowedKeys = ['tasks', 'finance', 'habits', 'nutrition', 'calendar_events', 'brain_categories', 'brain_notes', 'journal', 'finance_profile', 'finance_rules', 'finance_weakspots', 'finance_debts', 'finance_snapshots'];
+    const allowedKeys = ['tasks', 'finance', 'habits', 'nutrition', 'calendar_events', 'brain_categories', 'brain_notes', 'graph_imported', 'journal', 'finance_profile', 'finance_rules', 'finance_weakspots', 'finance_debts', 'finance_snapshots'];
     const data = JSON.parse(jsonStr);
     Object.entries(data).forEach(([k, v]) => {
       if (allowedKeys.includes(k) || k.startsWith('water_')) this.set(k, v);
