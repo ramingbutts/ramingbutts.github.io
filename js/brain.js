@@ -308,6 +308,16 @@ App.registerPage('brain', {
 
     const rendered = this._renderMarkdown(n.content || '');
 
+    // resolve [[wiki-links]] to actual notes by title (case-insensitive)
+    const byTitle = {};
+    notes.forEach(x => { byTitle[(x.title || '').toLowerCase().trim()] = x.id; });
+    const linkHtml = (n.wikiLinks || []).map(l => {
+      const targetId = byTitle[l.toLowerCase().trim()];
+      return targetId
+        ? `<span class="badge badge-purple brain-link" data-target="${App.escAttr(targetId)}" style="cursor:pointer">${this._esc(l)}</span>`
+        : `<span class="badge" style="opacity:.55" title="No note named &quot;${App.escAttr(l)}&quot;">${this._esc(l)} &#9888;</span>`;
+    }).join('');
+
     App.openModal(this._esc(n.title), `
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;font-family:'JetBrains Mono',monospace">
         Created: ${n.createdAt ? new Date(n.createdAt).toLocaleString() : 'N/A'}
@@ -317,14 +327,18 @@ App.registerPage('brain', {
       <div class="brain-note-content" style="font-size:14px;line-height:1.7">${rendered}</div>
       <div style="margin-top:12px;display:flex;gap:4px;flex-wrap:wrap">
         ${(n.tags || []).map(t => `<span class="badge badge-accent">${this._esc(t)}</span>`).join('')}
-        ${(n.wikiLinks || []).map(l => `<span class="badge badge-purple">${this._esc(l)}</span>`).join('')}
+        ${linkHtml}
       </div>
       <div class="modal-actions">
         <button class="btn btn-danger" id="bn-delete">Delete</button>
         <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
+        <a class="btn btn-secondary" href="#/graph" onclick="App.closeModal()">View in Graph</a>
         <button class="btn btn-primary" id="bn-edit">Edit</button>
       </div>
     `);
+    document.querySelectorAll('.brain-link').forEach(el => {
+      el.addEventListener('click', () => { App.closeModal(); this._viewNote(el.dataset.target); });
+    });
     document.getElementById('bn-delete').addEventListener('click', () => { this._deleteNote(id); App.closeModal(); });
     document.getElementById('bn-edit').addEventListener('click', () => { App.closeModal(); this._editNote(id); });
   },

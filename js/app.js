@@ -62,6 +62,7 @@ const App = {
       nutrition: 'Nutrition',
       calendar: 'Calendar',
       brain: 'Second Brain',
+      graph: 'Knowledge Graph',
       journal: 'Journal'
     };
     document.getElementById('page-title').textContent = titles[page] || page;
