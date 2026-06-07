@@ -172,4 +172,4 @@ Click **Export Data** in the sidebar to download a JSON file with all your data.
 
 ## License
 
-No license file is included, so the code is "all rights reserved" by default. Built as a personal project — if you want to fork or reuse it, open an issue and we can talk.
+[MIT](./LICENSE) — fork and reuse freely, just keep the copyright notice.
