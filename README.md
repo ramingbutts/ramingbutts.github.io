@@ -16,7 +16,7 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 
 ## Features
 
-### 8 dashboard modules
+### 9 dashboard modules
 
 | Module | What it does |
 |---|---|
@@ -33,17 +33,16 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 ### Data layer
 
 - **localStorage by default** — works immediately, data persists per-browser
-- **Supabase hooks ready** — call `Storage.configureSupabase(url, key)` in the browser console to sync across devices
+- **Supabase hooks ready** — to enable cloud sync, load `@supabase/supabase-js` (e.g. add `<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>` to `index.html`), then call `Storage.configureSupabase(url, key)` in the browser console
 - **Export / Import** — JSON backup buttons in the sidebar; import is whitelisted to prevent overwriting Supabase credentials
 - **Auto-migration** — old HTML entity icons migrate to emoji on load
 
-### Security
+### Security posture
 
-- All user input escaped before rendering into `innerHTML`
-- Event listeners bound via `addEventListener` + `data-*` attributes (no inline `onclick` with interpolated IDs)
-- Textarea/input values set via DOM API after modal render to prevent attribute-injection
-- Local-time date handling everywhere (no UTC off-by-one bugs at midnight)
+The modules touched most often (Tasks, Habits, Brain, Dashboard, Finance) escape user-controlled content through `_esc()` before rendering and bind handlers via `addEventListener` + `data-*` attributes. Older modules (`calendar.js`, `journal.js`, parts of `brain.js`) still mix in inline `onclick` handlers and template-interpolated input `value`s — these work but are riskier with imported data. When adding new code, follow the safer pattern; when touching the older files, port them over.
+
 - Import key whitelist blocks credential injection via backup files
+- Date strings written by the app use local-time formatters (`getToday()` in `js/app.js`); the original seed data in `storage.js` uses UTC `toISOString().slice(0,10)` which can drift by a day at midnight
 
 ---
 
@@ -173,4 +172,4 @@ Click **Export Data** in the sidebar to download a JSON file with all your data.
 
 ## License
 
-Personal project — built for the owner's use. Fork freely.
+No license file is included, so the code is "all rights reserved" by default. Built as a personal project — if you want to fork or reuse it, open an issue and we can talk.
