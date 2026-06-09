@@ -119,3 +119,7 @@ If the user originally asked you to watch/babysit, call `mcp__github__subscribe_
 - Never merge the PR unless the user explicitly says "merge it"
 - Never open a new PR for an existing change that was already merged
 - The PR template must include both `## Summary` and `## Test plan` sections
+
+## Changelog
+2026-06-09: Added changelog section (skill-refinement discipline from the
+skill-library workflow). No behavior change.
