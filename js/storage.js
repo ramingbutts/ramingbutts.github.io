@@ -26,8 +26,18 @@ const Storage = {
   },
 
   set(key, value) {
-    localStorage.setItem('os_' + key, JSON.stringify(value));
+    try {
+      localStorage.setItem('os_' + key, JSON.stringify(value));
+    } catch (e) {
+      // The most common cause is QuotaExceededError — e.g. a large Obsidian
+      // import overflowing the ~5MB localStorage budget. Make it visible
+      // instead of silently dropping the write.
+      Diag.error('storage', `Failed to save "${key}" (${e.name || 'error'})`, e);
+      Diag.notifyOnce('storage_write_failed', 'Storage full — change not saved. Export a backup and remove old data.', 'error');
+      return false;
+    }
     if (this._useSupabase) this._syncToSupabase(key, value);
+    return true;
   },
 
   delete(key) {
@@ -67,8 +77,13 @@ const Storage = {
         value: JSON.stringify(value),
         updated_at: new Date().toISOString()
       }, { onConflict: 'key' });
+      // Recovered — allow a future failure to notify again.
+      Diag.clearNotice('supabase_sync_failed');
     } catch (e) {
-      console.warn('Supabase sync failed:', e);
+      // Cloud sync failing silently is dangerous: the user believes their data
+      // is backed up when it isn't. Log every occurrence, toast once.
+      Diag.error('sync', `Supabase sync failed for "${key}"`, e);
+      Diag.notifyOnce('supabase_sync_failed', 'Cloud sync failed — data saved locally only.', 'error');
     }
   },
 

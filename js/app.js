@@ -94,7 +94,9 @@ const App = {
           App.toast('Data imported successfully', 'success');
           this._route();
         } catch (err) {
-          App.toast('Import failed: invalid file', 'error');
+          Diag.error('import', 'Import failed', err);
+          const msg = err instanceof SyntaxError ? 'Import failed: not valid JSON' : 'Import failed — see console for details';
+          App.toast(msg, 'error');
         }
       };
       reader.readAsText(file);

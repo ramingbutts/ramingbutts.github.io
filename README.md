@@ -36,6 +36,7 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 - **Supabase hooks ready** — to enable cloud sync, load `@supabase/supabase-js` (e.g. add `<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>` to `index.html`), then call `Storage.configureSupabase(url, key)` in the browser console
 - **Export / Import** — JSON backup buttons in the sidebar; import is whitelisted to prevent overwriting Supabase credentials
 - **Auto-migration** — old HTML entity icons migrate to emoji on load
+- **Observability** — `js/diag.js` centralizes structured logging in an in-memory ring buffer; storage-quota and Supabase-sync failures (previously silent) now log and surface a toast. Inspect with `Diag.dump()` in the console
 
 ### Security posture
 
