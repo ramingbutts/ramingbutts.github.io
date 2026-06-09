@@ -18,7 +18,25 @@ App.registerPage('dashboard', {
     const todayEvents = events.filter(e => e.date === today).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
     const upcomingEvents = events.filter(e => e.date > today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3);
 
+    const signals = (typeof Insights !== 'undefined') ? Insights.attention() : [];
+    const topSignals = signals.slice(0, 4);
+
     container.innerHTML = `
+      ${signals.length ? `
+      <div class="section">
+        <div class="attention-strip">
+          <div class="attention-strip-head">
+            <span class="attention-strip-title">Needs your attention</span>
+            <a class="attention-strip-link" href="#/insights">View all (${signals.length}) →</a>
+          </div>
+          <div class="attention-strip-items">
+            ${topSignals.map(s => `
+              <a class="attention-chip ${s.level}" href="#/${s.page}" title="${App.escAttr(s.reason || '')}">
+                <span class="attention-icon">${s.icon}</span>${App.escAttr(s.text)}
+              </a>`).join('')}
+          </div>
+        </div>
+      </div>` : ''}
       <div class="section">
         <div class="grid-4">
           <div class="card glow">
