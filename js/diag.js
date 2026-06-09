@@ -38,5 +38,10 @@ const Diag = {
   clearNotice(key) { delete this._seen[key]; },
 
   dump() { console.table(this._buf); return this._buf; },
-  export() { return JSON.stringify(this._buf, null, 2); }
+  export() { return JSON.stringify(this._buf, null, 2); },
+
+  // Newest-first copy of the buffer, for the in-app Diagnostics panel.
+  entries() { return this._buf.slice().reverse(); },
+
+  clear() { this._buf = []; this._seen = {}; }
 };
