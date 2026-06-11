@@ -8,7 +8,7 @@ Deployed as a static site on GitHub Pages at `raphail369.me`.
 
 - `index.html` — the SPA shell. Loads every `js/*.js` as a plain `<script>` in
   order. There is no bundler, so **load order in `index.html` matters**:
-  `diag.js` → `storage.js` → `app.js` → one file per page.
+  `diag.js` → `storage.js` → `app.js` → `ai.js` → one file per page.
 - `js/app.js` — `App` core: hash router (`#/<page>/<sub>`), sidebar, modal,
   toast, export/import wiring, and shared helpers (`escAttr`, `formatCurrency`,
   `getToday`, `uid`). Each page registers itself via `App.registerPage(name, { render })`.
@@ -16,6 +16,10 @@ Deployed as a static site on GitHub Pages at `raphail369.me`.
   sync, and the import allow-list. **All persistence goes through `Storage.set`** —
   don't call `localStorage` directly from page modules.
 - `js/diag.js` — `Diag` observability layer (structured logging + a ring buffer).
+- `js/ai.js` — `AI` helper wrapping a local Ollama endpoint (`localhost:11434`)
+  for optional on-device LLM features. Only useful in a browser on the machine
+  running Ollama; callers must degrade gracefully (toast, not breakage) when
+  `AI.available()` is false. Setup in `docs/LOCAL-AI.md`.
 - `js/<page>.js` — one self-contained module per dashboard page.
 - `css/styles.css` — one stylesheet, CSS variables for theming.
 

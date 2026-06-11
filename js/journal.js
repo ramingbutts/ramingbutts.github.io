@@ -43,7 +43,10 @@ App.registerPage('journal', {
       <div class="section">
         <div class="section-header">
           <span class="section-title">Journal Entries</span>
-          <button class="btn btn-primary btn-sm" id="add-journal">+ New Entry</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" id="analyze-journal">&#10024; Analyze</button>
+            <button class="btn btn-primary btn-sm" id="add-journal">+ New Entry</button>
+          </div>
         </div>
         <div id="journal-entries-list">
         ${sorted.length ? sorted.map(e => `
@@ -63,10 +66,71 @@ App.registerPage('journal', {
       </div>
     `;
 
-    document.getElementById('add-journal').onclick = () => this._edit();
+    document.getElementById('add-journal').addEventListener('click', () => this._edit());
+    document.getElementById('analyze-journal').addEventListener('click', () => this._analyze());
     container.querySelectorAll('.journal-view-btn').forEach(el => {
       el.addEventListener('click', () => this._view(el.dataset.id));
     });
+  },
+
+  async _analyze() {
+    const entries = Storage.get('journal') || [];
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const recent = entries
+      .filter(e => {
+        const day = e.date || (e.createdAt ? e.createdAt.slice(0, 10) : '');
+        return day && new Date(day + 'T00:00:00') >= cutoff;
+      })
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    if (recent.length < 2) {
+      App.toast('Write at least 2 entries in the last 30 days to analyze', 'info');
+      return;
+    }
+    if (!await AI.available()) {
+      App.toast('Ollama not reachable on this machine — see docs/LOCAL-AI.md', 'error');
+      return;
+    }
+
+    App.openModal('Journal Analysis', `
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:12px">${App.escAttr(AI.MODEL)} &middot; ${recent.length} entries &middot; last 30 days &middot; runs 100% locally</div>
+      <div id="ai-journal-output" style="font-size:14px;line-height:1.8;white-space:pre-wrap;color:var(--text-secondary)">Analyzing&hellip;</div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
+      </div>
+    `);
+
+    try {
+      await AI.generate(this._analysisPrompt(recent), (tok, full) => {
+        const el = document.getElementById('ai-journal-output');
+        if (el) el.textContent = full;
+      });
+    } catch (err) {
+      Diag.error('ai', 'Journal analysis failed', err);
+      const el = document.getElementById('ai-journal-output');
+      if (el) el.textContent = 'Analysis failed — run Diag.dump() in the console for details.';
+      App.toast('Analysis failed', 'error');
+    }
+  },
+
+  _analysisPrompt(entries) {
+    const lines = entries.map(e => {
+      const date = e.date || (e.createdAt || '').slice(0, 10);
+      const tags = (e.tags || []).join(', ');
+      const content = (e.content || '').slice(0, 1500);
+      return `--- ${date} | mood: ${e.mood || 'n/a'}${tags ? ' | tags: ' + tags : ''}\n${e.title}\n${content}`;
+    });
+    return `You are an honest, perceptive journal analyst. Below are my journal entries from the last 30 days, oldest first. Reply in plain text (no markdown) with exactly these four short sections:
+
+THEMES: the 2-3 themes that keep recurring.
+MOOD: how my mood moved over the period and what it tracked with.
+BLIND SPOT: one honest pattern I am probably not seeing.
+THIS WEEK: one small, concrete suggestion.
+
+Entries:
+
+${lines.join('\n\n')}`;
   },
 
   _calcStreak(entries) {
