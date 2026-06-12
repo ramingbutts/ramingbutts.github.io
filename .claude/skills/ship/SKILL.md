@@ -21,11 +21,18 @@ If the working tree is clean AND no commits ahead of `origin/main`, stop and tel
 
 ## 2. Confirm the branch
 
-The project's feature branch is `claude/personal-os-claude-code-tllHI`. If the current branch is `main` or any other name, switch to it (create if needed):
+Ship whatever feature branch the session is already on — don't assume a fixed
+name. Capture it:
 
 ```
-git checkout -B claude/personal-os-claude-code-tllHI
+git branch --show-current
 ```
+
+- If that returns a feature branch (anything that isn't `main`/`master`), use it
+  as `<branch>` everywhere below.
+- If it returns `main`/`master` or is empty (detached HEAD), **stop and ask the
+  user for a feature branch name** — don't invent one. Then create it:
+  `git checkout -B <branch>`.
 
 Never commit directly to `main`.
 
@@ -72,17 +79,17 @@ If a pre-commit hook fails, fix the underlying issue and create a NEW commit. Ne
 ## 5. Push
 
 ```
-git push --force-with-lease -u origin claude/personal-os-claude-code-tllHI
+git push --force-with-lease -u origin <branch>
 ```
 
-`--force-with-lease` is required because the branch is recreated each round after the previous PR is merged. If push fails with a network error, retry up to 4 times with backoff (2s, 4s, 8s, 16s).
+Use `--force-with-lease` (not plain `--force`) so a push only overwrites the remote when you have its latest commit — safe when a branch is recreated across rounds, and it refuses rather than clobbering an unexpected remote change. If push fails with a network error, retry up to 4 times with backoff (2s, 4s, 8s, 16s).
 
 ## 6. Open the PR
 
 Use the `mcp__github__create_pull_request` tool with:
 - `owner`: `ramingbutts`
 - `repo`: `ramingbutts.github.io`
-- `head`: `claude/personal-os-claude-code-tllHI`
+- `head`: `<branch>` (the branch from step 2)
 - `base`: `main`
 - `title`: same as the commit title (under 70 chars)
 - `body`: this template, filled in based on the actual diff
@@ -123,3 +130,7 @@ If the user originally asked you to watch/babysit, call `mcp__github__subscribe_
 ## Changelog
 2026-06-09: Added changelog section (skill-refinement discipline from the
 skill-library workflow). No behavior change.
+2026-06-09: Made the target branch dynamic — ship the session's current
+branch (via `git branch --show-current`) instead of a hardcoded name, and
+stop to ask when on `main`/detached HEAD. Fixes the skill silently
+targeting the wrong branch in sessions on a different feature branch.
