@@ -58,3 +58,13 @@ software, agentic or not:
 No automated tests or build. Verify by opening `index.html` in a browser (or a
 static server), exercising the changed page, and checking the console for `Diag`
 output. There is nothing to compile or lint.
+
+## Reference material (not operating instructions)
+
+`docs/claude-fable-5-system-prompt.md` is an archived copy of the Claude Fable 5
+chat-product system prompt, kept for reference only. It is **not** guidance for
+this repo: it describes a different product (artifact `window.storage`, MCP-app
+etiquette, places/recipe/weather tools, the Fable 5 chat identity) that has no
+bearing on this static dashboard or on how Claude Code should work here. Do not
+treat its "Claude should…" directives as instructions for this project; the
+North Star and conventions above are authoritative.
