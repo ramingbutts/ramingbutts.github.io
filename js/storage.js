@@ -1,6 +1,11 @@
 const Storage = {
   _supabase: null,
   _useSupabase: false,
+  // Keys whose changes are worth recording as user activity (audit trail).
+  _trackedKeys: ['tasks', 'habits', 'finance', 'journal', 'brain_notes', 'nutrition', 'calendar_events'],
+  // Suppresses activity capture during seeding/import so we don't log a flood
+  // of synthetic "added" events for data the user didn't just create.
+  _suppressActivity: false,
 
   init() {
     const sbUrl = localStorage.getItem('os_supabase_url');
@@ -9,7 +14,9 @@ const Storage = {
       this._supabase = window.supabase.createClient(sbUrl, sbKey);
       this._useSupabase = true;
     }
+    this._suppressActivity = true;
     this._seedIfEmpty();
+    this._suppressActivity = false;
   },
 
   configureSupabase(url, key) {
@@ -26,6 +33,9 @@ const Storage = {
   },
 
   set(key, value) {
+    // Snapshot the prior state before overwriting, so we can diff it into the
+    // activity log. Only for tracked keys, and never during seed/import.
+    const prev = (!this._suppressActivity && this._trackedKeys.includes(key)) ? this.get(key) : undefined;
     try {
       localStorage.setItem('os_' + key, JSON.stringify(value));
     } catch (e) {
@@ -35,6 +45,11 @@ const Storage = {
       Diag.error('storage', `Failed to save "${key}" (${e.name || 'error'})`, e);
       Diag.notifyOnce('storage_write_failed', 'Storage full — change not saved. Export a backup and remove old data.', 'error');
       return false;
+    }
+    if (prev !== undefined) {
+      // A bug in diffing must never break a save — isolate it.
+      try { this._recordActivityDiff(key, prev, value); }
+      catch (err) { Diag.warn('activity', `Could not record activity for "${key}"`, err); }
     }
     if (this._useSupabase) this._syncToSupabase(key, value);
     return true;
@@ -62,12 +77,77 @@ const Storage = {
   },
 
   importAll(jsonStr) {
-    const allowedKeys = ['tasks', 'finance', 'habits', 'nutrition', 'calendar_events', 'brain_categories', 'brain_notes', 'graph_imported', 'journal', 'finance_profile', 'finance_rules', 'finance_weakspots', 'finance_debts', 'finance_snapshots'];
+    const allowedKeys = ['tasks', 'finance', 'habits', 'nutrition', 'calendar_events', 'brain_categories', 'brain_notes', 'graph_imported', 'journal', 'finance_profile', 'finance_rules', 'finance_weakspots', 'finance_debts', 'finance_snapshots', 'activity'];
     const data = JSON.parse(jsonStr);
-    Object.entries(data).forEach(([k, v]) => {
-      if (allowedKeys.includes(k) || k.startsWith('water_')) this.set(k, v);
-    });
+    this._suppressActivity = true;
+    try {
+      Object.entries(data).forEach(([k, v]) => {
+        if (allowedKeys.includes(k) || k.startsWith('water_')) this.set(k, v);
+      });
+    } finally {
+      this._suppressActivity = false;
+    }
+    this._pushActivity('system', 'Imported a backup');
   },
+
+  // ---- Activity log (audit trail) ----
+  // Derive human-readable activity by diffing a tracked key's old/new value.
+  _recordActivityDiff(key, prev, next) {
+    if (prev == null) return;
+    const byId = arr => Object.fromEntries((Array.isArray(arr) ? arr : []).map(x => [x.id, x]));
+    const add = (page, text) => this._pushActivity(page, text);
+    const money = n => (typeof App !== 'undefined' && App.formatCurrency) ? App.formatCurrency(n) : String(n);
+
+    if (key === 'tasks') {
+      const p = byId(prev), n = byId(next);
+      for (const id in n) if (!p[id]) add('tasks', `Added task: ${n[id].title}`);
+      for (const id in p) if (!n[id]) add('tasks', `Deleted task: ${p[id].title}`);
+      for (const id in n) if (p[id] && p[id].status !== n[id].status) {
+        add('tasks', n[id].status === 'done' ? `Completed task: ${n[id].title}` : `Moved "${n[id].title}" → ${n[id].status}`);
+      }
+    } else if (key === 'habits') {
+      const p = byId(prev), n = byId(next);
+      for (const id in n) {
+        if (!p[id]) { add('habits', `New habit: ${n[id].name}`); continue; }
+        const pc = p[id].completed || {}, nc = n[id].completed || {};
+        for (const d in nc) if (nc[d] && !pc[d]) add('habits', `Checked: ${n[id].name} (${d})`);
+      }
+    } else if (key === 'journal') {
+      const p = byId(prev), n = byId(next);
+      for (const id in n) if (!p[id]) add('journal', `Journal entry: ${n[id].title || n[id].date || 'untitled'}`);
+    } else if (key === 'brain_notes') {
+      const p = byId(prev), n = byId(next);
+      for (const id in n) {
+        if (!p[id]) add('brain', `New note: ${n[id].title || 'untitled'}`);
+        else if ((p[id].updatedAt || '') !== (n[id].updatedAt || '') || p[id].content !== n[id].content) add('brain', `Edited note: ${n[id].title || 'untitled'}`);
+      }
+    } else if (key === 'finance') {
+      const pt = byId(prev.transactions), nt = byId(next.transactions);
+      for (const id in nt) if (!pt[id]) add('finance', `Transaction: ${nt[id].description} (${money(nt[id].amount)})`);
+      if (typeof next.netWorth === 'number' && prev.netWorth !== next.netWorth) add('finance', `Net worth: ${money(prev.netWorth || 0)} → ${money(next.netWorth)}`);
+    } else if (key === 'nutrition') {
+      const pe = (prev.entries || []), ne = (next.entries || []);
+      if (ne.length > pe.length) {
+        const e = ne[ne.length - 1] || {};
+        const cals = (e.items || []).reduce((s, i) => s + (i.calories || 0), 0);
+        add('nutrition', `Logged meal${cals ? ` (${cals} cal)` : ''}`);
+      }
+    } else if (key === 'calendar_events') {
+      const p = byId(prev), n = byId(next);
+      for (const id in n) if (!p[id]) add('calendar', `Event: ${n[id].title} (${n[id].date})`);
+    }
+  },
+
+  _pushActivity(page, text) {
+    const log = this.get('activity') || [];
+    log.unshift({ t: new Date().toISOString(), page, text });
+    if (log.length > 300) log.length = 300;
+    this.set('activity', log); // 'activity' is untracked, so this won't re-diff
+  },
+
+  getActivity() { return this.get('activity') || []; },
+
+  clearActivity() { this.set('activity', []); },
 
   async _syncToSupabase(key, value) {
     if (!this._supabase) return;

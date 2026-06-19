@@ -15,7 +15,11 @@ Deployed as a static site on GitHub Pages at `raphail369.me`.
 - `js/storage.js` — `Storage` namespace: `get/set/delete`, seed data, Supabase
   sync, and the import allow-list. **All persistence goes through `Storage.set`** —
   don't call `localStorage` directly from page modules.
-- `js/diag.js` — `Diag` observability layer (structured logging + a ring buffer).
+- `js/diag.js` — `Diag` observability layer (structured logging + a ring buffer)
+  for the *app's* health.
+- `js/insights.js` — `Insights` engine: derives the attention digest, weekly
+  review, and per-module staleness from your data (pure compute, reads via
+  `Storage.get`). This is observability of the *life-system*, not the app.
 - `js/<page>.js` — one self-contained module per dashboard page.
 - `css/styles.css` — one stylesheet, CSS variables for theming.
 
@@ -35,7 +39,11 @@ software, agentic or not:
    (storage writes, network/Supabase sync, parsing imported files) must route
    through `Diag` and, when it affects the user, surface a toast. A user must
    never believe data was saved or synced when it wasn't. Debug with
-   `Diag.dump()` in the console.
+   `Diag.dump()` in the console. This principle also points *outward*: the
+   system should explain its own state back to the user — `Insights` does this
+   (attention digest, weekly review, staleness badges), and the activity log
+   in `Storage` (captured by diffing in `Storage.set`, so page modules need no
+   changes) gives an inspectable audit trail.
 4. **Design for evolution.** Keep interfaces stable so capability can grow behind
    them. Prefer additive changes over rewrites.
 

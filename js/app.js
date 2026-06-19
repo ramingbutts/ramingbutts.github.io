@@ -38,6 +38,7 @@ const App = {
     this.currentPage = page;
     this._setActiveNav(page);
     this._setPageTitle(page);
+    this._updateStaleBadges();
     const container = document.getElementById('page-content');
     container.scrollTop = 0;
     if (this.pages[page]) {
@@ -53,6 +54,28 @@ const App = {
     });
   },
 
+  // Staleness badges: a subtle dot on nav items whose data has gone quiet, so
+  // the system flags when its own data can't be trusted without you opening it.
+  _updateStaleBadges() {
+    if (typeof Insights === 'undefined') return;
+    let stale = {};
+    try { stale = Insights.staleness(); } catch (e) { Diag.warn('insights', 'staleness failed', e); return; }
+    document.querySelectorAll('.nav-link').forEach(l => {
+      const info = stale[l.dataset.page];
+      let dot = l.querySelector('.nav-stale-dot');
+      if (info && info.stale) {
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'nav-stale-dot';
+          l.appendChild(dot);
+        }
+        dot.title = `Stale — last activity ${info.label}`;
+      } else if (dot) {
+        dot.remove();
+      }
+    });
+  },
+
   _setPageTitle(page) {
     const titles = {
       dashboard: 'Dashboard',
@@ -63,7 +86,9 @@ const App = {
       calendar: 'Calendar',
       brain: 'Second Brain',
       graph: 'Knowledge Graph',
-      journal: 'Journal'
+      journal: 'Journal',
+      insights: 'Insights',
+      diag: 'Diagnostics'
     };
     document.getElementById('page-title').textContent = titles[page] || page;
   },

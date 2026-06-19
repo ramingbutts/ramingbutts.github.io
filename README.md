@@ -16,7 +16,7 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 
 ## Features
 
-### 9 dashboard modules
+### 11 dashboard modules
 
 | Module | What it does |
 |---|---|
@@ -29,6 +29,8 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 | **Second Brain** | Categorized notes with Obsidian `.md` import — parses YAML frontmatter, `#tags`, `[[wiki-links]]`, auto-creates categories from folder paths |
 | **Knowledge Graph** | Interactive graph of your notes — nodes sized by link count, hub/orphan/broken-link detection, suggested connections, Graphify CLI import support |
 | **Journal** | Daily entries with mood picker, tag support, and streak tracking |
+| **Insights** | Life-system observability — an attention digest (overdue tasks, streaks about to break, stale data, journaling gaps, each with the reason + click-through), a weekly review (task completion, habit consistency, cash flow, logged days), and an auto-captured activity audit trail |
+| **Diagnostics** | App-health observability — the `Diag` event log, error/warning counts, cloud-sync status, and local-storage usage |
 
 ### Data layer
 
@@ -36,7 +38,8 @@ No build step. No framework. Vanilla HTML/CSS/JS with localStorage persistence a
 - **Supabase hooks ready** — to enable cloud sync, load `@supabase/supabase-js` (e.g. add `<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>` to `index.html`), then call `Storage.configureSupabase(url, key)` in the browser console
 - **Export / Import** — JSON backup buttons in the sidebar; import is whitelisted to prevent overwriting Supabase credentials
 - **Auto-migration** — old HTML entity icons migrate to emoji on load
-- **Observability** — `js/diag.js` centralizes structured logging in an in-memory ring buffer; storage-quota and Supabase-sync failures (previously silent) now log and surface a toast. Inspect with `Diag.dump()` in the console
+- **App observability** — `js/diag.js` centralizes structured logging in an in-memory ring buffer; storage-quota and Supabase-sync failures (previously silent) now log and surface a toast. View them in the **Diagnostics** page (sidebar) — event log, error/warning counts, sync status, and storage usage — or via `Diag.dump()` in the console
+- **Life-system observability** — `js/insights.js` derives an attention digest, weekly review, and per-module staleness from your data and explains them back to you (the **Insights** page, plus a compact strip on the Dashboard and subtle staleness dots in the sidebar nav). The **activity audit trail** is captured automatically by diffing in `Storage.set`, so every meaningful change is logged without touching individual page modules
 
 ### Security posture
 
