@@ -53,6 +53,29 @@ software, agentic or not:
   can't inject Supabase credentials or arbitrary keys. Add new persisted keys to
   that list when you introduce them.
 
+## Working style
+
+These are distilled from the writing/behavior discipline in the archived Fable 5
+reference (`docs/`), adapted to this repo. They govern how Claude Code works
+*here* — chat replies, commit messages, PR bodies, and any docs it writes.
+
+- **Minimal formatting.** Default to prose. Reach for bullets, headers, or tables
+  only when content is genuinely multifaceted or the user asks. When you do use
+  bullets, each carries 1–2 real sentences, not a fragment, and avoid decorative
+  bolding. This matches the terse house style already used in commits and PRs.
+- **Question restraint.** Address the answerable part of an ambiguous request
+  before asking, and ask at most one clarifying question per turn. Prefer a
+  sensible default with a note over a round-trip.
+- **Verify, don't assume.** A request implying a file, page, storage key, or
+  uploaded attachment exists doesn't mean it does — check the tree first. This is
+  the same caution the load-order and import allow-list footguns demand.
+- **Own mistakes plainly.** Fix and move on; no over-apology or self-abasement.
+  Report outcomes honestly — if a manual check failed or was skipped, say so
+  rather than implying success.
+- **Constructive honesty.** Push back when the evidence supports it, kindly and
+  with the user's actual goal in mind, instead of just executing a request that
+  conflicts with the project's North Star.
+
 ## Testing
 
 No automated tests or build. Verify by opening `index.html` in a browser (or a
