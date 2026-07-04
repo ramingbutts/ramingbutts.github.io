@@ -20,16 +20,24 @@
   .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
              justify-content:center; text-align:center; color:#fff; z-index:20; padding:24px;
              background:radial-gradient(ellipse at center, rgba(30,20,50,.82), rgba(10,8,20,.94)); }
-  .overlay h1 { font-size:clamp(26px,6vw,54px); margin:0 0 6px;
-                background:linear-gradient(90deg,#ff5fa2,#ffd94f,#5fffb0,#5fc8ff,#c58fff);
+  .overlay h1 { font-size:clamp(30px,7vw,64px); margin:0 0 6px; letter-spacing:2px;
+                background:linear-gradient(90deg,#ff5fa2,#ffd94f,#5fffb0,#5fc8ff,#c58fff,#ff5fa2);
+                background-size:200% 100%; animation:huedrift 8s linear infinite;
                 -webkit-background-clip:text; background-clip:text; color:transparent;
-                filter:drop-shadow(0 0 14px rgba(255,120,220,.45)); }
-  .overlay h2 { font-size:clamp(15px,3vw,22px); font-weight:400; margin:0 0 18px; color:#cfd8ff; }
+                filter:drop-shadow(0 0 18px rgba(255,120,220,.5)); }
+  @keyframes huedrift { to { background-position:200% 0; } }
+  .overlay h2 { font-size:clamp(15px,3vw,22px); font-weight:400; margin:0 0 8px; color:#cfd8ff; }
+  .overlay .chip { display:inline-block; font-size:11px; letter-spacing:3px; color:#ffd94f;
+                   border:1px solid rgba(255,217,79,.45); border-radius:20px; padding:5px 16px;
+                   margin-bottom:20px; background:rgba(255,217,79,.08); }
   .overlay .controls { font-size:clamp(12px,2.4vw,16px); line-height:1.9; color:#aeb8d8; margin-bottom:22px; }
   .overlay .controls b { color:#fff; }
-  .overlay button { font-size:clamp(16px,3vw,22px); padding:12px 34px; border:none; border-radius:40px;
+  .overlay button { font-size:clamp(16px,3vw,22px); padding:13px 38px; border:none; border-radius:40px;
                     cursor:pointer; color:#1a1030; font-weight:700; letter-spacing:.5px;
-                    background:linear-gradient(90deg,#ffd94f,#ff8fd0); box-shadow:0 0 24px rgba(255,160,220,.6); }
+                    background:linear-gradient(90deg,#ffd94f,#ff8fd0);
+                    box-shadow:0 0 24px rgba(255,160,220,.6); animation:btnpulse 2.2s ease-in-out infinite; }
+  @keyframes btnpulse { 50% { box-shadow:0 0 42px rgba(255,160,220,.95); } }
+  .overlay button:hover { transform:scale(1.04); }
   .overlay button:active { transform:scale(.96); }
   .overlay .stats { margin-top:14px; color:#9fe8c8; font-size:14px; }
   .hidden { display:none !important; }
@@ -114,7 +122,8 @@
 <!-- ================= overlays ================= -->
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
-  <h2>POOPOCALYPSE — Level 1: Golden Gate Bridge</h2>
+  <h2>POOPOCALYPSE</h2>
+  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam<br>
@@ -127,6 +136,8 @@
   <h1>FIRST POOPOCALYPSE VICTORY!</h1>
   <h2>The bridge sparkles again. Hose &amp; Magic Beam fully unlocked!</h2>
   <div class="stats" id="winStats"></div>
+  <div class="chip" style="margin-top:16px;">NEXT: LEVEL 2 · COMING SOON</div>
+  <br>
   <button id="againBtn">PLAY AGAIN</button>
 </div>
 
@@ -137,11 +148,16 @@
 </div>
 
 <script type="importmap">
-{ "imports": { "three": "./lib/three.module.min.js" } }
+{ "imports": { "three": "./lib/three.module.min.js", "three/addons/": "./lib/jsm/" } }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 /* =====================================================================
    0. CONFIG — one place to tune the whole level
@@ -185,6 +201,41 @@ const SFX = {
 
     this._startWind();
     this._startSprayLoop();
+    this._startMusic();
+  },
+
+  // ambient music bed: four detuned triangle voices drifting through a
+  // minor chord progression under a slow-breathing lowpass — foggy, hopeful
+  _startMusic() {
+    const chords = [
+      [220.0, 261.6, 329.6, 392.0],   // Am add9
+      [174.6, 220.0, 261.6, 349.2],   // F maj
+      [196.0, 246.9, 293.7, 392.0],   // G add7
+      [164.8, 220.0, 246.9, 329.6],   // E min-ish
+    ];
+    const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750; lp.Q.value = 0.5;
+    const breathe = this.ctx.createOscillator(); breathe.frequency.value = 0.045;
+    const breatheG = this.ctx.createGain(); breatheG.gain.value = 320;
+    breathe.connect(breatheG); breatheG.connect(lp.frequency); breathe.start();
+    const bus = this.ctx.createGain(); bus.gain.value = 0.05;
+    lp.connect(bus); bus.connect(this.master);
+    this._musicVoices = chords[0].map((f, i) => {
+      const o = this.ctx.createOscillator(); o.type = 'triangle';
+      o.frequency.value = f; o.detune.value = (i - 1.5) * 5;
+      const g = this.ctx.createGain(); g.gain.value = 0.22;
+      o.connect(g); g.connect(lp); o.start();
+      return o;
+    });
+    let step = 0;
+    this._musicTimer = setInterval(() => {
+      step = (step + 1) % chords.length;
+      const t = this.ctx.currentTime;
+      this._musicVoices.forEach((o, i) => {
+        o.frequency.cancelScheduledValues(t);
+        o.frequency.setValueAtTime(o.frequency.value, t);
+        o.frequency.linearRampToValueAtTime(chords[step][i], t + 2.5);
+      });
+    }, 9000);
   },
 
   _out(pan = 0, vol = 1) { // panner+gain chain for one-shots
@@ -440,6 +491,10 @@ const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping; // filmic response, cinematic highlights
+renderer.toneMappingExposure = 1.15;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(CFG.fogColor);
@@ -448,14 +503,42 @@ scene.fog = new THREE.FogExp2(CFG.fogColor, CFG.fogDensity);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 300);
 
 scene.add(new THREE.HemisphereLight(0xcfe3f2, 0x51606e, 1.1));
-const sun = new THREE.DirectionalLight(0xfff2dd, 0.7);
-sun.position.set(30, 60, 20);
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.85);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -28; sun.shadow.camera.right = 28;
+sun.shadow.camera.top = 28; sun.shadow.camera.bottom = -28;
+sun.shadow.camera.near = 5; sun.shadow.camera.far = 160;
+sun.shadow.bias = -0.0006;
 scene.add(sun);
+scene.add(sun.target); // sun follows the player so the shadow window stays tight
+
+// post-processing: MSAA render target -> bloom -> vignette -> tonemap/output
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight,
+  { samples: 4, type: THREE.HalfFloatType }));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.5, 0.55, 0.75);
+composer.addPass(bloom);
+const vignette = new ShaderPass({
+  name: 'VignetteShader',
+  uniforms: { tDiffuse: { value: null }, strength: { value: 0.9 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `varying vec2 vUv; uniform sampler2D tDiffuse; uniform float strength;
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = distance(vUv, vec2(0.5));
+      c.rgb *= 1.0 - strength * smoothstep(0.4, 0.78, d);
+      gl_FragColor = c;
+    }`,
+});
+composer.addPass(vignette);
+composer.addPass(new OutputPass());
 
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 // soft radial glow texture, reused by every glow sprite / particle system
@@ -483,7 +566,33 @@ function glowSprite(color, scale, opacity = 0.8) {
    ===================================================================== */
 const GG_ORANGE = 0xc2402a;
 const bridgeMat = new THREE.MeshStandardMaterial({ color: GG_ORANGE, roughness: 0.75 });
-const deckMat = new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.95 });
+
+// procedural asphalt: speckle noise + hairline cracks, tiled down the deck
+function makeAsphaltTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#43474e'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 9000; i++) {
+    const v = 50 + (Math.random() * 45 | 0);
+    g.fillStyle = `rgba(${v},${v},${v + 5},0.28)`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1.6, 1.6);
+  }
+  g.strokeStyle = 'rgba(18,20,24,0.45)'; g.lineWidth = 1;
+  for (let i = 0; i < 6; i++) {
+    g.beginPath();
+    let x = Math.random() * 256, y = Math.random() * 256;
+    g.moveTo(x, y);
+    for (let s = 0; s < 6; s++) { x += (Math.random() - 0.5) * 70; y += (Math.random() - 0.5) * 70; g.lineTo(x, y); }
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(3, 32);
+  t.anisotropy = 4;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const deckMat = new THREE.MeshStandardMaterial({ map: makeAsphaltTexture(), roughness: 0.95 });
 
 function buildBridge() {
   const B = CFG.bridge, len = B.zStart - B.zEnd, zMid = (B.zStart + B.zEnd) / 2;
@@ -492,6 +601,7 @@ function buildBridge() {
   // roadway
   const deck = new THREE.Mesh(new THREE.BoxGeometry(B.width, 1, len), deckMat);
   deck.position.set(0, -0.5, zMid);
+  deck.receiveShadow = true;
   grp.add(deck);
 
   // dashed lane line
@@ -569,9 +679,10 @@ function buildBridge() {
   const carBody = new THREE.BoxGeometry(2, 0.9, 4.2);
   const carTop = new THREE.BoxGeometry(1.7, 0.7, 2.2);
   [[5.5, -30, 0xa04a56], [-5.8, -66, 0x4a6a8a], [6, -95, 0x777d5a], [-5.2, -120, 0x8a8a92]].forEach(([x, z, col]) => {
-    const m = new THREE.MeshStandardMaterial({ color: col, roughness: 0.7 });
+    const m = new THREE.MeshStandardMaterial({ color: col, roughness: 0.55, metalness: 0.3 });
     const b = new THREE.Mesh(carBody, m); b.position.set(x, 0.45, z); b.rotation.y = (Math.random() - 0.5) * 0.5;
     const t = new THREE.Mesh(carTop, m); t.position.set(0, 0.8, -0.3); b.add(t);
+    b.castShadow = true; t.castShadow = true;
     grp.add(b);
   });
 
@@ -741,6 +852,7 @@ class PoopPile {
       m.scale.set(sx * size, sy * size, sz * size);
       m.position.y = y * size;
       m.userData.entity = this;
+      m.castShadow = true;
       this.group.add(m);
       cleanTargets.push(m);
     }
@@ -903,6 +1015,7 @@ class Zombie {
     this.sparkle.position.y = 1.4;
     g.add(this.sparkle);
 
+    g.traverse(o => { if (o.isMesh) o.castShadow = true; });
     scene.add(g);
   }
 
@@ -1004,6 +1117,9 @@ class Zombie {
     // waddling idle animation: body sway + paddling claw arms
     const sway = Math.sin(t * 5 + pos.x * 7);
     this.group.rotation.z = sway * 0.07;
+    if (this.state === 'wander' || this.state === 'chase') { // waddle-rock while walking
+      this.group.rotation.x = Math.sin(t * 7 + pos.z) * 0.06;
+    }
     this.arms[0].rotation.z = -0.5 + Math.sin(t * 4) * 0.25;
     this.arms[1].rotation.z = 0.5 - Math.sin(t * 4 + 1) * 0.25;
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
@@ -1016,7 +1132,7 @@ class Zombie {
 const Player = {
   group: null, pos: null, vel: new THREE.Vector3(), knock: new THREE.Vector3(),
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
-  hasHorn: false, horn: null, hornLight: null,
+  hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
 };
 
@@ -1040,16 +1156,20 @@ function buildPlayer() {
   zip.position.set(0, 1.32, 0.4);
   g.add(zip);
 
-  // jeans + boots
+  // jeans + boots — pivoted at the hip so they can swing while running;
+  // the boot is a child of the leg so it follows the stride
+  Player.legs = [];
   const legGeo = new THREE.BoxGeometry(0.22, 0.55, 0.26);
+  legGeo.translate(0, -0.275, 0); // pivot at the top (hip)
   const bootGeo = new THREE.BoxGeometry(0.26, 0.22, 0.42);
   for (const s of [-1, 1]) {
     const leg = new THREE.Mesh(legGeo, denim);
-    leg.position.set(s * 0.17, 0.55, 0);
-    g.add(leg);
+    leg.position.set(s * 0.17, 0.82, 0);
     const boot = new THREE.Mesh(bootGeo, leather);
-    boot.position.set(s * 0.18, 0.12, 0.05);
-    g.add(boot);
+    boot.position.set(0.01 * s, -0.66, 0.05);
+    leg.add(boot);
+    g.add(leg);
+    Player.legs.push(leg);
   }
 
   // tool belt + buckle
@@ -1060,13 +1180,16 @@ function buildPlayer() {
   buckle.position.set(0, 0.88, 0.3);
   g.add(buckle);
 
-  // muscular bare arms
+  // muscular bare arms — pivoted at the shoulder for the run swing
+  Player.armsM = [];
   const armGeo = new THREE.CapsuleGeometry(0.13, 0.5, 3, 6);
+  armGeo.translate(0, -0.28, 0); // pivot at the shoulder
   for (const s of [-1, 1]) {
     const arm = new THREE.Mesh(armGeo, skin);
-    arm.position.set(s * 0.56, 1.3, 0.05);
+    arm.position.set(s * 0.56, 1.58, 0.05);
     arm.rotation.z = s * 0.25;
     g.add(arm);
+    Player.armsM.push(arm);
   }
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), skin);
@@ -1123,6 +1246,7 @@ function buildPlayer() {
   Player.hornGlow.visible = false;
   g.add(Player.hornGlow);
 
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   scene.add(g);
 }
 
@@ -1182,6 +1306,14 @@ function updatePlayer(dt, t) {
   Player.group.rotation.y = Player.yaw;
   Player.group.position.y = Player.pos.y + (moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : 0);
 
+  // run cycle: legs and arms counter-swing while moving, relax when idle
+  const swing = (moving && Player.onGround) ? Math.sin(t * 10) : 0;
+  const ease = 1 - Math.pow(0.001, dt);
+  Player.legs[0].rotation.x += (swing * 0.55 - Player.legs[0].rotation.x) * ease;
+  Player.legs[1].rotation.x += (-swing * 0.55 - Player.legs[1].rotation.x) * ease;
+  Player.armsM[0].rotation.x += (-swing * 0.45 - Player.armsM[0].rotation.x) * ease;
+  Player.armsM[1].rotation.x += (swing * 0.45 - Player.armsM[1].rotation.x) * ease;
+
   // --- camera: third-person follow, slightly damped ---
   const headPos = _v1.copy(Player.pos).add(new THREE.Vector3(0, 1.9, 0));
   const camTarget = _v2.copy(headPos).addScaledVector(Player.aim, -5.4).add(new THREE.Vector3(0, 0.4, 0));
@@ -1189,6 +1321,17 @@ function updatePlayer(dt, t) {
   camera.position.lerp(camTarget, 1 - Math.pow(0.0001, dt));
   const lookAt = headPos.clone().addScaledVector(Player.aim, 10);
   camera.lookAt(lookAt);
+
+  // camera shake (impacts, beam) — positional jitter after lookAt
+  if (Player.shake > 0.002) {
+    Player.shake *= Math.max(0, 1 - 5 * dt);
+    camera.position.x += (Math.random() - 0.5) * Player.shake * 0.5;
+    camera.position.y += (Math.random() - 0.5) * Player.shake * 0.35;
+  } else Player.shake = 0;
+
+  // keep the sun's shadow window centered on the player
+  sun.position.set(Player.pos.x + 21, 43, Player.pos.z + 14);
+  sun.target.position.copy(Player.pos);
 
   // --- horn pickup ---
   if (!Player.hasHorn && hornPickup) {
@@ -1212,6 +1355,7 @@ function damagePlayer(amount, fromDir) {
   Player.hp -= amount;
   Player.knock.copy(fromDir).setY(0).normalize().multiplyScalar(7);
   Game.dmgFlash = 1;
+  Player.shake = 0.45;
   SFX.hurt();
   hpFill.style.width = Math.max(0, Player.hp) + '%';
   hpFill.style.background = Player.hp < 35 ? 'linear-gradient(90deg,#ff4f6e,#ff9e4f)' : 'linear-gradient(90deg,#4fff9e,#b8ff4f)';
@@ -1221,6 +1365,33 @@ function damagePlayer(amount, fromDir) {
 /* =====================================================================
    11. HOSE + MAGIC BEAM — spray particles, raycast cleaning
    ===================================================================== */
+// pooled water-impact splashes: a sprite that pops open and fades wherever
+// the spray lands — sells the "high-pressure" fantasy
+const splashPool = [];
+let splashIdx = 0;
+function buildSplashes() {
+  for (let i = 0; i < 14; i++) {
+    const s = glowSprite(0xbfe8ff, 0.1, 0);
+    s.userData.life = 0;
+    splashPool.push(s); scene.add(s);
+  }
+}
+function spawnSplash(point, big = false) {
+  const s = splashPool[splashIdx = (splashIdx + 1) % splashPool.length];
+  s.position.copy(point);
+  s.userData.life = big ? 0.35 : 0.22;
+  s.userData.big = big;
+  s.scale.setScalar(big ? 0.8 : 0.35);
+}
+function updateSplashes(dt) {
+  for (const s of splashPool) {
+    if (s.userData.life <= 0) { s.material.opacity = 0; continue; }
+    s.userData.life -= dt;
+    s.scale.addScalar((s.userData.big ? 7 : 4.5) * dt);
+    s.material.opacity = Math.max(0, s.userData.life * (s.userData.big ? 2.2 : 3.2));
+  }
+}
+
 const raycaster = new THREE.Raycaster();
 const HoseFX = { N: 500, idx: 0, pos: null, vel: [], life: [], points: null };
 
@@ -1240,7 +1411,8 @@ function nozzleWorldPos(out) {
   return out.copy(Player.pos).add(new THREE.Vector3(0, 1.5, 0)).addScaledVector(Player.forward, 0.6);
 }
 
-let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0;
+let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0, hitPulse = 0;
+const crosshairEl = document.getElementById('crosshair');
 function updateHose(dt) {
   const spraying = Input.spray && Player.hasHorn && Game.state === 'playing';
   if (spraying !== sprayWasOn) { SFX.setSpray(spraying); sprayWasOn = spraying; }
@@ -1269,7 +1441,15 @@ function updateHose(dt) {
       const e = hits[0].object.userData.entity;
       if (e) {
         e.clean(CFG.hose.dps * dt, hits[0].point);
+        hitPulse = 1; // crosshair feedback: you're scrubbing something
+        if (Math.random() < dt * 14) spawnSplash(hits[0].point);
         if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
+      }
+    } else if (Player.aim.y < -0.05) {
+      // no target: show the water hitting the roadway instead
+      const tGround = (camera.position.y - 0.05) / -Player.aim.y;
+      if (tGround < CFG.hose.range + 6 && Math.random() < dt * 10) {
+        spawnSplash(_v2.copy(camera.position).addScaledVector(Player.aim, tGround));
       }
     }
   }
@@ -1305,10 +1485,12 @@ function updateBeam(dt) {
       const hits = raycaster.intersectObjects(cleanTargets, false);
       const nozzle = nozzleWorldPos(_v1.clone());
       let end;
+      Player.shake = Math.max(Player.shake, 0.22);
       if (hits.length && hits[0].object.userData.entity) {
         end = hits[0].point.clone();
         hits[0].object.userData.entity.clean(CFG.beam.damage, hits[0].point);
         spawnGlitter(hits[0].point, 30, 4);
+        spawnSplash(hits[0].point, true);
         SFX.splat(panFor(hits[0].point), 0.7);
       } else {
         end = nozzle.clone().addScaledVector(Player.aim, CFG.beam.range);
@@ -1484,6 +1666,7 @@ function buildLevel() {
   buildPlayer();
   buildHornPickup();
   buildHose();
+  buildSplashes();
 
   // poop piles — the first two are the tutorial targets, right past the crater
   const pileSpots = [
@@ -1541,6 +1724,7 @@ function tick() {
   updateCrater(dt);
   updateFogParticles(dt, t);
   updateGlitter(dt);
+  updateSplashes(dt);
 
   if (Game.state === 'playing') {
     updatePlayer(dt, t);
@@ -1549,6 +1733,13 @@ function tick() {
     for (const z of zombies) z.update(dt, t);
     updateAudioCues(dt);
     Tutorial.update(dt);
+
+    // crosshair pulse while the spray is connecting
+    if (hitPulse > 0.01) {
+      hitPulse = Math.max(0, hitPulse - dt * 4);
+      crosshairEl.style.transform = `translate(-50%,-50%) scale(${1 + hitPulse * 0.3})`;
+      crosshairEl.style.filter = `drop-shadow(0 0 ${hitPulse * 6}px #9fdcff)`;
+    }
 
     // damage vignette fade
     if (Game.dmgFlash > 0) {
@@ -1562,7 +1753,7 @@ function tick() {
     camera.lookAt(Player.pos.x, 1.5, Player.pos.z);
   }
 
-  renderer.render(scene, camera);
+  composer.render();
 }
 tick();
 </script>

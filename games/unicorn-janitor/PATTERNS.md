@@ -97,6 +97,25 @@ look, three hold/tap buttons; joystick and look are tracked per
 tutorial box moves to the top of the screen (`@media (pointer: coarse)`) —
 the bottom belongs to the thumbs.
 
+## AAA rendering rig (iteration 4)
+
+EffectComposer on a 4-sample MSAA half-float target: RenderPass →
+UnrealBloomPass (half-res, strength 0.5 / radius 0.55 / threshold 0.75) →
+inline vignette ShaderPass → OutputPass, with ACES filmic tone mapping
+(exposure 1.15). Addon modules are vendored under `lib/jsm/` and mapped via
+`"three/addons/": "./lib/jsm/"` in the importmap — only the postprocessing +
+shaders files actually imported are shipped. One 1024px PCF-soft directional
+shadow whose position/target follow the player each frame (28 m window), so a
+single map covers the whole level; deck receives, characters/piles/cars cast.
+Deck uses a procedural 256px asphalt CanvasTexture (speckle + cracks, tiled
+3×32). Game feel: pooled water-splash sprites at every spray impact, decaying
+`Player.shake` camera jitter on beam fire and damage taken, crosshair pulse
+while the spray connects, procedural run cycle (hip/shoulder-pivoted limbs,
+counter-swing), zombie waddle-rock, and a 4-voice triangle-pad ambient music
+bed stepping a minor progression every 9 s under a breathing lowpass.
+Caveat: with a composer, `renderer.info` per-frame numbers reflect only the
+final pass — set `info.autoReset = false` and accumulate to measure.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
