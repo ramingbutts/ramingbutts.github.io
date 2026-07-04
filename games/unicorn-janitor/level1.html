@@ -54,6 +54,10 @@
   #beamCd { position:absolute; left:50%; top:calc(50% + 24px); transform:translateX(-50%);
             width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
   #beamCdFill { height:100%; width:100%; background:linear-gradient(90deg,#c58fff,#5fc8ff); }
+  /* on touch devices the bottom belongs to the controls — tutorial goes up top */
+  @media (pointer: coarse) {
+    #tutorial { bottom:auto !important; top:16%; }
+  }
   #tutorial { position:absolute; left:50%; bottom:16%; transform:translateX(-50%); max-width:min(560px,86vw);
               background:rgba(16,10,34,.78); border:1px solid rgba(255,150,230,.5); border-radius:14px;
               padding:12px 20px; color:#fff; font-size:clamp(14px,2.6vw,18px); text-align:center;
@@ -646,8 +650,8 @@ function updateCrater(dt) {
    ===================================================================== */
 const fogSprites = [];
 function buildFogParticles() {
-  for (let i = 0; i < 24; i++) {
-    const s = glowSprite(0xdde8f0, 22 + Math.random() * 16, 0.05 + Math.random() * 0.05);
+  for (let i = 0; i < 20; i++) {
+    const s = glowSprite(0xdde8f0, 34 + Math.random() * 20, 0.035 + Math.random() * 0.035);
     s.position.set((Math.random() - 0.5) * 40,
                    1 + Math.random() * 8,
                    CFG.bridge.zStart - Math.random() * 160);
@@ -1416,7 +1420,7 @@ buildLevel();
    16. MAIN LOOP
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
-window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG };
+window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer };
 
 const clock = new THREE.Clock();
 function tick() {

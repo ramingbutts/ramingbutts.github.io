@@ -16,8 +16,8 @@ disco-pompadour hair. Keep the flamboyance, drop any group-targeting labels.
 geometry dissolves into sky, layered with ~24 large additive glow sprites
 (scale 22–38, opacity 0.05–0.10) drifting slowly and wrapping in z. The sprites
 sell "moving mist" that plain exponential fog can't. Lesson learned: keep
-sprite opacity ≤ 0.10 and scale ≥ 22, otherwise they read as bokeh bubbles,
-not fog. No post-processing composer needed — the shared radial-gradient
+sprite opacity ≤ 0.07 and scale ≥ 34, otherwise they read as bokeh bubbles,
+not fog (portrait phones exaggerate this — check both orientations). No post-processing composer needed — the shared radial-gradient
 `CanvasTexture` (`makeGlowTexture`) fakes bloom on every emissive object.
 
 ## Cleanable-entity interface + cleaning raycast (section 8, 11)
@@ -79,7 +79,9 @@ a time. Touch and desktop get different copy (`IS_TOUCH`).
 Desktop: pointer lock, `e.code` bindings (layout-safe), hold-LMB spray,
 RMB/Q beam, Space jump. Touch: left-zone virtual joystick, right-zone drag
 look, three hold/tap buttons; joystick and look are tracked per
-`touch.identifier` so they work simultaneously.
+`touch.identifier` so they work simultaneously. On coarse pointers the
+tutorial box moves to the top of the screen (`@media (pointer: coarse)`) —
+the bottom belongs to the thumbs.
 
 ## Performance defaults
 
@@ -90,8 +92,13 @@ and on GitHub Pages.
 
 ## Testing rig (scratchpad, not committed)
 
-`window.UJ` debug hook exposes `Game/Player/Tutorial/piles/zombies/CFG` for
-Playwright: teleport player, aim by setting yaw/pitch, hold mouse to spray,
-assert dirt/goo/state. Headless swiftshader runs ~5 fps and `dt` clamps at
-0.05 s, so hold durations must be generous and the camera needs ~2 s to settle
-after a teleport before ray-dependent assertions.
+`window.UJ` debug hook exposes `Game/Player/Tutorial/piles/zombies/CFG/Input/
+renderer` for Playwright: teleport player, aim by setting yaw/pitch, hold
+mouse to spray, assert dirt/goo/state, read `renderer.info` for draw-call
+budgets (level 1 baseline: 315 calls / 18k tris / 6 programs). Headless
+swiftshader runs ~5 fps and `dt` clamps at 0.05 s, so hold durations must be
+generous, the camera needs ~2 s to settle after a teleport before
+ray-dependent assertions, and DOM read-backs of per-frame HUD writes race the
+frame — assert on game state (e.g. `Tutorial.fired.firstBeam`), not on style
+strings. Touch is testable by dispatching synthetic `TouchEvent`s; handlers
+must not require `isTrusted`.
