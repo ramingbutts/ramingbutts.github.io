@@ -14,7 +14,7 @@ const CFG = {
   fogColor: 0x9db3c6,
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
   hose:   { range: 20, dps: 65, spawnRate: 320 },   // particles/sec while spraying
-  beam:   { range: 40, damage: 45, cooldown: 3 },
+  beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
   zombie: { count: 9, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 2.9,
             lungeSpeed: 11, lungeTime: 0.35, windup: 0.55, recover: 0.9,
             hitRange: 1.5, damage: 12, goo: 100 },
@@ -22,6 +22,12 @@ const CFG = {
 };
 
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+
+// resource meters (design doc): Pressure fuels the hose and refills when you
+// ease off; Rainbow fills as you clean and pays for the Magic Beam.
+const Meters = { pressure: 100, rainbow: 0 };
+const BEAM_COST = 35, PRESSURE_DRAIN = 16, PRESSURE_REGEN = 30, RAINBOW_FILL = 14;
+let pressureLocked = false; // emptied tank: trigger locks until it recovers
 
 /* =====================================================================
    1. AUDIO — all procedural WebAudio. In heavy fog, sound is the map:
@@ -53,19 +59,29 @@ const SFX = {
   // ambient music bed: four detuned triangle voices drifting through a
   // minor chord progression under a slow-breathing lowpass — foggy, hopeful
   _startMusic() {
-    const chords = [
-      [220.0, 261.6, 329.6, 392.0],   // Am add9
-      [174.6, 220.0, 261.6, 349.2],   // F maj
-      [196.0, 246.9, 293.7, 392.0],   // G add7
-      [164.8, 220.0, 246.9, 329.6],   // E min-ish
-    ];
+    // two moods per the design doc: eerie before the horn, hopeful after
+    this._chordSets = {
+      eerie: [
+        [220.0, 261.6, 311.1, 415.3],   // A C Eb Ab — uneasy
+        [196.0, 233.1, 293.7, 392.0],   // G Bb D G
+        [174.6, 207.7, 261.6, 311.1],   // F Ab C Eb
+        [164.8, 196.0, 246.9, 293.7],   // E G B D
+      ],
+      hero: [
+        [220.0, 261.6, 329.6, 392.0],   // Am add9
+        [174.6, 220.0, 261.6, 349.2],   // F maj
+        [196.0, 246.9, 293.7, 392.0],   // G add7
+        [164.8, 220.0, 246.9, 329.6],   // E min-ish
+      ],
+    };
+    this._chords = this._chordSets.eerie;
     const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750; lp.Q.value = 0.5;
     const breathe = this.ctx.createOscillator(); breathe.frequency.value = 0.045;
     const breatheG = this.ctx.createGain(); breatheG.gain.value = 320;
     breathe.connect(breatheG); breatheG.connect(lp.frequency); breathe.start();
     const bus = this.ctx.createGain(); bus.gain.value = 0.05;
     lp.connect(bus); bus.connect(this.master);
-    this._musicVoices = chords[0].map((f, i) => {
+    this._musicVoices = this._chords[0].map((f, i) => {
       const o = this.ctx.createOscillator(); o.type = 'triangle';
       o.frequency.value = f; o.detune.value = (i - 1.5) * 5;
       const g = this.ctx.createGain(); g.gain.value = 0.22;
@@ -74,14 +90,25 @@ const SFX = {
     });
     let step = 0;
     this._musicTimer = setInterval(() => {
-      step = (step + 1) % chords.length;
+      step = (step + 1) % this._chords.length;
       const t = this.ctx.currentTime;
       this._musicVoices.forEach((o, i) => {
         o.frequency.cancelScheduledValues(t);
         o.frequency.setValueAtTime(o.frequency.value, t);
-        o.frequency.linearRampToValueAtTime(chords[step][i], t + 2.5);
+        o.frequency.linearRampToValueAtTime(this._chords[step][i], t + 2.5);
       });
     }, 9000);
+  },
+
+  setMusicMood(name) {
+    if (!this.ctx || !this._chordSets || !this._chordSets[name]) return;
+    this._chords = this._chordSets[name];
+    const t = this.ctx.currentTime;
+    this._musicVoices.forEach((o, i) => {
+      o.frequency.cancelScheduledValues(t);
+      o.frequency.setValueAtTime(o.frequency.value, t);
+      o.frequency.linearRampToValueAtTime(this._chords[0][i], t + 1.5);
+    });
   },
 
   _out(pan = 0, vol = 1) { // panner+gain chain for one-shots
@@ -268,12 +295,14 @@ const SFX = {
 };
 
 // tutorial narration via the browser's speech synthesis (best-effort)
-function narrate(text) {
+function narrate(text, pitch = 1.15) {
   try {
     if (!('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/[✨💩🧟]/g, ''));
-    u.rate = 1.05; u.pitch = 1.15; u.volume = 0.9;
+    const u = new SpeechSynthesisUtterance(text.replace(/[✨💩🧟🧍🌈💀🌠“”]/g, ''));
+    u.pitch = pitch;                       // low pitch = Prismalox, the voice in the horn
+    u.rate = pitch < 1 ? 0.92 : 1.05;
+    u.volume = 0.9;
     speechSynthesis.speak(u);
   } catch (e) { /* narration is optional */ }
 }
@@ -810,6 +839,7 @@ class PoopPile {
     removeCleanTargets(this.group);
     scene.remove(this.group);
     Game.pilesCleaned++;
+    Meters.rainbow = Math.min(100, Meters.rainbow + 25); // big charge per pile
     gainXP(25, this.group.position);
     Tutorial.fire('pileCleaned');
     updateObjectiveHUD();
@@ -972,6 +1002,7 @@ class Zombie {
     // group is removed by the dying-list updater in the main loop
     dyingZombies.push({ g: this.group, t: 0.45 });
     hitStop = 0.09; // brief slow-motion on every kill
+    Meters.rainbow = Math.min(100, Meters.rainbow + 15);
     Game.zombiesDefeated++;
     RPG.kills++;
     gainXP(50, this.group.position);
@@ -1063,6 +1094,212 @@ class Zombie {
       ? 1.6 + 0.5 * Math.sin(t * 12)
       : 0.8 + 0.2 * Math.sin(t * 4);
   }
+}
+
+/* =====================================================================
+   9.5 STORY CONTENT (design doc) — transforming civilians, the hidden
+   meteor shard, flickering streetlights, and Jax's graffiti job site.
+   ===================================================================== */
+const civilians = [];
+
+// A person half-consumed by rainbow rot. Their timer starts when the player
+// gets close: hose them clean to save them, or they become a zombie.
+class Civilian {
+  constructor(x, z) {
+    this.goo = 60;
+    this.timer = 26;
+    this.active = false;
+    this.resolved = false;
+    this.warned = false;
+    const g = this.group = new THREE.Group();
+    g.position.set(x, 0, z);
+
+    const shirt = new THREE.MeshStandardMaterial({ color: 0x6a8f5a, roughness: 0.8 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xc9986f, roughness: 0.6 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.6, 4, 8), shirt);
+    body.position.y = 1.15; body.userData.entity = this;
+    g.add(body); cleanTargets.push(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), skin);
+    head.position.y = 1.78; head.userData.entity = this;
+    g.add(head); cleanTargets.push(head);
+    const legGeo = new THREE.BoxGeometry(0.18, 0.5, 0.2);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x3a4152, roughness: 0.8 });
+    for (const s of [-1, 1]) {
+      const leg = new THREE.Mesh(legGeo, legMat);
+      leg.position.set(s * 0.15, 0.25, 0);
+      g.add(leg);
+    }
+    // creeping rainbow rot — shrinks as they're cleaned
+    this.rot = [];
+    const dripGeo = new THREE.SphereGeometry(0.08, 6, 5);
+    for (let i = 0; i < 4; i++) {
+      const hue = Math.random();
+      const d = new THREE.Mesh(dripGeo, new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(hue, 0.9, 0.5),
+        emissive: new THREE.Color().setHSL(hue, 0.9, 0.4),
+        emissiveIntensity: 1, roughness: 0.3 }));
+      d.position.set((Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 0.9, 0.18 + Math.random() * 0.12);
+      d.userData.entity = this;
+      g.add(d); this.rot.push(d); cleanTargets.push(d);
+    }
+    g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    scene.add(g);
+  }
+
+  clean(amount, point) {
+    if (this.resolved) return;
+    this.goo -= amount;
+    if (Math.random() < 0.15) spawnGlitter(point || this.group.position, 5, 2);
+    const f = Math.max(this.goo, 0) / 60;
+    for (const d of this.rot) d.scale.setScalar(0.4 + 0.8 * f);
+    if (this.goo <= 0) this.save();
+  }
+
+  save() {
+    this.resolved = true;
+    Game.civSaved++; Game.civResolved++;
+    Meters.rainbow = Math.min(100, Meters.rainbow + 20);
+    spawnGlitter(this.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), 80, 5);
+    spawnFloatText(this.group.position.clone().add(new THREE.Vector3(0, 2.3, 0)), 'SAVED!', '#5fffb0');
+    gainXP(75, this.group.position);
+    SFX.chime(1.25);
+    showToast('🧍 Civilian saved from the rainbow rot!');
+    removeCleanTargets(this.group);
+    scene.remove(this.group);
+    updateObjectiveHUD();
+    checkWin();
+  }
+
+  transform() {
+    this.resolved = true;
+    Game.civResolved++;
+    removeCleanTargets(this.group);
+    scene.remove(this.group);
+    const p = this.group.position;
+    spawnGlitter(p.clone().add(new THREE.Vector3(0, 1.2, 0)), 60, 5);
+    SFX.groan(panFor(p), 1);
+    showToast('💀 Too late — the rot took them!');
+    narrate('Too late. The rot has taken them.', 0.6);
+    const z = new Zombie(p.x, p.z);
+    z.setState('chase');
+    zombies.push(z);
+    Game.totalZombies++;
+    updateObjectiveHUD();
+  }
+
+  update(dt, t) {
+    if (this.resolved) return;
+    const dist = this.group.position.distanceTo(Player.pos);
+    if (!this.active && dist < 26) {
+      this.active = true; // pacing: the countdown starts when you can see them
+      showToast('🧍 A civilian is infected — hose the rot off before they turn!');
+      narrate('Cleanse them, janitor, before the rot takes hold.', 0.6);
+    }
+    if (!this.active) return;
+    this.timer -= dt;
+    const panic = 1 - Math.max(this.timer, 0) / 26;
+    this.group.rotation.z = Math.sin(t * (8 + panic * 16)) * 0.05 * (1 + panic * 2);
+    for (const d of this.rot) d.scale.multiplyScalar(1 + 0.02 * dt); // rot slowly spreads
+    if (!this.warned && this.timer < 8) {
+      this.warned = true;
+      spawnFloatText(this.group.position.clone().add(new THREE.Vector3(0, 2.4, 0)), 'HELP!', '#ff6f8a');
+    }
+    if (this.timer <= 0) this.transform();
+  }
+}
+
+// ---- hidden meteor shard: optional collectible tucked behind a wreck ----
+let shard = null;
+function buildShard() {
+  shard = new THREE.Group();
+  shard.position.set(6.9, 0.9, -96.6); // behind the abandoned car at (6,-95)
+  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0),
+    new THREE.MeshStandardMaterial({ color: 0xbfffff, emissive: 0x7fe8ff,
+      emissiveIntensity: 1.6, roughness: 0.15 }));
+  shard.add(gem);
+  shard.add(glowSprite(0x9ffcff, 2.2, 0.45));
+  scene.add(shard);
+}
+function updateShard(dt, t) {
+  if (!shard) return;
+  shard.rotation.y += dt * 1.5;
+  shard.position.y = 0.9 + Math.sin(t * 2.2) * 0.15;
+  if (Player.pos.distanceTo(shard.position) < 1.8) {
+    Game.shardFound = true;
+    spawnGlitter(shard.position.clone(), 100, 6);
+    SFX.fanfare();
+    showToast('🌠 METEOR SHARD FRAGMENT found!');
+    gainXP(100, shard.position);
+    scene.remove(shard);
+    shard = null;
+  }
+}
+
+// ---- streetlights, two of them flickering for the mood ----
+const lamps = [];
+let lampLight;
+function buildStreetlights() {
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x2e3338, roughness: 0.6, metalness: 0.4 });
+  const poleGeo = new THREE.CylinderGeometry(0.07, 0.09, 3.8, 6);
+  const armGeo = new THREE.BoxGeometry(0.08, 0.08, 1.1);
+  const bulbGeo = new THREE.SphereGeometry(0.14, 8, 6);
+  for (const [side, z, flicker] of [[-1, -18, false], [1, -34, false], [-1, -52, true], [1, -70, false],
+                                    [-1, -88, true], [1, -106, false], [-1, -124, false]]) {
+    const x = side * 6.9;
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.set(x, 1.9, z);
+    scene.add(pole);
+    const arm = new THREE.Mesh(armGeo, poleMat);
+    arm.rotation.y = Math.PI / 2;
+    arm.position.set(x - side * 0.5, 3.75, z);
+    scene.add(arm);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xfff3d0, emissive: 0xffe9a8, emissiveIntensity: 1.8 });
+    const bulb = new THREE.Mesh(bulbGeo, mat);
+    bulb.position.set(x - side * 1.0, 3.7, z);
+    scene.add(bulb);
+    const glow = glowSprite(0xffe9a8, 1.6, 0.5);
+    glow.position.copy(bulb.position);
+    scene.add(glow);
+    lamps.push({ mat, glow, flicker, on: true, t: Math.random() });
+  }
+  // one real light under the first flickering lamp — moody pools on the deck
+  lampLight = new THREE.PointLight(0xffe4a0, 2.2, 16);
+  lampLight.position.set(-5.9, 3.6, -52);
+  scene.add(lampLight);
+}
+function updateStreetlights(dt) {
+  for (const l of lamps) {
+    if (!l.flicker) continue;
+    l.t -= dt;
+    if (l.t <= 0) {
+      l.on = !l.on || Math.random() < 0.75; // mostly on, stuttering off
+      l.t = l.on ? 0.4 + Math.random() * 2.2 : 0.04 + Math.random() * 0.15;
+      l.mat.emissiveIntensity = l.on ? 1.8 : 0.15;
+      l.glow.material.opacity = l.on ? 0.5 : 0.05;
+    }
+  }
+  if (lampLight) lampLight.intensity = lamps[2].on ? 2.2 : 0.2;
+}
+
+// ---- graffiti near the spawn: the job Jax was doing when the sky fell ----
+function buildGraffiti() {
+  const tags = [['WASH ME', '#ff5fa2'], ['RAINBOWZ', '#5fc8ff'], ['CLEAN 4 LIFE', '#ffd94f']];
+  tags.forEach(([text, color], i) => {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+    const g = c.getContext('2d');
+    g.font = '700 46px "Segoe UI", system-ui, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.shadowColor = color; g.shadowBlur = 16;
+    g.fillStyle = color;
+    g.save(); g.translate(128, 48); g.rotate((i - 1) * 0.08);
+    g.fillText(text, 0, 0); g.restore();
+    const side = i % 2 === 0 ? -1 : 1;
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.85),
+      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+    plane.position.set(side * 8.18, 0.62, 11 - i * 6);
+    plane.rotation.y = -side * Math.PI / 2; // on the curb's inner face
+    scene.add(plane);
+  });
 }
 
 /* =====================================================================
@@ -1387,7 +1624,11 @@ function updatePlayer(dt, t) {
       Player.hornLight.intensity = 3;
       scene.remove(hornPickup); hornPickup = null;
       SFX.chime(); SFX.fanfare();
+      SFX.setMusicMood('hero'); // the score turns hopeful once Jax awakens
       Tutorial.fire('hornPickup');
+      // Prismalox — the voice inside the horn — speaks for the first time
+      showToast('🌈 PRISMALOX: “Awaken, janitor. The rainbow chose you.”');
+      narrate('Awaken, janitor. The rainbow chose you.', 0.6);
     }
   }
   if (Player.hasHorn) {
@@ -1460,8 +1701,22 @@ function nozzleWorldPos(out) {
 
 let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0, hitPulse = 0;
 const crosshairEl = document.getElementById('crosshair');
+const pressureFill = document.getElementById('pressureFill');
+const rainbowFill = document.getElementById('rainbowFill');
 function updateHose(dt) {
-  const spraying = Input.spray && Player.hasHorn && Game.state === 'playing';
+  const wantSpray = Input.spray && Player.hasHorn && Game.state === 'playing';
+  // pressure meter: drains while spraying, refills on release; running it
+  // dry locks the trigger briefly — teaches the ease-off rhythm
+  if (pressureLocked && Meters.pressure > 25) pressureLocked = false;
+  const spraying = wantSpray && !pressureLocked && Meters.pressure > 0;
+  if (spraying) {
+    Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * (1 - 0.08 * RPG.ranks.power) * dt);
+    if (Meters.pressure <= 0) { pressureLocked = true; Tutorial.fire('pressureEmpty'); }
+  } else {
+    Meters.pressure = Math.min(100, Meters.pressure + PRESSURE_REGEN * dt);
+  }
+  pressureFill.style.width = Meters.pressure + '%';
+  rainbowFill.style.width = Meters.rainbow + '%';
   if (spraying !== sprayWasOn) { SFX.setSpray(spraying); sprayWasOn = spraying; }
 
   if (spraying) {
@@ -1488,6 +1743,7 @@ function updateHose(dt) {
       const e = hits[0].object.userData.entity;
       if (e) {
         e.clean(CFG.hose.dps * RPG.hoseMul() * dt, hits[0].point);
+        Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
         if (Math.random() < dt * 14) spawnSplash(hits[0].point);
         if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
@@ -1519,11 +1775,13 @@ const activeBeams = [];
 function updateBeam(dt) {
   const beamMaxCd = CFG.beam.cooldown * RPG.beamCdMul();
   beamCooldown = Math.max(0, beamCooldown - dt);
-  beamCdFill.style.width = (100 - (beamCooldown / beamMaxCd) * 100) + '%';
+  // the under-crosshair bar now shows beam readiness = rainbow charge
+  beamCdFill.style.width = Math.min(Meters.rainbow / BEAM_COST, 1) * 100 + '%';
 
   if (Input.beamPressed) {
     Input.beamPressed = false;
-    if (Player.hasHorn && beamCooldown <= 0 && Game.state === 'playing') {
+    if (Player.hasHorn && beamCooldown <= 0 && Meters.rainbow >= BEAM_COST && Game.state === 'playing') {
+      Meters.rainbow -= BEAM_COST;
       beamCooldown = beamMaxCd;
       SFX.beam();
       Tutorial.fire('firstBeam');
@@ -1920,16 +2178,19 @@ const Tutorial = {
         break;
       case 'hornPickup':
         this.show(IS_TOUCH
-          ? 'The Unicorn Horn is yours! HOLD the SPRAY button to fire your power-hose.'
-          : 'The Unicorn Horn is yours! HOLD LEFT CLICK to fire your power-hose.');
+          ? 'The Unicorn Horn is yours! HOLD the SPRAY button to fire your power-hose. Watch the PSI meter — ease off to refill.'
+          : 'The Unicorn Horn is yours! HOLD LEFT CLICK to fire your power-hose. Watch the PSI meter — ease off to refill.');
+        break;
+      case 'pressureEmpty':
+        this.show('Pressure spent! Ease off the trigger for a moment — the tank refills fast.');
         break;
       case 'firstSpray':
         this.show('That’s the stuff! Now hose down the glowing poop pile ahead until it bursts into glitter.');
         break;
       case 'pileCleaned':
         this.show(IS_TOUCH
-          ? 'Sparkling! Next: tap BEAM for your Magic Beam — a big blast with a short cooldown.'
-          : 'Sparkling! Next: RIGHT CLICK (or Q) fires your Magic Beam — a big blast with a short cooldown.');
+          ? 'Sparkling! Cleaning filled your RAINBOW METER — tap BEAM to unleash the Magic Beam!'
+          : 'Sparkling! Cleaning filled your RAINBOW METER — RIGHT CLICK (or Q) unleashes the Magic Beam!');
         break;
       case 'firstBeam':
         this.show('Beautiful. Now listen… groans in the fog. Hose the rainbow slime off the poop zombies to melt them!');
@@ -1956,20 +2217,24 @@ const dmgFlashEl = document.getElementById('dmgFlash');
 const resumeHint = document.getElementById('resumeHint');
 
 const Game = {
-  state: 'menu', // menu | playing | won | dead
+  state: 'menu', // menu | intro | playing | skills | won | dead
   pilesCleaned: 0, zombiesDefeated: 0,
   totalPiles: 0, totalZombies: 0,
+  civSaved: 0, civResolved: 0, civTotal: 2,
+  shardFound: false,
   dmgFlash: 0, startTime: 0,
 };
 
 function updateObjectiveHUD() {
   document.getElementById('pileCount').textContent = `${Game.pilesCleaned}/${Game.totalPiles}`;
   document.getElementById('zombieCount').textContent = `${Game.zombiesDefeated}/${Game.totalZombies}`;
+  document.getElementById('civCount').textContent = `${Game.civSaved}/${Game.civTotal}`;
 }
 
 function checkWin() {
   if (Game.state !== 'playing') return;
-  if (Game.pilesCleaned >= Game.totalPiles && Game.zombiesDefeated >= Game.totalZombies) {
+  if (Game.pilesCleaned >= Game.totalPiles && Game.zombiesDefeated >= Game.totalZombies
+      && Game.civResolved >= Game.civTotal) {
     Game.state = 'won';
     SFX.fanfare();
     SFX.setSpray(false);
@@ -1990,6 +2255,12 @@ function checkWin() {
     } catch (e) { /* private mode: no persistence */ }
     document.getElementById('winStats').textContent =
       `Cleared in ${fmt(secs)} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP${bestTxt}`;
+    document.getElementById('winObjectives').innerHTML = [
+      ['Cleaned every poop pile (80% bonus met)', true],
+      [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
+      [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
+      ['Meteor Shard Fragment found', Game.shardFound],
+    ].map(([txt, ok]) => `${ok ? '✅' : '⬜'} ${txt}`).join('<br>');
     setTimeout(() => {
       document.getElementById('winOverlay').classList.remove('hidden');
       if (document.exitPointerLock) document.exitPointerLock();
@@ -2017,6 +2288,12 @@ function buildLevel() {
   buildHornPickup();
   buildHose();
   buildSplashes();
+  buildShard();
+  buildStreetlights();
+  buildGraffiti();
+
+  // two infected civilians on the path — save them or fight what they become
+  civilians.push(new Civilian(-3, -52), new Civilian(4, -98));
 
   // poop piles — the first two are the tutorial targets, right past the crater
   const pileSpots = [
@@ -2068,7 +2345,8 @@ buildLevel();
    16. MAIN LOOP
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
-window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel,
+window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel,
+  getShard: () => shard,
   skipIntro: () => { introSkip = true; },
   getCombo: () => comboCount,
   getDying: () => dyingZombies.length };
@@ -2109,6 +2387,9 @@ function tick() {
     updateNova(dt);
     updatePing(dt);
     for (const z of zombies) z.update(dt, t);
+    for (const c of civilians) c.update(dt, t);
+    updateShard(dt, t);
+    updateStreetlights(dt);
     updateAudioCues(dt);
     Tutorial.update(dt);
 

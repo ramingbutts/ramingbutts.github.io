@@ -175,6 +175,28 @@ flash + sonar panned toward the nearest objective + an expanding beacon
 sprite above it — assists fog navigation without adding a minimap. Best
 time persists in `localStorage('uj_l1_best')` (try/catch for private mode).
 
+## Design-doc systems (iteration 9)
+
+Resource meters: `Meters.pressure` (hose fuel — drains 16/s spraying, refills
+30/s idle; hitting 0 locks the trigger until 25 so it can't stutter) and
+`Meters.rainbow` (beam fuel — fills 14/s while actively cleaning, +25 per
+pile, +15 per zombie, +20 per saved civilian; the beam costs 35 and keeps
+only a 1.2 s anti-spam cooldown). The under-crosshair bar now shows rainbow
+charge. Balance check: the first pile yields ~40 rainbow, so the beam
+tutorial always fires. Transforming civilians: timer starts only when the
+player comes within 26 m (pacing!), shiver amplitude grows with panic, hose
+them clean to save (+75 XP) or they become a live zombie added to
+`zombies[]` with `Game.totalZombies++` — win requires all civilians
+*resolved* (saved or transformed-and-defeated). Hidden meteor shard behind
+the far car (+100 XP). Streetlights: emissive bulbs + glow sprites, two
+flicker via random on/off state timers, one real PointLight pooled under a
+flickering lamp. Graffiti: canvas-texture planes on the curb inner faces at
+spawn (story: Jax's job site). Music moods: `SFX.setMusicMood('eerie'|'hero')`
+swaps the pad's chord table live — eerie until the horn pickup, hopeful
+after. Prismalox lines are `narrate(text, 0.6)` (low pitch = the horn's
+voice) + a toast. Win screen renders a secondary-objectives checklist
+(80% piles / 5 zombies / civilians / shard).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

@@ -61,6 +61,11 @@
            border:1px solid rgba(255,255,255,.25); overflow:hidden; }
   #xpFill { height:100%; width:0%; background:linear-gradient(90deg,#c58fff,#ffd94f); transition:width .2s; }
   #lvBadge { color:#ffd94f; font-size:11px; font-weight:700; letter-spacing:1px; text-shadow:0 1px 3px #000; }
+  .meterRow { margin-top:4px; display:flex; align-items:center; gap:6px; }
+  .mLabel { font-size:9px; color:#cfd8ff; letter-spacing:1px; width:24px; text-shadow:0 1px 2px #000; }
+  .mBar { flex:1; height:6px; border-radius:4px; background:rgba(0,0,0,.45);
+          border:1px solid rgba(255,255,255,.22); overflow:hidden; }
+  .mBar > div { height:100%; }
   #skillBtn { position:absolute; top:70px; right:14px; pointer-events:auto; display:none; cursor:pointer;
               background:rgba(24,14,44,.85); border:1px solid rgba(255,217,79,.6); color:#ffd94f;
               border-radius:20px; padding:7px 14px; font-size:13px; font-weight:700; }
@@ -142,11 +147,14 @@
     <div id="hpLabel">JAX — UNICORN JANITOR</div>
     <div id="hpBar"><div id="hpFill"></div></div>
     <div id="xpWrap"><div id="xpBar"><div id="xpFill"></div></div><div id="lvBadge">LV 1</div></div>
+    <div class="meterRow"><span class="mLabel">PSI</span><div class="mBar"><div id="pressureFill" style="background:linear-gradient(90deg,#5fc8ff,#bfe8ff); width:100%"></div></div></div>
+    <div class="meterRow"><span class="mLabel">RBW</span><div class="mBar"><div id="rainbowFill" style="background:linear-gradient(90deg,#ff5fa2,#ffd94f,#5fffb0,#5fc8ff); width:0%"></div></div></div>
   </div>
   <div id="skillBtn">⭐ TALENTS</div>
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
-    <div>🧟 Zombies: <span class="n" id="zombieCount">0/0</span></div>
+    <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
+    <div>🧍 Civilians saved: <span class="n" id="civCount">0/2</span></div>
   </div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
@@ -173,7 +181,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 8</div>
+  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 9</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -186,6 +194,7 @@
   <h1>FIRST POOPOCALYPSE VICTORY!</h1>
   <h2>The bridge sparkles again. Hose &amp; Magic Beam fully unlocked!</h2>
   <div class="stats" id="winStats"></div>
+  <div class="stats" id="winObjectives" style="text-align:left; line-height:2; margin-top:10px;"></div>
   <div class="chip" style="margin-top:16px;">NEXT: LEVEL 2 · COMING SOON</div>
   <br>
   <button id="againBtn">PLAY AGAIN</button>
