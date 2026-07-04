@@ -157,6 +157,24 @@ script injection, async webfonts): 12.7 s → 28 ms when the font CDN hangs.
 Rule: nothing render-blocking except the page's own CSS; third-party
 fetches must never be able to hold the load event hostage.
 
+## Game-feel layer (iteration 7)
+
+Cinematic intro: `Game.state = 'intro'` flies the camera from above the
+tower down to the third-person slot over 3.4 s (smoothstep lerp), CSS
+letterbox bars + location title via a `body.cine` class that also hides the
+HUD; any key/click/touch skips. Pointer lock must be requested in the start
+click and merely persists through the intro — requesting it at intro end
+would fail (no user gesture). Combos: cleans within a 3 s window raise the
+chime pitch (+8%/step) and pay small bonus XP with a "COMBO xN" popup.
+Floating text: per-spawn 256×80 canvas sprites, rise-and-fade 1.15 s, hard
+cap 14 with oldest-recycled. Kill feedback: 0.09 s hit-stop (dt ×0.15) +
+spin-shrink corpse (0.45 s) before removal — counters and XP fire at death,
+the animation is cosmetic only. Sprint: Shift ×1.45 speed with FOV 70→78
+kick and faster footstep taps. Sixth-sense ping (C / PING, 6 s cd): horn
+flash + sonar panned toward the nearest objective + an expanding beacon
+sprite above it — assists fog navigation without adding a minimap. Best
+time persists in `localStorage('uj_l1_best')` (try/catch for private mode).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

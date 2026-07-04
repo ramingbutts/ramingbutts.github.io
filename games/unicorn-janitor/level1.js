@@ -166,11 +166,11 @@ const SFX = {
     o.start(t); o.stop(t + 1); vib.start(t); vib.stop(t + 1);
   },
 
-  chime() { // clean success: rising sparkle arpeggio
+  chime(mult = 1) { // clean success: rising sparkle arpeggio (pitch scales with combo)
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     [880, 1108, 1318, 1760].forEach((f, i) => {
-      const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+      const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * mult;
       const g = this.ctx.createGain();
       g.gain.setValueAtTime(0.001, t + i * 0.07);
       g.gain.linearRampToValueAtTime(0.22, t + i * 0.07 + 0.02);
@@ -200,6 +200,29 @@ const SFX = {
     o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(1400, t + 0.22);
     const g = this.ctx.createGain(); g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.32);
+  },
+
+  step(pan = 0) { // soft footstep tap
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, out = this._out(pan, 0.35);
+    const n = this._noise(0.05);
+    const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 500;
+    const g = this.ctx.createGain(); g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    n.connect(lp); lp.connect(g); g.connect(out);
+  },
+
+  sonar(pan = 0) { // sixth-sense ping: pure tone + fading echo
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [[0, 0.3], [0.25, 0.12]].forEach(([dt, vol]) => {
+      const out = this._out(pan, vol);
+      const o = this.ctx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(1180, t + dt);
+      o.frequency.exponentialRampToValueAtTime(880, t + dt + 0.22);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.3, t + dt); g.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.28);
+      o.connect(g); g.connect(out); o.start(t + dt); o.stop(t + dt + 0.3);
+    });
   },
 
   nova() { // superpower: deep boom + rising rainbow shimmer
@@ -259,7 +282,7 @@ function narrate(text) {
    2. INPUT — keyboard + mouse (pointer lock) + touch (joystick, buttons)
    ===================================================================== */
 const Input = {
-  keys: {}, spray: false, beamPressed: false, jumpPressed: false, novaPressed: false,
+  keys: {}, spray: false, beamPressed: false, jumpPressed: false, novaPressed: false, pingPressed: false,
   lookDX: 0, lookDY: 0, joy: { x: 0, y: 0 },
   locked: false,
 
@@ -268,19 +291,25 @@ const Input = {
 
 window.addEventListener('keydown', e => {
   Input.keys[e.code] = true;
+  if (Game.state === 'intro') { introSkip = true; return; }
   if (e.code === 'Space') { Input.jumpPressed = true; e.preventDefault(); }
   if (e.code === 'KeyQ') Input.beamPressed = true;
   if (e.code === 'KeyF') Input.novaPressed = true;
+  if (e.code === 'KeyC') Input.pingPressed = true;
   if (e.code === 'KeyT') toggleSkillPanel();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
 window.addEventListener('contextmenu', e => e.preventDefault());
 
 window.addEventListener('mousedown', e => {
+  if (Game.state === 'intro') { introSkip = true; return; }
   if (!Input.locked) return;
   if (e.button === 0) Input.spray = true;
   if (e.button === 2) Input.beamPressed = true;
 });
+window.addEventListener('touchstart', () => {
+  if (Game.state === 'intro') introSkip = true;
+}, { passive: true });
 window.addEventListener('mouseup', e => { if (e.button === 0) Input.spray = false; });
 window.addEventListener('mousemove', e => {
   if (!Input.locked) return;
@@ -349,6 +378,7 @@ function setupTouch() {
   bindBtn('btnBeam', () => Input.beamPressed = true);
   bindBtn('btnJump', () => Input.jumpPressed = true);
   bindBtn('btnNova', () => Input.novaPressed = true);
+  bindBtn('btnPing', () => Input.pingPressed = true);
 }
 
 /* =====================================================================
@@ -517,6 +547,20 @@ function buildBridge() {
       const brace = new THREE.Mesh(braceGeo, bridgeMat);
       brace.position.set(0, by, tz);
       grp.add(brace);
+    }
+
+    // fake volumetric light shafts under the lower brace — additive cones
+    // read as fog-catching floodlights for nearly zero cost
+    const shaftMat = new THREE.MeshBasicMaterial({ color: 0xfff3d0, transparent: true, opacity: 0.055,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
+    for (const sx of [-4.5, 4.5]) {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0xfff3d0, emissive: 0xffe9a8, emissiveIntensity: 2 }));
+      lamp.position.set(sx, 15.4, tz);
+      grp.add(lamp);
+      const shaft = new THREE.Mesh(new THREE.ConeGeometry(3.4, 14.5, 10, 1, true), shaftMat);
+      shaft.position.set(sx, 15.4 - 7.25, tz);
+      grp.add(shaft);
     }
   }
 
@@ -762,7 +806,7 @@ class PoopPile {
     const c = this.group.position.clone(); c.y += 1;
     spawnGlitter(c, 90, 6);
     SFX.pop(panFor(this.group.position), 0.9);
-    SFX.chime();
+    registerCombo(this.group.position);
     removeCleanTargets(this.group);
     scene.remove(this.group);
     Game.pilesCleaned++;
@@ -922,9 +966,12 @@ class Zombie {
     const c = this.group.position.clone(); c.y += 1.3;
     spawnGlitter(c, 130, 7);
     SFX.pop(panFor(this.group.position), 1);
-    SFX.chime();
+    registerCombo(this.group.position);
     removeCleanTargets(this.group);
-    scene.remove(this.group);
+    // death animation: spin-shrink for 0.45s, then a final sparkle; the
+    // group is removed by the dying-list updater in the main loop
+    dyingZombies.push({ g: this.group, t: 0.45 });
+    hitStop = 0.09; // brief slow-motion on every kill
     Game.zombiesDefeated++;
     RPG.kills++;
     gainXP(50, this.group.position);
@@ -1181,7 +1228,25 @@ function updatePlayer(dt, t) {
   _v2.set(0, 0, 0).addScaledVector(Player.forward, f).addScaledVector(right, s);
   if (_v2.lengthSq() > 1) _v2.normalize();
   const moving = _v2.lengthSq() > 0.001;
-  Player.pos.addScaledVector(_v2, CFG.player.speed * RPG.speedMul() * dt);
+  const sprinting = moving && Player.onGround && (Input.keys.ShiftLeft || Input.keys.ShiftRight);
+  Player.pos.addScaledVector(_v2, CFG.player.speed * RPG.speedMul() * (sprinting ? 1.45 : 1) * dt);
+
+  // sprint FOV kick — subtle speed sensation
+  const targetFov = sprinting ? 78 : 70;
+  if (Math.abs(camera.fov - targetFov) > 0.05) {
+    camera.fov += (targetFov - camera.fov) * (1 - Math.pow(0.005, dt));
+    camera.updateProjectionMatrix();
+  }
+
+  // footsteps
+  if (moving && Player.onGround) {
+    Player.stepT = (Player.stepT || 0) - dt;
+    if (Player.stepT <= 0) {
+      Player.stepT = sprinting ? 0.24 : 0.34;
+      Player.stepSide = !Player.stepSide;
+      SFX.step(Player.stepSide ? 0.12 : -0.12);
+    }
+  }
 
   // knockback decay
   Player.pos.addScaledVector(Player.knock, dt);
@@ -1244,7 +1309,11 @@ function updatePlayer(dt, t) {
       Tutorial.fire('hornPickup');
     }
   }
-  if (Player.hasHorn) Player.hornGlow.material.opacity = 0.5 + 0.25 * Math.sin(t * 6);
+  if (Player.hasHorn) {
+    Player.hornGlow.material.opacity = 0.5 + 0.25 * Math.sin(t * 6);
+    // relax any ping flash back to the resting glow
+    Player.hornLight.intensity += (3 - Player.hornLight.intensity) * (1 - Math.pow(0.05, dt));
+  }
 }
 
 function damagePlayer(amount, fromDir) {
@@ -1489,7 +1558,10 @@ function showToast(text) {
 
 function gainXP(amount, worldPos) {
   RPG.xp += amount;
-  if (worldPos) spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
+  if (worldPos) {
+    spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
+    spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + amount + ' XP');
+  }
   while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
     RPG.level++; RPG.points++;
     SFX.fanfare();
@@ -1614,6 +1686,134 @@ function updateNova(dt) {
 }
 
 /* =====================================================================
+   12.7 GAME FEEL — combos, floating text, kill slow-mo, death anims,
+   the sixth-sense ping, and the cinematic intro.
+   ===================================================================== */
+let hitStop = 0;                 // seconds of slow-motion remaining
+const dyingZombies = [];         // spin-shrink corpses mid-animation
+
+function updateDying(dt) {
+  for (let i = dyingZombies.length - 1; i >= 0; i--) {
+    const d = dyingZombies[i];
+    d.t -= dt;
+    if (d.t <= 0) {
+      spawnGlitter(d.g.position.clone().add(new THREE.Vector3(0, 0.6, 0)), 30, 3);
+      scene.remove(d.g);
+      dyingZombies.splice(i, 1);
+      continue;
+    }
+    d.g.rotation.y += 15 * dt;
+    d.g.scale.setScalar(Math.max(0.01, d.t / 0.45));
+  }
+}
+
+// ---- floating world-space text (XP popups, combo callouts) ----
+const floatTexts = [];
+function spawnFloatText(pos, text, color = '#ffd94f') {
+  if (floatTexts.length > 14) { // hard cap: recycle the oldest
+    const old = floatTexts.shift();
+    scene.remove(old.s); old.s.material.map.dispose(); old.s.material.dispose();
+  }
+  const c = document.createElement('canvas'); c.width = 256; c.height = 80;
+  const g = c.getContext('2d');
+  g.font = '700 42px "Segoe UI", system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 8; g.strokeStyle = 'rgba(10,6,20,0.9)';
+  g.strokeText(text, 128, 40);
+  g.fillStyle = color; g.fillText(text, 128, 40);
+  const m = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false });
+  const s = new THREE.Sprite(m);
+  s.scale.set(2.6, 0.8, 1);
+  s.position.copy(pos);
+  scene.add(s);
+  floatTexts.push({ s, life: 1.15 });
+}
+function updateFloatTexts(dt) {
+  for (let i = floatTexts.length - 1; i >= 0; i--) {
+    const f = floatTexts[i];
+    f.life -= dt;
+    if (f.life <= 0) {
+      scene.remove(f.s); f.s.material.map.dispose(); f.s.material.dispose();
+      floatTexts.splice(i, 1); continue;
+    }
+    f.s.position.y += 1.1 * dt;
+    f.s.material.opacity = Math.min(1, f.life * 1.6);
+  }
+}
+
+// ---- combo: chained cleans inside a 3s window raise the chime pitch
+// and pay a small XP bonus ----
+let comboCount = 0, comboT = 0;
+function registerCombo(pos) {
+  comboT = 3;
+  comboCount++;
+  SFX.chime(1 + 0.08 * Math.min(comboCount - 1, 8));
+  if (comboCount >= 2) {
+    spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0');
+    gainXP(5 * Math.min(comboCount - 1, 6)); // bonus, no popup spam
+  }
+}
+
+// ---- sixth-sense ping (C / PING): the horn flashes and the nearest
+// dirty objective answers through the fog ----
+let pingCd = 0;
+const pingBeacons = [];
+function updatePing(dt) {
+  pingCd = Math.max(0, pingCd - dt);
+  for (let i = pingBeacons.length - 1; i >= 0; i--) {
+    const b = pingBeacons[i];
+    b.life -= dt;
+    if (b.life <= 0) { scene.remove(b.s); b.s.material.dispose(); pingBeacons.splice(i, 1); continue; }
+    b.s.scale.setScalar(2 + (2.5 - b.life) * 4);
+    b.s.material.opacity = Math.min(0.9, b.life * 0.7);
+  }
+  if (!Input.pingPressed) return;
+  Input.pingPressed = false;
+  if (pingCd > 0 || !Player.hasHorn || Game.state !== 'playing') return;
+  pingCd = 6;
+  let best = null, bestD = 1e9;
+  for (const p of piles) if (p.alive) { const d = p.group.position.distanceTo(Player.pos); if (d < bestD) { bestD = d; best = p.group.position; } }
+  for (const z of zombies) if (z.alive) { const d = z.group.position.distanceTo(Player.pos); if (d < bestD) { bestD = d; best = z.group.position; } }
+  if (!best) return;
+  SFX.sonar(panFor(best));
+  Player.hornLight.intensity = 9; // flash; relaxes back in updatePlayer
+  const s = glowSprite(0x9fdcff, 2, 0.9);
+  s.position.copy(best).y += 2.4;
+  scene.add(s);
+  pingBeacons.push({ s, life: 2.5 });
+}
+
+// ---- cinematic intro: fly from above the bridge down to Jax ----
+let introT = 0, introSkip = false;
+const INTRO_LEN = 3.4;
+function updateIntro(dt) {
+  introT += dt;
+  if (introSkip) introT = INTRO_LEN;
+  const k = THREE.MathUtils.smoothstep(Math.min(introT / INTRO_LEN, 1), 0, 1);
+  const cp = Math.cos(Player.pitch);
+  const aim = _v2.set(Math.sin(Player.yaw) * cp, Math.sin(Player.pitch), Math.cos(Player.yaw) * cp);
+  const headPos = _v1.copy(Player.pos).add(new THREE.Vector3(0, 1.9, 0));
+  const endPos = headPos.clone().addScaledVector(aim, -5.4).add(new THREE.Vector3(0, 0.4, 0));
+  camera.position.set(
+    THREE.MathUtils.lerp(8, endPos.x, k),
+    THREE.MathUtils.lerp(44, endPos.y, k),
+    THREE.MathUtils.lerp(-70, endPos.z, k));
+  camera.lookAt(
+    THREE.MathUtils.lerp(0, headPos.x, k),
+    THREE.MathUtils.lerp(3, headPos.y, k),
+    THREE.MathUtils.lerp(6, headPos.z + aim.z * 10, k));
+  if (introT >= INTRO_LEN) {
+    Game.state = 'playing';
+    document.body.classList.remove('cine');
+    document.getElementById('crosshair').classList.remove('hidden');
+    document.getElementById('beamCd').classList.remove('hidden');
+    Input.lookDX = 0; Input.lookDY = 0; // discard look input accumulated mid-flight
+    Game.startTime = performance.now();
+    Tutorial.fire('start');
+  }
+}
+
+/* =====================================================================
    13. TUTORIAL — one mechanic at a time, gated by play events
    ===================================================================== */
 const tutorialEl = document.getElementById('tutorial');
@@ -1699,8 +1899,16 @@ function checkWin() {
       spawnGlitter(c, 80, 6);
     }
     const secs = Math.round((performance.now() - Game.startTime) / 1000);
+    const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    let bestTxt = '';
+    try { // personal best persists across sessions
+      const prev = Number(localStorage.getItem('uj_l1_best')) || Infinity;
+      const best = Math.min(prev, secs);
+      localStorage.setItem('uj_l1_best', best);
+      bestTxt = ` · Best: ${fmt(best)}${secs <= prev ? ' — NEW RECORD!' : ''}`;
+    } catch (e) { /* private mode: no persistence */ }
     document.getElementById('winStats').textContent =
-      `Cleared in ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP`;
+      `Cleared in ${fmt(secs)} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP${bestTxt}`;
     setTimeout(() => {
       document.getElementById('winOverlay').classList.remove('hidden');
       if (document.exitPointerLock) document.exitPointerLock();
@@ -1751,12 +1959,14 @@ function buildLevel() {
 function startGame() {
   SFX.init();
   document.getElementById('startOverlay').classList.add('hidden');
-  document.getElementById('crosshair').classList.remove('hidden');
-  document.getElementById('beamCd').classList.remove('hidden');
-  Game.state = 'playing';
+  // cinematic fly-in first; crosshair/HUD and the tutorial arrive at its end.
+  // Pointer lock must be requested inside this click gesture — it persists
+  // through the intro even though mouse-look is ignored until it ends.
+  Game.state = 'intro';
+  introT = 0; introSkip = false;
+  document.body.classList.add('cine');
   Game.startTime = performance.now();
   if (!IS_TOUCH) canvas.requestPointerLock();
-  Tutorial.fire('start');
 }
 
 document.getElementById('startBtn').addEventListener('click', startGame);
@@ -1777,13 +1987,19 @@ buildLevel();
    16. MAIN LOOP
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
-window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel };
+window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel,
+  skipIntro: () => { introSkip = true; },
+  getCombo: () => comboCount,
+  getDying: () => dyingZombies.length };
 
 const clock = new THREE.Clock();
 function tick() {
   requestAnimationFrame(tick);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  let dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
+
+  // kill slow-motion: world runs at 15% for a beat
+  if (hitStop > 0) { hitStop -= dt; dt *= 0.15; }
 
   updateCrater(dt, t);
   updateFogParticles(dt, t);
@@ -1799,12 +2015,18 @@ function tick() {
 
   // toast fade (level-ups, unlocks)
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }
+  updateDying(dt);
+  updateFloatTexts(dt);
+  if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
 
-  if (Game.state === 'playing') {
+  if (Game.state === 'intro') {
+    updateIntro(dt);
+  } else if (Game.state === 'playing') {
     updatePlayer(dt, t);
     updateHose(dt);
     updateBeam(dt);
     updateNova(dt);
+    updatePing(dt);
     for (const z of zombies) z.update(dt, t);
     updateAudioCues(dt);
     Tutorial.update(dt);
