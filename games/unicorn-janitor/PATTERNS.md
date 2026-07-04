@@ -7,8 +7,22 @@ project's design-for-evolution rule: extract on the second use, not before).
 ## Content note (applies to all levels)
 
 Enemies and filth are never characterized by sexual orientation. The house
-style is camp: flamboyant glitter zombies, hot-pink shorts, rainbow goo,
-disco-pompadour hair. Keep the flamboyance, drop any group-targeting labels.
+style is camp: rainbow drips, glitter explosions, disco-fabulous flair. Keep
+the flamboyance, drop any group-targeting labels.
+
+## Character designs (locked to concept art, iteration 3)
+
+**Jax:** navy work shirt (zipper stripe) + jeans + brown leather boots and
+tool belt with steel buckle, bare muscular skin arms, brown-haired head with
+white unicorn ears, rainbow mohawk-mane (7 box spikes arcing forehead→nape,
+tallest mid-crest), white horn with a gold torus band at the base (horn, ring
+and glow all hidden until the crater pickup).
+
+**Poop zombie:** waddling poop golem — round brown belly, three-scoop swirl
+head with flicked tip, single glowing yellow eye + pupil, dark mouth slit
+with four teeth, dangling capsule arms ending in three down-pointing claws,
+clawed box feet, six bright rainbow slime drips (the cleanable `gooBlobs`,
+scale-shrink with goo). Keep body emissive ≤ 0.1 or the brown reads pink.
 
 ## Fog rig (section 3 + 6)
 

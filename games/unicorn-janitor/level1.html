@@ -131,8 +131,8 @@
 </div>
 
 <div id="deadOverlay" class="overlay hidden">
-  <h1 style="filter:none;background:none;color:#ff6f8a;">GLITTER-BOMBED…</h1>
-  <h2>The zombies loved you a little too hard.</h2>
+  <h1 style="filter:none;background:none;color:#ff6f8a;">SLIMED…</h1>
+  <h2>The poop zombies hugged you a little too hard.</h2>
   <button id="retryBtn">TRY AGAIN</button>
 </div>
 
@@ -805,57 +805,98 @@ class Zombie {
     const g = this.group = new THREE.Group();
     g.position.set(x, 0, z);
 
-    // muscle torso
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: 0xc9986f, roughness: 0.6,
-      emissive: 0xff40c0, emissiveIntensity: 0.35 });
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 0.7, 4, 8), this.bodyMat);
-    torso.position.y = 1.25; torso.userData.entity = this;
-    g.add(torso); cleanTargets.push(torso);
+    // concept art: waddling poop golem — swirl head, one yellow eye, toothy
+    // grin, claw arms/feet, dripping rainbow slime (the cleanable part)
+    const poopDark = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
+    const clawMat = new THREE.MeshStandardMaterial({ color: 0xcbb391, roughness: 0.4 });
+    this.bodyMat = new THREE.MeshStandardMaterial({ color: 0x6b4426, roughness: 0.5,
+      emissive: 0xff40c0, emissiveIntensity: 0.1 });
 
-    // hot-pink shorts
-    const shorts = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.45, 0.6),
-      new THREE.MeshStandardMaterial({ color: 0xff2f9e, roughness: 0.4, emissive: 0xff2f9e, emissiveIntensity: 0.3 }));
-    shorts.position.y = 0.65; shorts.userData.entity = this;
-    g.add(shorts); cleanTargets.push(shorts);
+    // round belly
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), this.bodyMat);
+    belly.position.y = 0.85; belly.scale.set(1, 1.1, 0.9);
+    belly.userData.entity = this;
+    g.add(belly); cleanTargets.push(belly);
 
-    // legs
-    const legGeo = new THREE.BoxGeometry(0.22, 0.55, 0.22);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0xb08a63, roughness: 0.7 });
-    for (const s of [-1, 1]) {
-      const leg = new THREE.Mesh(legGeo, legMat);
-      leg.position.set(s * 0.2, 0.27, 0);
-      g.add(leg);
+    // poop-swirl head: three shrinking scoops + a flicked tip
+    const headG = new THREE.Group();
+    headG.position.y = 1.66;
+    const swirlGeo = new THREE.SphereGeometry(1, 10, 8);
+    [[0.42, 0.3, 0.42, 0], [0.3, 0.24, 0.3, 0.24], [0.18, 0.16, 0.18, 0.45]].forEach(([sx, sy, sz, y]) => {
+      const s = new THREE.Mesh(swirlGeo, poopDark);
+      s.scale.set(sx, sy, sz); s.position.y = y;
+      s.userData.entity = this;
+      headG.add(s); cleanTargets.push(s);
+    });
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.24, 6), poopDark);
+    tip.position.set(0.06, 0.64, 0); tip.rotation.z = -0.55;
+    headG.add(tip);
+
+    // one big yellow eye + pupil, and a toothy grin
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 }));
+    eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5),
+      new THREE.MeshBasicMaterial({ color: 0x231206 }));
+    pupil.position.set(0.12, 0.08, 0.45); headG.add(pupil);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x2a1408, roughness: 0.6 }));
+    mouth.position.set(0, -0.16, 0.34); headG.add(mouth);
+    const toothGeo = new THREE.BoxGeometry(0.055, 0.07, 0.03);
+    const toothMat = new THREE.MeshStandardMaterial({ color: 0xf2ead8, roughness: 0.4 });
+    for (let i = 0; i < 4; i++) {
+      const t = new THREE.Mesh(toothGeo, toothMat);
+      t.position.set(-0.14 + i * 0.095, -0.12, 0.37);
+      headG.add(t);
     }
+    g.add(headG);
 
-    // head with a fabulous glitter pompadour
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), this.bodyMat);
-    head.position.y = 2.05; head.userData.entity = this;
-    g.add(head); cleanTargets.push(head);
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.26, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0x2a1a3a, emissive: 0x8f4fff, emissiveIntensity: 0.8, roughness: 0.3 }));
-    hair.scale.set(1.15, 0.7, 1.15); hair.position.set(0, 2.3, -0.05);
-    g.add(hair);
-
-    // arms, thrown wide for maximum drama
-    const armGeo = new THREE.CapsuleGeometry(0.12, 0.55, 3, 6);
+    // dangling claw arms
+    const armGeo = new THREE.CapsuleGeometry(0.11, 0.5, 3, 6);
     this.arms = [];
     for (const s of [-1, 1]) {
       const arm = new THREE.Mesh(armGeo, this.bodyMat);
-      arm.position.set(s * 0.62, 1.45, 0);
-      arm.rotation.z = s * 1.15;
+      arm.position.set(s * 0.6, 0.95, 0.05);
+      arm.rotation.z = s * 0.5;
       g.add(arm); this.arms.push(arm);
+      for (let c = 0; c < 3; c++) {
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.12, 5), clawMat);
+        claw.position.set((c - 1) * 0.055, -0.42, 0.03);
+        claw.rotation.x = Math.PI; // point down from the paw
+        arm.add(claw);
+      }
     }
 
-    // rainbow goo blobs — these shrink as the player cleans him
+    // clawed feet
+    const footGeo = new THREE.BoxGeometry(0.26, 0.14, 0.42);
+    for (const s of [-1, 1]) {
+      const foot = new THREE.Mesh(footGeo, poopDark);
+      foot.position.set(s * 0.24, 0.07, 0.08);
+      g.add(foot);
+      for (let c = 0; c < 2; c++) {
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 5), clawMat);
+        claw.position.set(s * 0.24 + (c - 0.5) * 0.11, 0.06, 0.34);
+        claw.rotation.x = Math.PI / 2;
+        g.add(claw);
+      }
+    }
+
+    // rainbow slime drips — these shrink away as the player hoses him
     this.gooBlobs = [];
-    const gooGeo = new THREE.SphereGeometry(0.16, 6, 5);
-    for (let i = 0; i < 5; i++) {
-      const gm = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.35,
-        emissive: new THREE.Color().setHSL(Math.random(), 0.9, 0.5), emissiveIntensity: 1.2 });
-      const blob = new THREE.Mesh(gooGeo, gm);
-      blob.position.set((Math.random() - 0.5) * 0.7, 0.9 + Math.random() * 1.1, (Math.random() - 0.5) * 0.5);
-      blob.userData.entity = this;
-      g.add(blob); this.gooBlobs.push(blob); cleanTargets.push(blob);
+    const dripGeo = new THREE.SphereGeometry(0.09, 6, 5);
+    for (let i = 0; i < 6; i++) {
+      const hue = i / 6;
+      const dm = new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(hue, 0.95, 0.55), roughness: 0.25,
+        emissive: new THREE.Color().setHSL(hue, 0.95, 0.4), emissiveIntensity: 1.1 });
+      const drip = new THREE.Mesh(dripGeo, dm);
+      const onHead = i % 2 === 0;
+      drip.position.set((Math.random() - 0.5) * 0.6,
+        onHead ? 1.6 + Math.random() * 0.5 : 0.7 + Math.random() * 0.5,
+        0.22 + Math.random() * 0.25);
+      drip.scale.set(1, 1.5 + Math.random(), 1);
+      drip.userData.entity = this;
+      g.add(drip); this.gooBlobs.push(drip); cleanTargets.push(drip);
     }
 
     this.sparkle = glowSprite(0xff8fe0, 2.2, 0.35);
@@ -869,7 +910,7 @@ class Zombie {
     if (!this.alive) return;
     this.goo -= amount;
     const f = Math.max(this.goo, 0) / CFG.zombie.goo;
-    this.bodyMat.emissiveIntensity = 0.35 * f;
+    this.bodyMat.emissiveIntensity = 0.1 * f;
     for (const b of this.gooBlobs) b.scale.setScalar(Math.max(0.01, f));
     if (Math.random() < 0.12) spawnGlitter(point || this.group.position, 5, 2);
     // being hosed aggravates him
@@ -960,11 +1001,11 @@ class Zombie {
     pos.x = THREE.MathUtils.clamp(pos.x, -7.5, 7.5);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
 
-    // sassy idle animation: hip sway + arm waves
+    // waddling idle animation: body sway + paddling claw arms
     const sway = Math.sin(t * 5 + pos.x * 7);
     this.group.rotation.z = sway * 0.07;
-    this.arms[0].rotation.z = -1.15 + Math.sin(t * 4) * 0.25;
-    this.arms[1].rotation.z = 1.15 - Math.sin(t * 4 + 1) * 0.25;
+    this.arms[0].rotation.z = -0.5 + Math.sin(t * 4) * 0.25;
+    this.arms[1].rotation.z = 0.5 - Math.sin(t * 4 + 1) * 0.25;
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
   }
 }
@@ -984,16 +1025,77 @@ function buildPlayer() {
   Player.pos = g.position;
   g.position.set(0, 0, 12);
 
-  const suit = new THREE.MeshStandardMaterial({ color: 0x1c6dff, roughness: 0.45,
-    emissive: 0x1c6dff, emissiveIntensity: 0.35 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.75, 4, 8), suit);
-  body.position.y = 1.0;
-  g.add(body);
+  // concept art: navy work shirt + jeans, brown leather boots/belt, bare muscular arms
+  const shirt = new THREE.MeshStandardMaterial({ color: 0x2a3d63, roughness: 0.8 });
+  const denim = new THREE.MeshStandardMaterial({ color: 0x22314c, roughness: 0.85 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0xd8a882, roughness: 0.6 });
+  const leather = new THREE.MeshStandardMaterial({ color: 0x5a3d26, roughness: 0.7 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xc4ccd6, metalness: 0.75, roughness: 0.3 });
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8),
-    new THREE.MeshStandardMaterial({ color: 0xd8a882, roughness: 0.6 }));
+  // torso (shirt) + zipper stripe
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.5, 4, 8), shirt);
+  body.position.y = 1.3;
+  g.add(body);
+  const zip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.55, 0.03), steel);
+  zip.position.set(0, 1.32, 0.4);
+  g.add(zip);
+
+  // jeans + boots
+  const legGeo = new THREE.BoxGeometry(0.22, 0.55, 0.26);
+  const bootGeo = new THREE.BoxGeometry(0.26, 0.22, 0.42);
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Mesh(legGeo, denim);
+    leg.position.set(s * 0.17, 0.55, 0);
+    g.add(leg);
+    const boot = new THREE.Mesh(bootGeo, leather);
+    boot.position.set(s * 0.18, 0.12, 0.05);
+    g.add(boot);
+  }
+
+  // tool belt + buckle
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.14, 0.56), leather);
+  belt.position.y = 0.88;
+  g.add(belt);
+  const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.1, 0.04), steel);
+  buckle.position.set(0, 0.88, 0.3);
+  g.add(buckle);
+
+  // muscular bare arms
+  const armGeo = new THREE.CapsuleGeometry(0.13, 0.5, 3, 6);
+  for (const s of [-1, 1]) {
+    const arm = new THREE.Mesh(armGeo, skin);
+    arm.position.set(s * 0.56, 1.3, 0.05);
+    arm.rotation.z = s * 0.25;
+    g.add(arm);
+  }
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), skin);
   head.position.y = 1.85;
   g.add(head);
+
+  // white unicorn ears
+  const earGeo = new THREE.ConeGeometry(0.07, 0.18, 6);
+  const earMat = new THREE.MeshStandardMaterial({ color: 0xf4f0ec, roughness: 0.5 });
+  for (const s of [-1, 1]) {
+    const ear = new THREE.Mesh(earGeo, earMat);
+    ear.position.set(s * 0.19, 2.1, -0.02);
+    ear.rotation.z = s * -0.3;
+    g.add(ear);
+  }
+
+  // rainbow mohawk-mane, arcing from forehead over to the nape
+  const maneGeo = new THREE.BoxGeometry(0.09, 0.3, 0.13);
+  for (let i = 0; i < 7; i++) {
+    const th = -0.35 + (i / 6) * 2.1;           // arc angle: front-top -> back
+    const dir = new THREE.Vector3(0, Math.cos(th), -Math.sin(th));
+    const spike = new THREE.Mesh(maneGeo, new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHSL(i / 7, 0.95, 0.5), roughness: 0.5,
+      emissive: new THREE.Color().setHSL(i / 7, 0.95, 0.35), emissiveIntensity: 0.45 }));
+    spike.position.set(0, 1.85, 0).addScaledVector(dir, 0.36);
+    spike.rotation.x = -th;
+    spike.scale.y = 0.8 + 0.6 * Math.sin((i / 6) * Math.PI); // tallest mid-crest
+    g.add(spike);
+  }
 
   // hose nozzle held forward
   const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.6, 8),
@@ -1009,6 +1111,13 @@ function buildPlayer() {
   Player.horn.rotation.x = -0.35;
   Player.horn.visible = false;
   g.add(Player.horn);
+  // gold band at the horn base, per the concept art
+  Player.hornRing = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.028, 6, 12),
+    new THREE.MeshStandardMaterial({ color: 0xd9a940, metalness: 0.8, roughness: 0.3 }));
+  Player.hornRing.position.set(0, 2.16, 0.05);
+  Player.hornRing.rotation.x = Math.PI / 2 - 0.35; // perpendicular to the horn axis
+  Player.hornRing.visible = false;
+  g.add(Player.hornRing);
   Player.hornGlow = glowSprite(0xffb0ea, 1.1, 0.6);
   Player.hornGlow.position.set(0, 2.7, 0.32);
   Player.hornGlow.visible = false;
@@ -1088,6 +1197,7 @@ function updatePlayer(dt, t) {
     if (Player.pos.distanceTo(hornPickup.position) < 2.4) {
       Player.hasHorn = true;
       Player.horn.visible = true;
+      Player.hornRing.visible = true;
       Player.hornGlow.visible = true;
       scene.remove(hornPickup); hornPickup = null;
       SFX.chime(); SFX.fanfare();
@@ -1298,7 +1408,7 @@ const Tutorial = {
           : 'Sparkling! Next: RIGHT CLICK (or Q) fires your Magic Beam — a big blast with a short cooldown.');
         break;
       case 'firstBeam':
-        this.show('Beautiful. Now listen… groans in the fog. Hose the glitter off the zombies to defeat them!');
+        this.show('Beautiful. Now listen… groans in the fog. Hose the rainbow slime off the poop zombies to melt them!');
         break;
       case 'zombieDefeated':
         this.show('FABULOUS! Purify the whole bridge: clean every pile and every zombie. Let your ears guide you.', true);
