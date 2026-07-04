@@ -53,6 +53,33 @@
   #objectives { position:absolute; top:14px; right:14px; text-align:right; color:#fff; font-size:13px;
                 text-shadow:0 1px 3px #000; line-height:1.6; }
   #objectives .n { color:#ffd94f; font-weight:700; }
+
+  /* ---- RPG: XP bar + talents ---- */
+  #xpWrap { margin-top:6px; display:flex; align-items:center; gap:8px; }
+  #xpBar { flex:1; height:7px; border-radius:6px; background:rgba(0,0,0,.45);
+           border:1px solid rgba(255,255,255,.25); overflow:hidden; }
+  #xpFill { height:100%; width:0%; background:linear-gradient(90deg,#c58fff,#ffd94f); transition:width .2s; }
+  #lvBadge { color:#ffd94f; font-size:11px; font-weight:700; letter-spacing:1px; text-shadow:0 1px 3px #000; }
+  #skillBtn { position:absolute; top:70px; right:14px; pointer-events:auto; display:none; cursor:pointer;
+              background:rgba(24,14,44,.85); border:1px solid rgba(255,217,79,.6); color:#ffd94f;
+              border-radius:20px; padding:7px 14px; font-size:13px; font-weight:700; }
+  #skillBtn.avail { animation:btnpulse 1.6s ease-in-out infinite; }
+  #novaCd { position:absolute; left:50%; top:calc(50% + 32px); transform:translateX(-50%);
+            width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
+  #novaCdFill { height:100%; width:100%; background:linear-gradient(90deg,#ffd94f,#ff8fd0); }
+  .skillGrid { display:flex; flex-wrap:wrap; gap:14px; justify-content:center; max-width:740px; }
+  .skillCard { width:min(330px,86vw); background:rgba(28,18,52,.92); border:1px solid rgba(255,255,255,.18);
+               border-radius:14px; padding:14px 16px; text-align:left; display:flex; gap:12px; align-items:center; }
+  .skillCard .ico { font-size:28px; }
+  .skillCard h3 { margin:0 0 2px; font-size:16px; color:#fff; }
+  .skillCard p { margin:0; font-size:12px; color:#aeb8d8; }
+  .pips { margin-top:6px; display:flex; gap:4px; }
+  .pip { width:16px; height:6px; border-radius:3px; background:rgba(255,255,255,.15); }
+  .pip.on { background:linear-gradient(90deg,#ffd94f,#ff8fd0); }
+  .plusBtn { margin-left:auto; flex:none; width:40px; height:40px; border-radius:50%; border:none;
+             font-size:22px; font-weight:700; cursor:pointer;
+             background:linear-gradient(90deg,#ffd94f,#ff8fd0); color:#1a1030; }
+  .plusBtn:disabled { opacity:.22; cursor:default; }
   #crosshair { position:absolute; left:50%; top:50%; width:26px; height:26px; transform:translate(-50%,-50%); }
   #crosshair::before { content:""; position:absolute; left:50%; top:50%; width:4px; height:4px;
                        transform:translate(-50%,-50%); border-radius:50%; background:#fff;
@@ -98,13 +125,19 @@
 
 <!-- ================= HUD ================= -->
 <div id="hud">
-  <div id="hpWrap"><div id="hpLabel">JAX — UNICORN JANITOR</div><div id="hpBar"><div id="hpFill"></div></div></div>
+  <div id="hpWrap">
+    <div id="hpLabel">JAX — UNICORN JANITOR</div>
+    <div id="hpBar"><div id="hpFill"></div></div>
+    <div id="xpWrap"><div id="xpBar"><div id="xpFill"></div></div><div id="lvBadge">LV 1</div></div>
+  </div>
+  <div id="skillBtn">⭐ TALENTS</div>
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
     <div>🧟 Zombies: <span class="n" id="zombieCount">0/0</span></div>
   </div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
+  <div id="novaCd" class="hidden"><div id="novaCdFill"></div></div>
   <div id="tutorial"></div>
   <div id="toastMsg"></div>
   <div id="dmgFlash"></div>
@@ -116,6 +149,7 @@
   <div id="joyBase"><div id="joyKnob"></div></div>
   <div class="tbtn" id="btnJump">JUMP</div>
   <div class="tbtn" id="btnBeam">BEAM</div>
+  <div class="tbtn" id="btnNova" style="right:23vw; bottom:calc(10vh + 84px); width:56px; height:56px; background:rgba(255,217,79,.3); display:none;">NOVA</div>
   <div class="tbtn" id="btnSpray">SPRAY</div>
 </div>
 
@@ -139,6 +173,13 @@
   <div class="chip" style="margin-top:16px;">NEXT: LEVEL 2 · COMING SOON</div>
   <br>
   <button id="againBtn">PLAY AGAIN</button>
+</div>
+
+<div id="skillOverlay" class="overlay hidden">
+  <h1 style="font-size:clamp(24px,4vw,40px);">TALENTS</h1>
+  <div class="chip" id="skillPoints">POINTS: 0</div>
+  <div class="skillGrid" id="skillGrid"></div>
+  <button id="skillResume" style="margin-top:24px;">RESUME</button>
 </div>
 
 <div id="deadOverlay" class="overlay hidden">
@@ -356,6 +397,24 @@ const SFX = {
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.32);
   },
 
+  nova() { // superpower: deep boom + rising rainbow shimmer
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const boom = this.ctx.createOscillator(); boom.type = 'sawtooth';
+    boom.frequency.setValueAtTime(500, t); boom.frequency.exponentialRampToValueAtTime(55, t + 0.55);
+    const bg = this.ctx.createGain(); bg.gain.setValueAtTime(0.4, t); bg.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    boom.connect(bg); bg.connect(this.master); boom.start(t); boom.stop(t + 0.62);
+    [660, 880, 1108, 1480].forEach((f, i) => {
+      const o = this.ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, t + 0.05 * i);
+      g.gain.linearRampToValueAtTime(0.16, t + 0.05 * i + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.05 * i + 0.6);
+      o.connect(g); g.connect(this.master);
+      o.start(t + 0.05 * i); o.stop(t + 0.05 * i + 0.65);
+    });
+  },
+
   hurt() {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -395,7 +454,7 @@ function narrate(text) {
    2. INPUT — keyboard + mouse (pointer lock) + touch (joystick, buttons)
    ===================================================================== */
 const Input = {
-  keys: {}, spray: false, beamPressed: false, jumpPressed: false,
+  keys: {}, spray: false, beamPressed: false, jumpPressed: false, novaPressed: false,
   lookDX: 0, lookDY: 0, joy: { x: 0, y: 0 },
   locked: false,
 
@@ -406,6 +465,8 @@ window.addEventListener('keydown', e => {
   Input.keys[e.code] = true;
   if (e.code === 'Space') { Input.jumpPressed = true; e.preventDefault(); }
   if (e.code === 'KeyQ') Input.beamPressed = true;
+  if (e.code === 'KeyF') Input.novaPressed = true;
+  if (e.code === 'KeyT') toggleSkillPanel();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
 window.addEventListener('contextmenu', e => e.preventDefault());
@@ -482,6 +543,7 @@ function setupTouch() {
   bindBtn('btnSpray', () => Input.spray = true, () => Input.spray = false);
   bindBtn('btnBeam', () => Input.beamPressed = true);
   bindBtn('btnJump', () => Input.jumpPressed = true);
+  bindBtn('btnNova', () => Input.novaPressed = true);
 }
 
 /* =====================================================================
@@ -604,13 +666,19 @@ function buildBridge() {
   deck.receiveShadow = true;
   grp.add(deck);
 
-  // dashed lane line
+  // dashed lane line + worn white edge lines
   const dashGeo = new THREE.BoxGeometry(0.25, 0.02, 3);
   const dashMat = new THREE.MeshBasicMaterial({ color: 0xd8c86a });
   for (let z = B.zStart - 6; z > B.zEnd; z -= 9) {
     const d = new THREE.Mesh(dashGeo, dashMat);
     d.position.set(0, 0.02, z);
     grp.add(d);
+  }
+  const edgeMat = new THREE.MeshBasicMaterial({ color: 0xb9bcb4 });
+  for (const side of [-1, 1]) {
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, len), edgeMat);
+    edge.position.set(side * (B.width / 2 - 1.4), 0.02, zMid);
+    grp.add(edge);
   }
 
   // side curbs + railing posts
@@ -692,13 +760,19 @@ function buildBridge() {
   sea.rotation.x = -Math.PI / 2; sea.position.y = -60;
   grp.add(sea);
 
+  // a soft sun disc burning through the fog (unaffected by scene fog)
+  const sunGlow = glowSprite(0xfff3da, 70, 0.5);
+  sunGlow.material.fog = false;
+  sunGlow.position.set(70, 90, -60);
+  grp.add(sunGlow);
+
   scene.add(grp);
 }
 
 /* =====================================================================
    5. METEOR CRATER — rainbow impact site, the level's starting point
    ===================================================================== */
-let craterParticles;
+let craterParticles, craterLight;
 function buildCrater() {
   const grp = new THREE.Group();
   grp.position.set(0, 0, 6);
@@ -743,10 +817,15 @@ function buildCrater() {
   const craterGlow = glowSprite(0xff9ae0, 6, 0.25);
   craterGlow.position.y = 1;
   grp.add(craterGlow);
+
+  // color-cycling light — the meteor's magic spills onto the roadway
+  craterLight = new THREE.PointLight(0xff9ae0, 4, 26);
+  craterLight.position.y = 2.5;
+  grp.add(craterLight);
   scene.add(grp);
 }
 
-function updateCrater(dt) {
+function updateCrater(dt, t) {
   const p = craterParticles.geometry.attributes.position;
   for (let i = 0; i < p.count; i++) {
     let y = p.getY(i) + dt * (0.8 + (i % 5) * 0.3);
@@ -754,6 +833,7 @@ function updateCrater(dt) {
     p.setY(i, y);
   }
   p.needsUpdate = true;
+  craterLight.color.setHSL((t * 0.08) % 1, 0.85, 0.6); // slow rainbow cycle
 }
 
 /* =====================================================================
@@ -881,6 +961,7 @@ class PoopPile {
     removeCleanTargets(this.group);
     scene.remove(this.group);
     Game.pilesCleaned++;
+    gainXP(25, this.group.position);
     Tutorial.fire('pileCleaned');
     updateObjectiveHUD();
     checkWin();
@@ -945,8 +1026,8 @@ class Zombie {
     headG.add(tip);
 
     // one big yellow eye + pupil, and a toothy grin
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 }));
+    this.eyeMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), this.eyeMat);
     eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5),
       new THREE.MeshBasicMaterial({ color: 0x231206 }));
@@ -1040,6 +1121,8 @@ class Zombie {
     removeCleanTargets(this.group);
     scene.remove(this.group);
     Game.zombiesDefeated++;
+    RPG.kills++;
+    gainXP(50, this.group.position);
     Tutorial.fire('zombieDefeated');
     updateObjectiveHUD();
     checkWin();
@@ -1123,6 +1206,10 @@ class Zombie {
     this.arms[0].rotation.z = -0.5 + Math.sin(t * 4) * 0.25;
     this.arms[1].rotation.z = 0.5 - Math.sin(t * 4 + 1) * 0.25;
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
+    // the eye burns brighter when he's hunting you
+    this.eyeMat.emissiveIntensity = this.state === 'chase' || this.state === 'windup' || this.state === 'lunge'
+      ? 1.6 + 0.5 * Math.sin(t * 12)
+      : 0.8 + 0.2 * Math.sin(t * 4);
   }
 }
 
@@ -1245,6 +1332,10 @@ function buildPlayer() {
   Player.hornGlow.position.set(0, 2.7, 0.32);
   Player.hornGlow.visible = false;
   g.add(Player.hornGlow);
+  // real light from the horn — paints nearby piles/zombies pink at night... er, in fog
+  Player.hornLight = new THREE.PointLight(0xff9ae0, 0, 10);
+  Player.hornLight.position.set(0, 2.5, 0.2);
+  g.add(Player.hornLight);
 
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   scene.add(g);
@@ -1285,7 +1376,7 @@ function updatePlayer(dt, t) {
   _v2.set(0, 0, 0).addScaledVector(Player.forward, f).addScaledVector(right, s);
   if (_v2.lengthSq() > 1) _v2.normalize();
   const moving = _v2.lengthSq() > 0.001;
-  Player.pos.addScaledVector(_v2, CFG.player.speed * dt);
+  Player.pos.addScaledVector(_v2, CFG.player.speed * RPG.speedMul() * dt);
 
   // knockback decay
   Player.pos.addScaledVector(Player.knock, dt);
@@ -1342,6 +1433,7 @@ function updatePlayer(dt, t) {
       Player.horn.visible = true;
       Player.hornRing.visible = true;
       Player.hornGlow.visible = true;
+      Player.hornLight.intensity = 3;
       scene.remove(hornPickup); hornPickup = null;
       SFX.chime(); SFX.fanfare();
       Tutorial.fire('hornPickup');
@@ -1440,7 +1532,7 @@ function updateHose(dt) {
     if (hits.length) {
       const e = hits[0].object.userData.entity;
       if (e) {
-        e.clean(CFG.hose.dps * dt, hits[0].point);
+        e.clean(CFG.hose.dps * RPG.hoseMul() * dt, hits[0].point);
         hitPulse = 1; // crosshair feedback: you're scrubbing something
         if (Math.random() < dt * 14) spawnSplash(hits[0].point);
         if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
@@ -1470,13 +1562,14 @@ function updateHose(dt) {
 let beamCooldown = 0;
 const activeBeams = [];
 function updateBeam(dt) {
+  const beamMaxCd = CFG.beam.cooldown * RPG.beamCdMul();
   beamCooldown = Math.max(0, beamCooldown - dt);
-  beamCdFill.style.width = (100 - (beamCooldown / CFG.beam.cooldown) * 100) + '%';
+  beamCdFill.style.width = (100 - (beamCooldown / beamMaxCd) * 100) + '%';
 
   if (Input.beamPressed) {
     Input.beamPressed = false;
     if (Player.hasHorn && beamCooldown <= 0 && Game.state === 'playing') {
-      beamCooldown = CFG.beam.cooldown;
+      beamCooldown = beamMaxCd;
       SFX.beam();
       Tutorial.fire('firstBeam');
 
@@ -1488,7 +1581,7 @@ function updateBeam(dt) {
       Player.shake = Math.max(Player.shake, 0.22);
       if (hits.length && hits[0].object.userData.entity) {
         end = hits[0].point.clone();
-        hits[0].object.userData.entity.clean(CFG.beam.damage, hits[0].point);
+        hits[0].object.userData.entity.clean(CFG.beam.damage * RPG.beamMul(), hits[0].point);
         spawnGlitter(hits[0].point, 30, 4);
         spawnSplash(hits[0].point, true);
         SFX.splat(panFor(hits[0].point), 0.7);
@@ -1549,7 +1642,170 @@ function updateAudioCues(dt) {
     const d = p.group.position.distanceTo(Player.pos);
     if (d < bestD) { bestD = d; best = p; }
   }
-  if (best) SFX.bubble(panFor(best.group.position), Math.max(0.12, 1 - bestD / 40) * 0.7);
+  if (best) {
+    SFX.bubble(panFor(best.group.position), Math.max(0.12, 1 - bestD / 40) * 0.7);
+    // the blorp has a visual: a little burp of sparkles from the pile
+    spawnGlitter(_v1.copy(best.group.position).add(new THREE.Vector3(0, 1.2, 0)), 7, 1.6);
+  }
+}
+
+/* =====================================================================
+   12.5 RPG PROGRESSION — XP from every clean, level-ups grant talent
+   points the player allocates: speed, hose power, beam, or the Rainbow
+   Nova superpower. Modifiers are multiplied into the base CFG values.
+   ===================================================================== */
+const RPG = {
+  xp: 0, level: 1, points: 0, kills: 0,
+  ranks: { speed: 0, power: 0, beam: 0, nova: 0 },
+  thresholds: [100, 250, 450, 700, 1050], // cumulative XP for each level-up
+  speedMul() { return 1 + 0.12 * this.ranks.speed; },
+  hoseMul() { return 1 + 0.25 * this.ranks.power; },
+  beamMul() { return 1 + 0.25 * this.ranks.beam; },
+  beamCdMul() { return 1 - 0.2 * this.ranks.beam; },
+};
+
+const SKILLS = [
+  { key: 'speed', name: 'Swift Hooves', icon: '👟', desc: '+12% run speed per rank', max: 3 },
+  { key: 'power', name: 'Power Pressure', icon: '💦', desc: '+25% hose cleaning power per rank', max: 3 },
+  { key: 'beam', name: 'Beam Mastery', icon: '🌈', desc: '+25% beam damage and −20% cooldown per rank', max: 3 },
+  { key: 'nova', name: 'Rainbow Nova', icon: '⭐', desc: 'Unlock a purifying blast around Jax (F / NOVA). Ranks widen it and cut its cooldown', max: 3 },
+];
+
+const xpFill = document.getElementById('xpFill');
+const lvBadge = document.getElementById('lvBadge');
+const skillBtn = document.getElementById('skillBtn');
+const toastEl = document.getElementById('toastMsg');
+let toastT = 0;
+function showToast(text) {
+  toastEl.textContent = text;
+  toastEl.style.opacity = 1;
+  toastT = 3.4;
+}
+
+function gainXP(amount, worldPos) {
+  RPG.xp += amount;
+  if (worldPos) spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
+  while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
+    RPG.level++; RPG.points++;
+    SFX.fanfare();
+    Player.shake = Math.max(Player.shake, 0.2);
+    spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 120, 6);
+    showToast('⭐ LEVEL UP! Skill point earned' + (IS_TOUCH ? ' — tap TALENTS' : ' — press T'));
+    narrate('Level up! You earned a talent point.');
+  }
+  updateRPGHUD();
+}
+
+function updateRPGHUD() {
+  const li = RPG.level - 1;
+  if (li >= RPG.thresholds.length) {
+    xpFill.style.width = '100%';
+  } else {
+    const prev = li > 0 ? RPG.thresholds[li - 1] : 0;
+    xpFill.style.width = THREE.MathUtils.clamp((RPG.xp - prev) / (RPG.thresholds[li] - prev) * 100, 0, 100) + '%';
+  }
+  lvBadge.textContent = 'LV ' + RPG.level;
+  const spent = Object.values(RPG.ranks).some(r => r > 0);
+  skillBtn.style.display = (RPG.points > 0 || spent) ? 'block' : 'none';
+  skillBtn.textContent = `⭐ TALENTS${RPG.points > 0 ? ' (' + RPG.points + ')' : ''}${IS_TOUCH ? '' : ' — T'}`;
+  skillBtn.classList.toggle('avail', RPG.points > 0);
+  if (RPG.ranks.nova > 0) {
+    document.getElementById('novaCd').classList.remove('hidden');
+    if (IS_TOUCH) document.getElementById('btnNova').style.display = 'flex';
+  }
+}
+
+// ---- talents panel (tactical pause) ----
+function buildSkillPanel() {
+  const grid = document.getElementById('skillGrid');
+  grid.innerHTML = SKILLS.map(s => `
+    <div class="skillCard" data-skill="${s.key}">
+      <div class="ico">${s.icon}</div>
+      <div style="flex:1;">
+        <h3>${s.name}</h3><p>${s.desc}</p>
+        <div class="pips">${'<span class="pip"></span>'.repeat(s.max)}</div>
+      </div>
+      <button class="plusBtn">+</button>
+    </div>`).join('');
+  grid.querySelectorAll('.skillCard').forEach(card => {
+    card.querySelector('.plusBtn').addEventListener('click', () => {
+      const key = card.dataset.skill;
+      const def = SKILLS.find(s => s.key === key);
+      if (RPG.points <= 0 || RPG.ranks[key] >= def.max) return;
+      RPG.points--; RPG.ranks[key]++;
+      SFX.chime();
+      if (key === 'nova' && RPG.ranks.nova === 1) {
+        showToast(IS_TOUCH ? '⭐ RAINBOW NOVA unlocked — tap NOVA!' : '⭐ RAINBOW NOVA unlocked — press F!');
+      }
+      refreshSkillPanel();
+      updateRPGHUD();
+    });
+  });
+}
+function refreshSkillPanel() {
+  document.getElementById('skillPoints').textContent = 'POINTS: ' + RPG.points;
+  document.querySelectorAll('.skillCard').forEach(card => {
+    const key = card.dataset.skill;
+    const def = SKILLS.find(s => s.key === key);
+    card.querySelectorAll('.pip').forEach((p, r) => p.classList.toggle('on', r < RPG.ranks[key]));
+    card.querySelector('.plusBtn').disabled = RPG.points <= 0 || RPG.ranks[key] >= def.max;
+  });
+}
+function toggleSkillPanel(open) {
+  const el = document.getElementById('skillOverlay');
+  if (open === undefined) open = el.classList.contains('hidden');
+  if (open && Game.state === 'playing') {
+    Game.state = 'skills'; // tactical pause: world freezes while allocating
+    refreshSkillPanel();
+    el.classList.remove('hidden');
+    Input.spray = false; SFX.setSpray(false);
+    if (document.exitPointerLock) document.exitPointerLock();
+  } else if (!open && Game.state === 'skills') {
+    Game.state = 'playing';
+    el.classList.add('hidden');
+    if (!IS_TOUCH) canvas.requestPointerLock();
+  }
+}
+
+// ---- Rainbow Nova: unlockable AoE purify burst ----
+let novaCooldown = 0;
+const novaRings = [];
+const novaCdFillEl = document.getElementById('novaCdFill');
+function updateNova(dt) {
+  for (let i = novaRings.length - 1; i >= 0; i--) {
+    const r = novaRings[i];
+    r.life -= dt;
+    if (r.life <= 0) {
+      scene.remove(r.ring); r.ring.geometry.dispose(); r.ring.material.dispose();
+      novaRings.splice(i, 1); continue;
+    }
+    const f = 1 - r.life / 0.6;
+    r.ring.scale.setScalar(0.5 + r.radius * f);
+    r.ring.material.opacity = 0.9 * (1 - f);
+  }
+
+  if (RPG.ranks.nova <= 0) { Input.novaPressed = false; return; }
+  const maxCd = 24 - 5 * RPG.ranks.nova; // 19s / 14s / 9s
+  novaCooldown = Math.max(0, novaCooldown - dt);
+  novaCdFillEl.style.width = (100 - novaCooldown / maxCd * 100) + '%';
+  if (!Input.novaPressed) return;
+  Input.novaPressed = false;
+  if (novaCooldown > 0 || Game.state !== 'playing') return;
+
+  novaCooldown = maxCd;
+  const radius = 6 + 2 * RPG.ranks.nova;
+  SFX.nova();
+  Player.shake = Math.max(Player.shake, 0.5);
+  spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.2, 0)), 160, 8);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffb0ea, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(Player.pos.x, 0.15, Player.pos.z);
+  scene.add(ring);
+  novaRings.push({ ring, life: 0.6, radius });
+  for (const p of piles) if (p.alive && p.group.position.distanceTo(Player.pos) < radius) p.clean(80, p.group.position);
+  for (const z of zombies) if (z.alive && z.group.position.distanceTo(Player.pos) < radius) z.clean(80, z.group.position);
 }
 
 /* =====================================================================
@@ -1639,7 +1895,7 @@ function checkWin() {
     }
     const secs = Math.round((performance.now() - Game.startTime) / 1000);
     document.getElementById('winStats').textContent =
-      `Cleared in ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · HP left: ${Math.max(0, Math.round(Player.hp))}`;
+      `Cleared in ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP`;
     setTimeout(() => {
       document.getElementById('winOverlay').classList.remove('hidden');
       if (document.exitPointerLock) document.exitPointerLock();
@@ -1701,6 +1957,9 @@ function startGame() {
 document.getElementById('startBtn').addEventListener('click', startGame);
 document.getElementById('againBtn').addEventListener('click', () => location.reload());
 document.getElementById('retryBtn').addEventListener('click', () => location.reload());
+skillBtn.addEventListener('click', () => toggleSkillPanel());
+document.getElementById('skillResume').addEventListener('click', () => toggleSkillPanel(false));
+buildSkillPanel();
 // clicking back into the game re-locks the pointer on desktop
 canvas.addEventListener('click', () => {
   if (Game.state === 'playing' && !IS_TOUCH && !Input.locked) canvas.requestPointerLock();
@@ -1713,7 +1972,7 @@ buildLevel();
    16. MAIN LOOP
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
-window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer };
+window.UJ = { Game, Player, Tutorial, piles, zombies, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel };
 
 const clock = new THREE.Clock();
 function tick() {
@@ -1721,15 +1980,26 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
-  updateCrater(dt);
+  updateCrater(dt, t);
   updateFogParticles(dt, t);
   updateGlitter(dt);
   updateSplashes(dt);
+  // living emissives: pile glow breathes with its remaining dirt
+  for (let i = 0; i < piles.length; i++) {
+    const p = piles[i];
+    if (!p.alive) continue;
+    const f = Math.max(p.dirt, 0) / CFG.pile.dirt;
+    p.glow.material.opacity = 0.1 + 0.25 * f + 0.06 * Math.sin(t * 3 + i * 2.1);
+  }
+
+  // toast fade (level-ups, unlocks)
+  if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }
 
   if (Game.state === 'playing') {
     updatePlayer(dt, t);
     updateHose(dt);
     updateBeam(dt);
+    updateNova(dt);
     for (const z of zombies) z.update(dt, t);
     updateAudioCues(dt);
     Tutorial.update(dt);

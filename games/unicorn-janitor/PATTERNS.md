@@ -116,6 +116,31 @@ bed stepping a minor progression every 9 s under a breathing lowpass.
 Caveat: with a composer, `renderer.info` per-frame numbers reflect only the
 final pass — set `info.autoReset = false` and accumulate to measure.
 
+## RPG progression (iteration 5)
+
+XP: 25 per pile, 50 per zombie (`gainXP(amount, worldPos)` — also puffs
+glitter at the source). Cumulative thresholds `[100,250,450,700,1050]`; each
+level-up = +1 talent point, fanfare, toast, glitter burst. Four talents, 3
+ranks each, defined in the `SKILLS` array and stored in `RPG.ranks`: Swift
+Hooves (+12% speed/rank), Power Pressure (+25% hose dps/rank), Beam Mastery
+(+25% dmg, −20% cd/rank), Rainbow Nova (unlockable AoE purify: F key / NOVA
+button, radius 6+2·rank, cooldown 24−5·rank, 80 dmg to every pile/zombie in
+range, expanding additive ring VFX). Modifiers are *multiplied into base CFG
+values at the call site* (`CFG.player.speed * RPG.speedMul()`), never written
+back into CFG — keeps tuning and progression independent. The talents panel
+is a tactical pause: `Game.state = 'skills'` freezes updates, releases
+pointer lock, and resumes on close (T toggles on desktop; TALENTS button on
+touch). Total level XP (10 piles + 9 zombies = 700) reaches level 5 of 6 —
+full clear should never cap the tree; scarcity is the point.
+
+## Living-light details (iteration 5)
+
+Horn PointLight (pink, distance 10, on at pickup), crater PointLight cycling
+hue at 0.08 Hz, sun glow sprite with `material.fog = false` (fog would eat
+it), pile glows breathing with remaining dirt, zombie eye emissive flaring
+when hunting, and the pile "blorp" audio cue now puffs matching glitter —
+every audio cue should have a visual twin and vice versa.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
