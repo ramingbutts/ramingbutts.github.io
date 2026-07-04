@@ -1080,20 +1080,54 @@ function buildPlayer() {
   Player.pos = g.position;
   g.position.set(0, 0, 12);
 
-  // concept art: navy work shirt + jeans, brown leather boots/belt, bare muscular arms
+  // concept art: navy short-sleeve jumpsuit over a black tee, leather
+  // suspenders + belt, cargo pants, mohawk with shaved silver sides,
+  // candy-striped horn, red pressure hose
   const shirt = new THREE.MeshStandardMaterial({ color: 0x2a3d63, roughness: 0.8 });
   const denim = new THREE.MeshStandardMaterial({ color: 0x22314c, roughness: 0.85 });
   const skin = new THREE.MeshStandardMaterial({ color: 0xd8a882, roughness: 0.6 });
   const leather = new THREE.MeshStandardMaterial({ color: 0x5a3d26, roughness: 0.7 });
   const steel = new THREE.MeshStandardMaterial({ color: 0xc4ccd6, metalness: 0.75, roughness: 0.3 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8 });
 
-  // torso (shirt) + zipper stripe
+  // torso + black tee peeking at the collar + zipper stripe
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.5, 4, 8), shirt);
   body.position.y = 1.3;
   g.add(body);
-  const zip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.55, 0.03), steel);
-  zip.position.set(0, 1.32, 0.4);
+  const tee = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 0.14, 10), black);
+  tee.position.y = 1.63;
+  g.add(tee);
+  const zip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.5, 0.03), steel);
+  zip.position.set(0, 1.28, 0.4);
   g.add(zip);
+
+  // chest pockets with steel buttons
+  const pocketGeo = new THREE.BoxGeometry(0.18, 0.16, 0.04);
+  for (const s of [-1, 1]) {
+    const pocket = new THREE.Mesh(pocketGeo, denim);
+    pocket.position.set(s * 0.2, 1.4, 0.36);
+    pocket.rotation.y = s * -0.2;
+    g.add(pocket);
+    const btn = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), steel);
+    btn.position.set(s * 0.2, 1.49, 0.385);
+    g.add(btn);
+  }
+
+  // leather suspenders over both shoulders, clasped at the chest
+  const strapGeo = new THREE.BoxGeometry(0.09, 0.6, 0.03);
+  for (const s of [-1, 1]) {
+    const front = new THREE.Mesh(strapGeo, leather);
+    front.position.set(s * 0.2, 1.34, 0.39);
+    front.rotation.x = -0.1; front.rotation.z = s * 0.12;
+    g.add(front);
+    const back = new THREE.Mesh(strapGeo, leather);
+    back.position.set(s * 0.2, 1.34, -0.39);
+    back.rotation.x = 0.1; back.rotation.z = s * -0.12;
+    g.add(back);
+    const clasp = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.06, 0.045), steel);
+    clasp.position.set(s * 0.22, 1.07, 0.36);
+    g.add(clasp);
+  }
 
   // jeans + boots — pivoted at the hip so they can swing while running;
   // the boot is a child of the leg so it follows the stride
@@ -1101,12 +1135,16 @@ function buildPlayer() {
   const legGeo = new THREE.BoxGeometry(0.22, 0.55, 0.26);
   legGeo.translate(0, -0.275, 0); // pivot at the top (hip)
   const bootGeo = new THREE.BoxGeometry(0.26, 0.22, 0.42);
+  const cargoGeo = new THREE.BoxGeometry(0.06, 0.16, 0.15);
   for (const s of [-1, 1]) {
     const leg = new THREE.Mesh(legGeo, denim);
     leg.position.set(s * 0.17, 0.82, 0);
     const boot = new THREE.Mesh(bootGeo, leather);
     boot.position.set(0.01 * s, -0.66, 0.05);
     leg.add(boot);
+    const cargo = new THREE.Mesh(cargoGeo, shirt); // side cargo pocket
+    cargo.position.set(s * 0.13, -0.28, 0);
+    leg.add(cargo);
     g.add(leg);
     Player.legs.push(leg);
   }
@@ -1131,9 +1169,26 @@ function buildPlayer() {
     Player.armsM.push(arm);
   }
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), skin);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), skin);
   head.position.y = 1.85;
   g.add(head);
+
+  // shaved silver sides + the permanent scowl (heavy brows, hard eyes)
+  const silver = new THREE.MeshStandardMaterial({ color: 0xcfd2d6, roughness: 0.45 });
+  for (const s of [-1, 1]) {
+    const side = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 8), silver);
+    side.scale.set(0.42, 0.72, 0.8);
+    side.position.set(s * 0.17, 1.94, -0.04);
+    g.add(side);
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.035, 0.04), black);
+    brow.position.set(s * 0.1, 1.93, 0.245);
+    brow.rotation.z = s * -0.28; // angled inward: he is not happy about the poop
+    brow.rotation.y = s * 0.35;
+    g.add(brow);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 5), black);
+    eye.position.set(s * 0.1, 1.885, 0.255);
+    g.add(eye);
+  }
 
   // white unicorn ears
   const earGeo = new THREE.ConeGeometry(0.07, 0.18, 6);
@@ -1145,30 +1200,56 @@ function buildPlayer() {
     g.add(ear);
   }
 
-  // rainbow mohawk-mane, arcing from forehead over to the nape
-  const maneGeo = new THREE.BoxGeometry(0.09, 0.3, 0.13);
-  for (let i = 0; i < 7; i++) {
-    const th = -0.35 + (i / 6) * 2.1;           // arc angle: front-top -> back
+  // rainbow mohawk-mane: taller, denser, swept back like the art
+  const maneGeo = new THREE.BoxGeometry(0.14, 0.34, 0.16);
+  for (let i = 0; i < 9; i++) {
+    const th = -0.4 + (i / 8) * 2.3;            // arc angle: forehead -> nape
+    const hue = (i / 8) * 0.8;                  // red front -> purple back, no wrap
     const dir = new THREE.Vector3(0, Math.cos(th), -Math.sin(th));
     const spike = new THREE.Mesh(maneGeo, new THREE.MeshStandardMaterial({
-      color: new THREE.Color().setHSL(i / 7, 0.95, 0.5), roughness: 0.5,
-      emissive: new THREE.Color().setHSL(i / 7, 0.95, 0.35), emissiveIntensity: 0.45 }));
-    spike.position.set(0, 1.85, 0).addScaledVector(dir, 0.36);
-    spike.rotation.x = -th;
-    spike.scale.y = 0.8 + 0.6 * Math.sin((i / 6) * Math.PI); // tallest mid-crest
+      color: new THREE.Color().setHSL(hue, 0.95, 0.5), roughness: 0.5,
+      emissive: new THREE.Color().setHSL(hue, 0.95, 0.35), emissiveIntensity: 0.45 }));
+    spike.position.set(0, 1.85, 0).addScaledVector(dir, 0.37);
+    spike.rotation.x = -th - 0.28;              // swept backward
+    spike.scale.y = 0.9 + 0.85 * Math.sin(((i + 1) / 10) * Math.PI); // tall crest
     g.add(spike);
   }
 
-  // hose nozzle held forward
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.6, 8),
-    new THREE.MeshStandardMaterial({ color: 0xcfd8e0, roughness: 0.3, metalness: 0.6 }));
+  // pressure rig: chunky steel nozzle, blue tip, red hose looping to the belt
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, 0.55, 8), steel);
   nozzle.rotation.x = Math.PI / 2;
-  nozzle.position.set(0.3, 1.2, 0.45);
+  nozzle.position.set(0.3, 1.2, 0.5);
   g.add(nozzle);
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.1, 8),
+    new THREE.MeshStandardMaterial({ color: 0x3f8fdf, metalness: 0.5, roughness: 0.3 }));
+  tip.rotation.x = Math.PI / 2;
+  tip.position.set(0.3, 1.2, 0.79);
+  g.add(tip);
+  const hoseCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.3, 1.2, 0.24),
+    new THREE.Vector3(0.44, 0.95, 0.08),
+    new THREE.Vector3(0.3, 0.78, -0.26),
+    new THREE.Vector3(0, 0.86, -0.34),
+  ]);
+  const hose = new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 16, 0.045, 6),
+    new THREE.MeshStandardMaterial({ color: 0xa32c22, roughness: 0.55 }));
+  g.add(hose);
 
-  // the horn — hidden until picked up at the crater
-  Player.horn = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.9, 8),
-    new THREE.MeshStandardMaterial({ color: 0xfff0f8, emissive: 0xff9ae0, emissiveIntensity: 1.6, roughness: 0.2 }));
+  // the horn — candy-striped rainbow segments, hidden until the pickup
+  Player.horn = new THREE.Group();
+  const SEGS = 5, HORN_H = 0.9;
+  for (let i = 0; i < SEGS; i++) {
+    const f = i / SEGS;
+    const rBot = 0.095 * (1 - f);
+    const rTop = Math.max(0.095 * (1 - (i + 1) / SEGS), 0.012);
+    const seg = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, HORN_H / SEGS, 8),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(f * 0.8, 0.9, 0.6),
+        emissive: new THREE.Color().setHSL(f * 0.8, 0.9, 0.45),
+        emissiveIntensity: 1.3, roughness: 0.25 }));
+    seg.position.y = -HORN_H / 2 + (i + 0.5) * (HORN_H / SEGS);
+    Player.horn.add(seg);
+  }
   Player.horn.position.set(0, 2.45, 0.15);
   Player.horn.rotation.x = -0.35;
   Player.horn.visible = false;
