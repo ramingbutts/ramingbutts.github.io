@@ -141,6 +141,22 @@ it), pile glows breathing with remaining dirt, zombie eye emissive flaring
 when hunting, and the pile "blorp" audio cue now puffs matching glitter —
 every audio cue should have a visual twin and vice versa.
 
+## Instant page load (iteration 6)
+
+The HTML shell is just markup + CSS: the game module lives in `level1.js`
+and is injected only after the window `load` event, with
+`<link rel="modulepreload">` for both the module and Three.js so their
+fetches start immediately. The start button boots disabled as "LOADING…"
+and the module's last lines enable it — so a slow network shows honest
+state instead of a dead button. The title chip carries a BUILD number;
+GitHub Pages caches HTML for ~10 minutes, and the visible build id is how
+you tell a stale cache from a bug. Measured (7 cold runs, local server,
+fresh context each): DCL 19 ms / load 21 ms — versus 2.8 s inline.
+Same treatment applied to the dashboard `index.html` (post-load ordered
+script injection, async webfonts): 12.7 s → 28 ms when the font CDN hangs.
+Rule: nothing render-blocking except the page's own CSS; third-party
+fetches must never be able to hold the load event hostage.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

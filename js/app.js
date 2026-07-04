@@ -159,4 +159,10 @@ const App = {
   }
 };
 
-document.addEventListener('DOMContentLoaded', () => App.init());
+// boot immediately if the document is already parsed (scripts may be
+// injected after DOMContentLoaded by the index.html lazy loader)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => App.init());
+} else {
+  App.init();
+}
