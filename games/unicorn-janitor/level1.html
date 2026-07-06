@@ -97,7 +97,9 @@
   #beamCdFill { height:100%; width:100%; background:linear-gradient(90deg,#c58fff,#5fc8ff); }
   /* on touch devices the bottom belongs to the controls — tutorial goes up top */
   @media (pointer: coarse) {
-    #tutorial { bottom:auto !important; top:16%; }
+    #tutorial { bottom:auto !important; top:14%; }
+    /* !important because this media block precedes the base rules below */
+    #toastMsg { top:44% !important; } /* keep toasts clear of the tutorial box */
   }
   #tutorial { position:absolute; left:50%; bottom:16%; transform:translateX(-50%); max-width:min(560px,86vw);
               background:rgba(16,10,34,.78); border:1px solid rgba(255,150,230,.5); border-radius:14px;
@@ -181,7 +183,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 9</div>
+  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 10</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>

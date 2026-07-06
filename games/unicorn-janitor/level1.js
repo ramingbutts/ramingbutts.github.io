@@ -882,7 +882,7 @@ class Zombie {
     const poopDark = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
     const clawMat = new THREE.MeshStandardMaterial({ color: 0xcbb391, roughness: 0.4 });
     this.bodyMat = new THREE.MeshStandardMaterial({ color: 0x6b4426, roughness: 0.5,
-      emissive: 0xff40c0, emissiveIntensity: 0.1 });
+      emissive: 0xff40c0, emissiveIntensity: 0.05 });
 
     // round belly
     const belly = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), this.bodyMat);
@@ -983,7 +983,7 @@ class Zombie {
     if (!this.alive) return;
     this.goo -= amount;
     const f = Math.max(this.goo, 0) / CFG.zombie.goo;
-    this.bodyMat.emissiveIntensity = 0.1 * f;
+    this.bodyMat.emissiveIntensity = 0.05 * f;
     for (const b of this.gooBlobs) b.scale.setScalar(Math.max(0.01, f));
     if (Math.random() < 0.12) spawnGlitter(point || this.group.position, 5, 2);
     // being hosed aggravates him
@@ -1901,11 +1901,14 @@ function gainXP(amount, worldPos) {
     spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
     spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + amount + ' XP');
   }
+  let gained = 0;
   while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
-    RPG.level++; RPG.points++;
+    RPG.level++; RPG.points++; gained++;
+  }
+  if (gained > 0) { // single feedback burst even for multi-level jumps
     SFX.fanfare();
     Player.shake = Math.max(Player.shake, 0.2);
-    spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 120, 6);
+    spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 80, 6);
     showToast('⭐ LEVEL UP! Skill point earned' + (IS_TOUCH ? ' — tap TALENTS' : ' — press T'));
     narrate('Level up! You earned a talent point.');
   }
