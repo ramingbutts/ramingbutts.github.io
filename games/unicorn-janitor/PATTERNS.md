@@ -197,6 +197,25 @@ after. Prismalox lines are `narrate(text, 0.6)` (low pitch = the horn's
 voice) + a toast. Win screen renders a secondary-objectives checklist
 (80% piles / 5 zombies / civilians / shard).
 
+## Adaptive quality + settings + gamepad (iteration 11)
+
+Three quality tiers (`QUALITY_TIERS`): high = bloom+shadows+DPR 1.75,
+medium = bloom, no shadows, DPR 1.25, low = neither, DPR 1. A rolling-fps
+monitor (real unclamped dt) steps the Auto tier down after three
+consecutive sub-45fps seconds, with a toast; toggling shadowMap at runtime
+requires `material.needsUpdate` on every mesh (one-frame hitch, acceptable).
+Pause menu (P/Esc/⚙/Start): volume (master gain), music (dedicated
+`_musicBus`), narration toggle (gates `narrate()`), quality override,
+reduce-motion (zeroes camera shake and hit-stop) — persisted in
+`localStorage('uj_settings')`. Gamepad: poll `navigator.getGamepads()[0]`
+every tick; sticks move/look, RT/A hold-spray via a separate `gpSpray`
+flag (never OR into the mouse hold state), edge-detected X/Y/B/RB/Start/
+Back for beam/nova/jump/ping/pause/talents, L3 sprint, rumble on damage
+via `vibrationActuator`. Beam now stuns (`Zombie.stun(2.5)`, nova 1.5) —
+a 'stunned' FSM state with a dizzy-stars sprite; this is the player's
+defensive verb per the design doc. Objective counters pop (CSS class
+re-trigger via `void el.offsetWidth`) when values change.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

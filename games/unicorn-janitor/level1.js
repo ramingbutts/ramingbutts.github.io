@@ -80,6 +80,7 @@ const SFX = {
     const breatheG = this.ctx.createGain(); breatheG.gain.value = 320;
     breathe.connect(breatheG); breatheG.connect(lp.frequency); breathe.start();
     const bus = this.ctx.createGain(); bus.gain.value = 0.05;
+    this._musicBus = bus; // settings menu can mute the music independently
     lp.connect(bus); bus.connect(this.master);
     this._musicVoices = this._chords[0].map((f, i) => {
       const o = this.ctx.createOscillator(); o.type = 'triangle';
@@ -297,6 +298,7 @@ const SFX = {
 // tutorial narration via the browser's speech synthesis (best-effort)
 function narrate(text, pitch = 1.15) {
   try {
+    if (typeof Settings !== 'undefined' && !Settings.voice) return;
     if (!('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text.replace(/[✨💩🧟🧍🌈💀🌠“”]/g, ''));
@@ -326,6 +328,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyF') Input.novaPressed = true;
   if (e.code === 'KeyC') Input.pingPressed = true;
   if (e.code === 'KeyT') toggleSkillPanel();
+  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
 window.addEventListener('contextmenu', e => e.preventDefault());
@@ -975,8 +978,21 @@ class Zombie {
     this.sparkle.position.y = 1.4;
     g.add(this.sparkle);
 
+    // dizzy-stars indicator shown while stunned by the beam/nova
+    this.stunT = 0;
+    this.stunStars = glowSprite(0x9fdcff, 1.3, 0);
+    this.stunStars.position.y = 2.55;
+    g.add(this.stunStars);
+
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
     scene.add(g);
+  }
+
+  stun(dur) { // design doc: the Magic Beam stuns as well as cleans
+    if (!this.alive) return;
+    this.stunT = Math.max(this.stunT, dur);
+    this.group.rotation.x = 0;
+    this.setState('stunned');
   }
 
   clean(amount, point) {
@@ -1072,6 +1088,15 @@ class Zombie {
       }
       case 'recover': {
         if (this.stateT >= CFG.zombie.recover) this.setState(dist < CFG.zombie.lose ? 'chase' : 'wander');
+        break;
+      }
+      case 'stunned': { // frozen in place, seeing stars
+        this.stunT -= dt;
+        this.stunStars.material.opacity = 0.55 + 0.35 * Math.sin(t * 12);
+        if (this.stunT <= 0) {
+          this.stunStars.material.opacity = 0;
+          this.setState(dist < CFG.zombie.lose ? 'chase' : 'wander');
+        }
         break;
       }
     }
@@ -1541,12 +1566,13 @@ function updatePlayer(dt, t) {
   if (Input.keys.KeyD || Input.keys.ArrowRight) s += 1;
   if (Input.keys.KeyA || Input.keys.ArrowLeft) s -= 1;
   f += -Input.joy.y; s += Input.joy.x;
+  f += -(Input.gpY || 0); s += (Input.gpX || 0);
 
   const right = _v1.crossVectors(Player.forward, THREE.Object3D.DEFAULT_UP);
   _v2.set(0, 0, 0).addScaledVector(Player.forward, f).addScaledVector(right, s);
   if (_v2.lengthSq() > 1) _v2.normalize();
   const moving = _v2.lengthSq() > 0.001;
-  const sprinting = moving && Player.onGround && (Input.keys.ShiftLeft || Input.keys.ShiftRight);
+  const sprinting = moving && Player.onGround && (Input.keys.ShiftLeft || Input.keys.ShiftRight || Input.gpSprint);
   Player.pos.addScaledVector(_v2, CFG.player.speed * RPG.speedMul() * (sprinting ? 1.45 : 1) * dt);
 
   // sprint FOV kick — subtle speed sensation
@@ -1601,8 +1627,9 @@ function updatePlayer(dt, t) {
   const lookAt = headPos.clone().addScaledVector(Player.aim, 10);
   camera.lookAt(lookAt);
 
-  // camera shake (impacts, beam) — positional jitter after lookAt
-  if (Player.shake > 0.002) {
+  // camera shake (impacts, beam) — positional jitter after lookAt;
+  // disabled entirely by the reduce-motion setting
+  if (Player.shake > 0.002 && !Settings.reduceMotion) {
     Player.shake *= Math.max(0, 1 - 5 * dt);
     camera.position.x += (Math.random() - 0.5) * Player.shake * 0.5;
     camera.position.y += (Math.random() - 0.5) * Player.shake * 0.35;
@@ -1645,6 +1672,11 @@ function damagePlayer(amount, fromDir) {
   Game.dmgFlash = 1;
   Player.shake = 0.45;
   SFX.hurt();
+  try { // gamepad rumble on hit
+    const gp = navigator.getGamepads && navigator.getGamepads()[0];
+    if (gp && gp.vibrationActuator) gp.vibrationActuator.playEffect('dual-rumble',
+      { duration: 160, strongMagnitude: 0.8, weakMagnitude: 0.4 });
+  } catch (e) {}
   hpFill.style.width = Math.max(0, Player.hp) + '%';
   hpFill.style.background = Player.hp < 35 ? 'linear-gradient(90deg,#ff4f6e,#ff9e4f)' : 'linear-gradient(90deg,#4fff9e,#b8ff4f)';
   if (Player.hp <= 0) gameOver();
@@ -1704,7 +1736,7 @@ const crosshairEl = document.getElementById('crosshair');
 const pressureFill = document.getElementById('pressureFill');
 const rainbowFill = document.getElementById('rainbowFill');
 function updateHose(dt) {
-  const wantSpray = Input.spray && Player.hasHorn && Game.state === 'playing';
+  const wantSpray = (Input.spray || Input.gpSpray) && Player.hasHorn && Game.state === 'playing';
   // pressure meter: drains while spraying, refills on release; running it
   // dry locks the trigger briefly — teaches the ease-off rhythm
   if (pressureLocked && Meters.pressure > 25) pressureLocked = false;
@@ -1794,7 +1826,9 @@ function updateBeam(dt) {
       Player.shake = Math.max(Player.shake, 0.22);
       if (hits.length && hits[0].object.userData.entity) {
         end = hits[0].point.clone();
-        hits[0].object.userData.entity.clean(CFG.beam.damage * RPG.beamMul(), hits[0].point);
+        const ent = hits[0].object.userData.entity;
+        ent.clean(CFG.beam.damage * RPG.beamMul(), hits[0].point);
+        if (ent.stun) ent.stun(2.5); // the beam blasts AND stuns
         spawnGlitter(hits[0].point, 30, 4);
         spawnSplash(hits[0].point, true);
         SFX.splat(panFor(hits[0].point), 0.7);
@@ -2024,7 +2058,10 @@ function updateNova(dt) {
   scene.add(ring);
   novaRings.push({ ring, life: 0.6, radius });
   for (const p of piles) if (p.alive && p.group.position.distanceTo(Player.pos) < radius) p.clean(80, p.group.position);
-  for (const z of zombies) if (z.alive && z.group.position.distanceTo(Player.pos) < radius) z.clean(80, z.group.position);
+  for (const z of zombies) if (z.alive && z.group.position.distanceTo(Player.pos) < radius) {
+    z.clean(80, z.group.position);
+    if (z.alive) z.stun(1.5);
+  }
 }
 
 /* =====================================================================
@@ -2156,6 +2193,110 @@ function updateIntro(dt) {
 }
 
 /* =====================================================================
+   12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
+   hardware by itself; the player can override everything.
+   ===================================================================== */
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false };
+try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
+function saveSettings() { try { localStorage.setItem('uj_settings', JSON.stringify(Settings)); } catch (e) {} }
+
+const QUALITY_TIERS = {
+  high: { bloom: true, shadows: true, dpr: 1.75 },
+  medium: { bloom: true, shadows: false, dpr: 1.25 },
+  low: { bloom: false, shadows: false, dpr: 1 },
+};
+let autoTier = 'high', appliedTier = 'high';
+function activeTier() { return Settings.quality === 'auto' ? autoTier : Settings.quality; }
+function applyQuality() {
+  const tier = activeTier();
+  if (tier === appliedTier) return;
+  appliedTier = tier;
+  const q = QUALITY_TIERS[tier];
+  bloom.enabled = q.bloom;
+  if (renderer.shadowMap.enabled !== q.shadows) {
+    renderer.shadowMap.enabled = q.shadows;
+    sun.castShadow = q.shadows;
+    scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
+  }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, q.dpr));
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+}
+function applySettings() {
+  if (SFX.master) SFX.master.gain.value = 0.85 * Settings.volume / 100;
+  if (SFX._musicBus) SFX._musicBus.gain.value = Settings.music ? 0.05 : 0;
+  applyQuality();
+  refreshSettingsUI();
+}
+function refreshSettingsUI() {
+  document.getElementById('setVol').value = Settings.volume;
+  document.getElementById('setMusic').textContent = Settings.music ? 'ON' : 'OFF';
+  document.getElementById('setVoice').textContent = Settings.voice ? 'ON' : 'OFF';
+  document.getElementById('setQuality').textContent =
+    Settings.quality.toUpperCase() + (Settings.quality === 'auto' ? ' · ' + autoTier.toUpperCase() : '');
+  document.getElementById('setMotion').textContent = Settings.reduceMotion ? 'ON' : 'OFF';
+}
+
+// rolling-fps monitor: three bad seconds on Auto steps the tier down
+let fpsFrames = 0, fpsTime = 0, fpsLowStreak = 0;
+function updateAutoQuality(rawDt) {
+  fpsFrames++; fpsTime += rawDt;
+  if (fpsTime < 1) return;
+  const fps = fpsFrames / fpsTime;
+  fpsFrames = 0; fpsTime = 0;
+  if (Settings.quality !== 'auto' || Game.state !== 'playing' || autoTier === 'low') { fpsLowStreak = 0; return; }
+  if (fps < 45) {
+    if (++fpsLowStreak >= 3) {
+      autoTier = autoTier === 'high' ? 'medium' : 'low';
+      fpsLowStreak = 0;
+      applyQuality(); refreshSettingsUI();
+      showToast('⚙ Auto quality adjusted: ' + autoTier.toUpperCase());
+    }
+  } else fpsLowStreak = 0;
+}
+
+function togglePause(open) {
+  const el = document.getElementById('pauseOverlay');
+  if (open === undefined) open = el.classList.contains('hidden');
+  if (open && Game.state === 'playing') {
+    Game.state = 'paused';
+    refreshSettingsUI();
+    el.classList.remove('hidden');
+    Input.spray = false; SFX.setSpray(false);
+    if (document.exitPointerLock) document.exitPointerLock();
+  } else if (!open && Game.state === 'paused') {
+    Game.state = 'playing';
+    el.classList.add('hidden');
+    if (!IS_TOUCH) canvas.requestPointerLock();
+  }
+}
+
+/* =====================================================================
+   12.9 GAMEPAD — standard mapping: sticks move/look, RT/A spray,
+   X beam, Y nova, B jump, RB ping, L3 sprint, Start pause, Back talents
+   ===================================================================== */
+const gpPrev = {};
+function pollGamepad() {
+  const gp = (navigator.getGamepads && navigator.getGamepads()[0]) || null;
+  Input.gpSpray = false; Input.gpSprint = false; Input.gpX = 0; Input.gpY = 0;
+  if (!gp || !gp.connected) return;
+  const dz = v => (Math.abs(v || 0) > 0.16 ? v : 0);
+  Input.gpX = dz(gp.axes[0]); Input.gpY = dz(gp.axes[1]);
+  Input.lookDX += dz(gp.axes[2]) * 16;
+  Input.lookDY += dz(gp.axes[3]) * 12;
+  const down = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
+  Input.gpSpray = down(7) || down(0);
+  Input.gpSprint = down(10);
+  const edge = (i, cb) => { const p = down(i); if (p && !gpPrev[i]) cb(); gpPrev[i] = p; };
+  edge(2, () => Input.beamPressed = true);
+  edge(3, () => Input.novaPressed = true);
+  edge(1, () => Input.jumpPressed = true);
+  edge(5, () => Input.pingPressed = true);
+  edge(9, () => { if (Game.state === 'intro') introSkip = true; else togglePause(); });
+  edge(8, () => toggleSkillPanel());
+}
+
+/* =====================================================================
    13. TUTORIAL — one mechanic at a time, gated by play events
    ===================================================================== */
 const tutorialEl = document.getElementById('tutorial');
@@ -2196,7 +2337,7 @@ const Tutorial = {
           : 'Sparkling! Cleaning filled your RAINBOW METER — RIGHT CLICK (or Q) unleashes the Magic Beam!');
         break;
       case 'firstBeam':
-        this.show('Beautiful. Now listen… groans in the fog. Hose the rainbow slime off the poop zombies to melt them!');
+        this.show('Beautiful — the beam blasts AND stuns! Now listen… groans in the fog. Hose the rainbow slime off the poop zombies to melt them!');
         break;
       case 'zombieDefeated':
         this.show('FABULOUS! Purify the whole bridge: clean every pile and every zombie. Let your ears guide you.', true);
@@ -2229,9 +2370,16 @@ const Game = {
 };
 
 function updateObjectiveHUD() {
-  document.getElementById('pileCount').textContent = `${Game.pilesCleaned}/${Game.totalPiles}`;
-  document.getElementById('zombieCount').textContent = `${Game.zombiesDefeated}/${Game.totalZombies}`;
-  document.getElementById('civCount').textContent = `${Game.civSaved}/${Game.civTotal}`;
+  const bump = (id, txt) => { // counter pop when a value changes
+    const el = document.getElementById(id);
+    if (el.textContent !== txt) {
+      el.textContent = txt;
+      el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+    }
+  };
+  bump('pileCount', `${Game.pilesCleaned}/${Game.totalPiles}`);
+  bump('zombieCount', `${Game.zombiesDefeated}/${Game.totalZombies}`);
+  bump('civCount', `${Game.civSaved}/${Game.civTotal}`);
 }
 
 function checkWin() {
@@ -2319,6 +2467,7 @@ function buildLevel() {
 
 function startGame() {
   SFX.init();
+  applySettings(); // saved volume/music/quality take effect immediately
   document.getElementById('startOverlay').classList.add('hidden');
   // cinematic fly-in first; crosshair/HUD and the tutorial arrive at its end.
   // Pointer lock must be requested inside this click gesture — it persists
@@ -2336,6 +2485,30 @@ document.getElementById('retryBtn').addEventListener('click', () => location.rel
 skillBtn.addEventListener('click', () => toggleSkillPanel());
 document.getElementById('skillResume').addEventListener('click', () => toggleSkillPanel(false));
 buildSkillPanel();
+
+// settings menu wiring
+document.getElementById('gearBtn').addEventListener('click', () => togglePause());
+document.getElementById('pauseResume').addEventListener('click', () => togglePause(false));
+document.getElementById('pauseRestart').addEventListener('click', () => location.reload());
+document.getElementById('setVol').addEventListener('input', e => {
+  Settings.volume = +e.target.value; saveSettings(); applySettings();
+});
+document.getElementById('setMusic').addEventListener('click', () => {
+  Settings.music = !Settings.music; saveSettings(); applySettings();
+});
+document.getElementById('setVoice').addEventListener('click', () => {
+  Settings.voice = !Settings.voice; saveSettings(); refreshSettingsUI();
+});
+document.getElementById('setQuality').addEventListener('click', () => {
+  const order = ['auto', 'high', 'medium', 'low'];
+  Settings.quality = order[(order.indexOf(Settings.quality) + 1) % order.length];
+  saveSettings(); applyQuality(); refreshSettingsUI();
+});
+document.getElementById('setMotion').addEventListener('click', () => {
+  Settings.reduceMotion = !Settings.reduceMotion; saveSettings(); refreshSettingsUI();
+});
+refreshSettingsUI();
+applyQuality();
 // clicking back into the game re-locks the pointer on desktop
 canvas.addEventListener('click', () => {
   if (Game.state === 'playing' && !IS_TOUCH && !Input.locked) canvas.requestPointerLock();
@@ -2349,6 +2522,7 @@ buildLevel();
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
 window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel,
+  Settings, togglePause, applyQuality, activeTier,
   getShard: () => shard,
   skipIntro: () => { introSkip = true; },
   getCombo: () => comboCount,
@@ -2357,10 +2531,15 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
 const clock = new THREE.Clock();
 function tick() {
   requestAnimationFrame(tick);
-  let dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = clock.getDelta();
+  let dt = Math.min(rawDt, 0.05);
   const t = clock.elapsedTime;
 
-  // kill slow-motion: world runs at 15% for a beat
+  pollGamepad();
+  updateAutoQuality(rawDt);
+
+  // kill slow-motion: world runs at 15% for a beat (skipped for reduce-motion)
+  if (Settings.reduceMotion) hitStop = 0;
   if (hitStop > 0) { hitStop -= dt; dt *= 0.15; }
 
   updateCrater(dt, t);

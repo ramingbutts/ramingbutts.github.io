@@ -70,6 +70,16 @@
               background:rgba(24,14,44,.85); border:1px solid rgba(255,217,79,.6); color:#ffd94f;
               border-radius:20px; padding:7px 14px; font-size:13px; font-weight:700; }
   #skillBtn.avail { animation:btnpulse 1.6s ease-in-out infinite; }
+  #gearBtn { position:absolute; top:112px; right:14px; pointer-events:auto; cursor:pointer;
+             background:rgba(24,14,44,.85); border:1px solid rgba(255,255,255,.35); color:#fff;
+             border-radius:20px; padding:7px 13px; font-size:14px; }
+  .n.pop { animation:hudpop .35s ease; display:inline-block; }
+  @keyframes hudpop { 40% { transform:scale(1.5); } }
+  .setRow { display:flex; align-items:center; justify-content:space-between; gap:14px;
+            width:min(340px,80vw); color:#cfd8ff; font-size:14px; letter-spacing:1px; margin:7px 0; }
+  .setRow .tog { min-width:130px; font-size:13px !important; padding:8px 0 !important;
+                 animation:none !important; box-shadow:none !important; }
+  input[type=range] { width:150px; accent-color:#ff8fd0; }
   #novaCd { position:absolute; left:50%; top:calc(50% + 32px); transform:translateX(-50%);
             width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
   #novaCdFill { height:100%; width:100%; background:linear-gradient(90deg,#ffd94f,#ff8fd0); }
@@ -153,6 +163,7 @@
     <div class="meterRow"><span class="mLabel">RBW</span><div class="mBar"><div id="rainbowFill" style="background:linear-gradient(90deg,#ff5fa2,#ffd94f,#5fffb0,#5fc8ff); width:0%"></div></div></div>
   </div>
   <div id="skillBtn">⭐ TALENTS</div>
+  <div id="gearBtn">⚙ MENU</div>
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
     <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
@@ -183,11 +194,12 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 10</div>
+  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 11</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
-    Fog is thick out there — <b>trust your ears</b>, or press <b>C</b> for a sixth-sense ping.
+    Fog is thick out there — <b>trust your ears</b>, or press <b>C</b> for a sixth-sense ping.<br>
+    <b>P</b> pause &amp; settings &nbsp;·&nbsp; 🎮 gamepad supported
   </div>
   <button id="startBtn" disabled>LOADING…</button>
 </div>
@@ -207,6 +219,17 @@
   <div class="chip" id="skillPoints">POINTS: 0</div>
   <div class="skillGrid" id="skillGrid"></div>
   <button id="skillResume" style="margin-top:24px;">RESUME</button>
+</div>
+
+<div id="pauseOverlay" class="overlay hidden">
+  <h1 style="font-size:clamp(24px,4vw,40px);">PAUSED</h1>
+  <div class="setRow"><span>VOLUME</span><input id="setVol" type="range" min="0" max="100" value="85"></div>
+  <div class="setRow"><span>MUSIC</span><button class="tog" id="setMusic">ON</button></div>
+  <div class="setRow"><span>NARRATION</span><button class="tog" id="setVoice">ON</button></div>
+  <div class="setRow"><span>QUALITY</span><button class="tog" id="setQuality">AUTO</button></div>
+  <div class="setRow"><span>REDUCE MOTION</span><button class="tog" id="setMotion">OFF</button></div>
+  <button id="pauseResume" style="margin-top:20px;">RESUME</button>
+  <button id="pauseRestart" style="margin-top:10px; font-size:14px; padding:9px 24px; background:rgba(255,255,255,.14); color:#fff; box-shadow:none; animation:none;">RESTART LEVEL</button>
 </div>
 
 <div id="deadOverlay" class="overlay hidden">
