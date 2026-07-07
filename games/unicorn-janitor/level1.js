@@ -1219,8 +1219,8 @@ class Zombie {
    and either way the primitives remain as invisible collision proxies.
    ===================================================================== */
 const MODELS = {
-  jax: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/fe7f128e-eb80-4109-ac5a-fa8c7d67e077.glb',
-    height: 2.05, rotY: 0 },
+  jax: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
+    height: 2.05, rotY: 0 }, // gun-toting Jax with red pressure tank + power-washer
   zombie: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
     height: 1.95, rotY: 0 },
 };
@@ -1698,9 +1698,11 @@ function buildPlayer() {
   Player.hornLight.position.set(0, 2.5, 0.2);
   g.add(Player.hornLight);
 
-  // partition: primitive cosmetics into a rig subgroup (hidden when the
-  // generated GLB loads); the weapon and horn overlays stay on top of it
-  const keep = new Set([Player.horn, Player.hornRing, Player.hornGlow, Player.hornLight, nozzle, tip, hose]);
+  // partition: primitive cosmetics — INCLUDING the primitive nozzle/tip/hose —
+  // go into a rig subgroup that hides when the GLB loads, because the GLB Jax
+  // carries his own power-washer gun. Only the horn glow/light (gameplay VFX)
+  // and the toggle-managed horn/ring stay at group level.
+  const keep = new Set([Player.horn, Player.hornRing, Player.hornGlow, Player.hornLight]);
   Player.rig = new THREE.Group();
   for (const child of [...g.children]) if (!keep.has(child)) Player.rig.add(child);
   g.add(Player.rig);
