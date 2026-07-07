@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup · Weekly Pulse — Personal OS</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../css/styles.css">
+<style>
+  body { overflow: auto; }
+  .mock-strip { position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
+    display: flex; gap: 14px; align-items: center; justify-content: center;
+    background: var(--bg-secondary); border-top: 1px solid var(--border);
+    padding: 8px 16px; font-size: 12px; color: var(--text-muted); }
+  .mock-strip a { color: var(--accent); text-decoration: none; }
+  #wrap { max-width: 1080px; margin: 0 auto; padding: 26px 24px 64px; }
+
+  .pulse-hero { display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
+  .pulse-hero h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
+  .pulse-hero .rng { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-muted); }
+
+  /* insight cards — the "so what", stated plainly */
+  .insight { display: flex; gap: 12px; padding: 14px 16px; align-items: flex-start; }
+  .insight .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+  .insight .body { font-size: 13.5px; line-height: 1.55; }
+  .insight .body b { color: var(--text); font-weight: 600; }
+  .insight .body span { color: var(--text-secondary); }
+
+  /* chart primitives — thin marks, recessive axes, per dataviz */
+  .chart-card h3 { font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    margin-bottom: 2px; }
+  .chart-card .sub { font-size: 11px; color: var(--text-muted); margin-bottom: 14px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  svg { display: block; width: 100%; overflow: visible; }
+  .axis-lbl { fill: var(--text-muted); font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+  .grid-line { stroke: var(--border); stroke-width: 1; }
+  .val-lbl { fill: var(--text-secondary); font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+  .heat-cell { rx: 2; }
+  #tooltip { position: fixed; z-index: 400; pointer-events: none; opacity: 0;
+    background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 6px;
+    padding: 7px 10px; font-size: 12px; color: var(--text); box-shadow: var(--shadow-sm);
+    transition: opacity .1s; white-space: nowrap; }
+  #tooltip b { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <div class="pulse-hero">
+    <div>
+      <h1>Weekly Pulse</h1>
+      <div class="rng">Jun 30 – Jul 6 · your week in review</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary btn-sm">‹ Last week</button>
+      <button class="btn btn-secondary btn-sm">This week ›</button>
+      <button class="btn btn-primary btn-sm">Share summary</button>
+    </div>
+  </div>
+
+  <!-- headline stat tiles -->
+  <div class="section" style="margin-top:18px">
+    <div class="grid-4">
+      <div class="card glow"><div class="card-title">Habit consistency</div>
+        <div class="card-value" style="margin-top:6px;color:var(--green)">78%</div>
+        <div class="card-subtitle" style="color:var(--green)">▲ 12 pts vs last week</div></div>
+      <div class="card"><div class="card-title">Saved this week</div>
+        <div class="card-value" style="margin-top:6px;color:var(--accent)">$1,140</div>
+        <div class="card-subtitle">33% of income</div></div>
+      <div class="card"><div class="card-title">Tasks shipped</div>
+        <div class="card-value" style="margin-top:6px">9</div>
+        <div class="card-subtitle" style="color:var(--red)">4 still blocked</div></div>
+      <div class="card"><div class="card-title">Avg mood</div>
+        <div class="card-value" style="margin-top:6px">🙂 3.9<span style="font-size:14px;color:var(--text-muted)">/5</span></div>
+        <div class="card-subtitle">from 6 journal entries</div></div>
+    </div>
+  </div>
+
+  <!-- auto-generated insights: the cross-module payoff -->
+  <div class="section">
+    <div class="section-title" style="margin-bottom:10px">What stood out</div>
+    <div class="card" style="padding:4px 0">
+      <div class="insight" style="border-bottom:1px solid var(--border)">
+        <span class="dot" style="background:var(--chart-green)"></span>
+        <div class="body"><b>Your best mood days were your best habit days.</b>
+          <span>On the 4 days you hit ≥ 80% of habits, average journal mood was 4.4/5 — versus 2.8 on the days you didn't. Workouts show the strongest link.</span></div>
+      </div>
+      <div class="insight" style="border-bottom:1px solid var(--border)">
+        <span class="dot" style="background:var(--chart-amber)"></span>
+        <div class="body"><b>Food spending is creeping up.</b>
+          <span>$412 this week vs a $300 average — 19% of income. Three dining transactions over $40 drove most of it.</span></div>
+      </div>
+      <div class="insight">
+        <span class="dot" style="background:var(--chart-pink)"></span>
+        <div class="body"><b>Two high-priority tasks have been blocked for 6+ days.</b>
+          <span>"Update project roadmap" and "Renew car insurance" haven't moved. Both were flagged in last week's pulse too.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- charts row 1 -->
+  <div class="section">
+    <div class="grid-2">
+      <div class="card chart-card">
+        <h3>Habits vs. mood, this week</h3>
+        <div class="sub">Do the days you keep your habits feel better? One axis: % of the day's targets met, and mood scaled to the same 0–100%.</div>
+        <svg id="chart-line" viewBox="0 0 480 220" role="img" aria-label="Habit completion and mood over seven days"></svg>
+        <div class="legend">
+          <span><i style="background:var(--chart-cyan)"></i>Habits met %</span>
+          <span><i style="background:var(--chart-purple)"></i>Mood (0–100%)</span>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <h3>Where the money went</h3>
+        <div class="sub">Spending by category this week. Sorted, so the biggest lever is on top.</div>
+        <svg id="chart-bars" viewBox="0 0 480 220" role="img" aria-label="Spending by category"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- charts row 2 -->
+  <div class="section">
+    <div class="grid-2-1">
+      <div class="card chart-card">
+        <h3>Habit heatmap</h3>
+        <div class="sub">Each row a habit, each column a day. Darker = done. The gaps are the story.</div>
+        <svg id="chart-heat" viewBox="0 0 480 200" role="img" aria-label="Habit completion heatmap"></svg>
+        <div class="legend"><span>Less</span>
+          <i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i>
+          <i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i><span>More</span></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Carried into next week</h3>
+        <div class="sub">Auto-built from open tasks &amp; repeated blockers.</div>
+        <div id="carry"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<div class="mock-strip">
+  <span class="badge badge-amber">MOCKUP 2/3</span>
+  <span>Weekly Pulse — cross-module review</span>
+  <a href="quick-capture.html">→ 1 · Quick Capture</a>
+  <a href="mobile-pwa.html">→ 3 · Mobile PWA</a>
+</div>
+
+<script>
+// validated dark-mode categorical palette (passed scripts/validate_palette.js)
+const C = { cyan: '#0a9ec2', purple: '#8b5cf6', green: '#0d9668', amber: '#c77f0a', pink: '#e0408f' };
+const root = document.documentElement.style;
+root.setProperty('--chart-cyan', C.cyan); root.setProperty('--chart-purple', C.purple);
+root.setProperty('--chart-green', C.green); root.setProperty('--chart-amber', C.amber);
+root.setProperty('--chart-pink', C.pink);
+// one-hue sequential ramp for the heatmap (light→dark cyan on dark surface)
+const HEAT = ['#123039', '#155a6d', '#0a83a3', '#28c3e6'];
+HEAT.forEach((h, i) => root.setProperty('--heat-' + (i + 1), h));
+
+const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const habitPct = [83, 67, 50, 83, 100, 67, 100];      // % of daily habits met
+const mood = [3.5, 2.5, 2.0, 4.0, 4.5, 4.0, 5.0];      // 0–5
+const tip = document.getElementById('tooltip');
+const showTip = (e, html) => { tip.innerHTML = html; tip.style.opacity = 1;
+  tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY - 10) + 'px'; };
+const hideTip = () => tip.style.opacity = 0;
+const NS = 'http://www.w3.org/2000/svg';
+const mk = (tag, attrs) => { const el = document.createElementNS(NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
+
+// ---------- dual-line (single 0–100 axis; mood rescaled, stated in the sub) ----------
+(function lineChart() {
+  const svg = document.getElementById('chart-line');
+  const W = 480, H = 220, P = { l: 34, r: 14, t: 14, b: 28 };
+  const x = i => P.l + i * (W - P.l - P.r) / (days.length - 1);
+  const y = v => P.t + (100 - v) * (H - P.t - P.b) / 100;
+  [0, 25, 50, 75, 100].forEach(g => {
+    svg.appendChild(mk('line', { class: 'grid-line', x1: P.l, x2: W - P.r, y1: y(g), y2: y(g) }));
+    svg.appendChild(mk('text', { class: 'axis-lbl', x: P.l - 6, y: y(g) + 3, 'text-anchor': 'end' })).textContent = g;
+  });
+  days.forEach((d, i) => svg.appendChild(mk('text', { class: 'axis-lbl', x: x(i), y: H - 8, 'text-anchor': 'middle' })).textContent = d);
+
+  const series = [
+    { data: habitPct.map((v, i) => [x(i), y(v)]), color: C.cyan, raw: habitPct, fmt: v => v + '%', label: 'Habits met' },
+    { data: mood.map((v, i) => [x(i), y(v / 5 * 100)]), color: C.purple, raw: mood, fmt: v => v.toFixed(1) + '/5', label: 'Mood' },
+  ];
+  series.forEach(s => {
+    const path = s.data.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    svg.appendChild(mk('path', { d: path, fill: 'none', stroke: s.color, 'stroke-width': 2,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+    s.data.forEach((p, i) => {
+      svg.appendChild(mk('circle', { cx: p[0], cy: p[1], r: 3.5, fill: s.color, stroke: 'var(--bg-card)', 'stroke-width': 2 }));
+    });
+  });
+  // hover crosshair per day
+  days.forEach((d, i) => {
+    const hit = mk('rect', { x: x(i) - 16, y: P.t, width: 32, height: H - P.t - P.b, fill: 'transparent' });
+    hit.addEventListener('mousemove', e => showTip(e,
+      `<b>${d}</b><br>Habits <b style="color:${C.cyan}">${habitPct[i]}%</b><br>Mood <b style="color:${C.purple}">${mood[i].toFixed(1)}/5</b>`));
+    hit.addEventListener('mouseleave', hideTip);
+    svg.appendChild(hit);
+  });
+})();
+
+// ---------- horizontal bars (sorted; direct value labels; 4px rounded ends) ----------
+(function barChart() {
+  const svg = document.getElementById('chart-bars');
+  const data = [['Housing', 1800, C.pink], ['Food', 412, C.amber], ['Transport', 180, C.purple],
+    ['Health', 95, C.green], ['Fun', 68, C.cyan]].sort((a, b) => b[1] - a[1]);
+  const W = 480, H = 220, P = { l: 76, r: 44, t: 8, b: 8 };
+  const max = Math.max(...data.map(d => d[1]));
+  const rowH = (H - P.t - P.b) / data.length;
+  data.forEach(([cat, val, color], i) => {
+    const cy = P.t + i * rowH + rowH / 2;
+    const bw = (val / max) * (W - P.l - P.r);
+    svg.appendChild(mk('text', { class: 'axis-lbl', x: P.l - 8, y: cy + 3, 'text-anchor': 'end', fill: 'var(--text-secondary)' })).textContent = cat;
+    const bar = mk('rect', { x: P.l, y: cy - 7, width: Math.max(bw, 2), height: 14, rx: 4, fill: color });
+    bar.addEventListener('mousemove', e => showTip(e, `<b>${cat}</b> · $${val.toLocaleString()}`));
+    bar.addEventListener('mouseleave', hideTip);
+    svg.appendChild(bar);
+    svg.appendChild(mk('text', { class: 'val-lbl', x: P.l + bw + 6, y: cy + 3 })).textContent = '$' + val.toLocaleString();
+  });
+})();
+
+// ---------- heatmap ----------
+(function heat() {
+  const svg = document.getElementById('chart-heat');
+  const habits = ['Workout', 'Read', 'Meditate', 'Journal', 'No socials'];
+  // completion 0..3 intensity per day
+  const grid = [
+    [3, 0, 0, 3, 3, 2, 3], [3, 3, 2, 3, 3, 3, 3], [2, 0, 0, 3, 3, 0, 3],
+    [3, 3, 3, 3, 3, 3, 3], [0, 0, 0, 2, 3, 0, 2],
+  ];
+  const W = 480, H = 200, P = { l: 72, t: 20, r: 8, b: 8 };
+  const cw = (W - P.l - P.r) / 7, ch = (H - P.t - P.b) / habits.length;
+  days.forEach((d, i) => svg.appendChild(mk('text', { class: 'axis-lbl', x: P.l + i * cw + cw / 2, y: 14, 'text-anchor': 'middle' })).textContent = d[0]);
+  habits.forEach((h, r) => {
+    svg.appendChild(mk('text', { class: 'axis-lbl', x: P.l - 8, y: P.t + r * ch + ch / 2 + 3, 'text-anchor': 'end', fill: 'var(--text-secondary)' })).textContent = h;
+    grid[r].forEach((v, c) => {
+      const cell = mk('rect', { class: 'heat-cell', x: P.l + c * cw + 2, y: P.t + r * ch + 2,
+        width: cw - 4, height: ch - 4, fill: v === 0 ? 'var(--bg-input)' : HEAT[v] });
+      cell.addEventListener('mousemove', e => showTip(e, `<b>${h}</b> · ${days[c]}<br>${v === 0 ? 'missed' : 'done'}`));
+      cell.addEventListener('mouseleave', hideTip);
+      svg.appendChild(cell);
+    });
+  });
+})();
+
+// ---------- carry-over list ----------
+(function carry() {
+  const items = [
+    ['☐', 'Update project roadmap', 'blocked 6d', 'var(--red)'],
+    ['☐', 'Renew car insurance', 'blocked 6d', 'var(--red)'],
+    ['☐', 'Book dentist appointment', 'overdue', 'var(--amber)'],
+    ['🔁', 'Meditation — rebuild streak', 'broke at 8🔥', 'var(--purple)'],
+    ['💧', 'Water: hit 8/8 only 2 days', 'goal 5+ days', 'var(--accent)'],
+  ];
+  document.getElementById('carry').innerHTML = items.map(([ico, txt, tag, col]) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <span>${ico}</span><span style="font-size:13px;flex:1">${txt}</span>
+      <span class="badge" style="color:${col};border:1px solid ${col};background:transparent;text-transform:none">${tag}</span>
+    </div>`).join('');
+})();
+</script>
+</body>
+</html>
