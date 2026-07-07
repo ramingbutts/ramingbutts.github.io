@@ -1259,9 +1259,15 @@ function loadCharacterModels() {
   }, undefined, () => console.info('Zombie model unavailable — primitive rigs stay on'));
 }
 
+// generated GLBs are the heaviest asset in the scene, so they only show when
+// the player asked for them AND the device can afford them — on the 'low'
+// auto-quality tier (weak hardware, sustained <45fps) we fall back to the
+// cheap primitive rigs, which is where the biggest perf win lives
+function modelsActive() { return Settings.models && activeTier() !== 'low'; }
+
 // live toggle between generated models and the classic primitive look
 function applyModelSetting() {
-  const on = Settings.models;
+  const on = modelsActive();
   if (Player.glbVisual) {
     Player.glbVisual.visible = on;
     Player.rig.visible = !on;
@@ -2389,6 +2395,7 @@ function applyQuality() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, q.dpr));
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  applyModelSetting(); // tier change may cross the models on/off threshold
 }
 function applySettings() {
   if (SFX.master) SFX.master.gain.value = 0.85 * Settings.volume / 100;
@@ -2718,7 +2725,8 @@ if (Settings.models) loadCharacterModels();
    ===================================================================== */
 // debug/testing hook (also handy in the console: UJ.Diag-style poking)
 window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTargets, CFG, Input, renderer, RPG, gainXP, toggleSkillPanel,
-  Settings, togglePause, applyQuality, activeTier,
+  Settings, togglePause, applyQuality, activeTier, modelsActive, applyModelSetting,
+  setAutoTier: (t) => { autoTier = t; applyQuality(); },
   getShard: () => shard,
   skipIntro: () => { introSkip = true; },
   getCombo: () => comboCount,
