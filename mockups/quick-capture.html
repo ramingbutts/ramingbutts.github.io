@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup · Quick Capture — Personal OS</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../css/styles.css">
+<style>
+  /* mockup-local styles — everything else comes from the real stylesheet */
+  body { overflow: auto; }
+  .mock-strip { position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
+    display: flex; gap: 14px; align-items: center; justify-content: center;
+    background: var(--bg-secondary); border-top: 1px solid var(--border);
+    padding: 8px 16px; font-size: 12px; color: var(--text-muted); }
+  .mock-strip a { color: var(--accent); text-decoration: none; }
+  .mock-strip .badge { text-transform: none; letter-spacing: 0; }
+
+  #app-lite { display: flex; height: calc(100vh - 37px); }
+  #side-lite { width: var(--sidebar-width); background: var(--bg-secondary);
+    border-right: 1px solid var(--border); padding: 18px 12px; flex-shrink: 0; }
+  #side-lite .logo { display: flex; gap: 8px; align-items: center; font-weight: 700;
+    padding: 0 8px 18px; }
+  #side-lite .logo span:first-child { color: var(--accent); }
+  .nav-lite { display: flex; flex-direction: column; gap: 2px; }
+  .nav-lite a { display: block; padding: 8px 10px; border-radius: var(--radius-sm);
+    color: var(--text-secondary); text-decoration: none; font-size: 13px; }
+  .nav-lite a.active { background: var(--accent-dim); color: var(--accent); }
+  #main-lite { flex: 1; overflow-y: auto; padding: 22px 26px 60px; }
+
+  .kbd { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--bg-input);
+    border: 1px solid var(--border-light); border-bottom-width: 2px; border-radius: 4px;
+    padding: 1px 6px; color: var(--text-secondary); }
+
+  /* ---- the palette ---- */
+  #pal-overlay { position: fixed; inset: 0; background: rgba(4,4,10,.72); z-index: 200;
+    display: none; align-items: flex-start; justify-content: center; padding-top: 12vh;
+    backdrop-filter: blur(2px); }
+  #pal-overlay.open { display: flex; }
+  #palette { width: min(640px, 92vw); background: var(--bg-card);
+    border: 1px solid var(--border-light); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow); overflow: hidden; }
+  #pal-input { width: 100%; background: transparent; border: none; outline: none;
+    color: var(--text); font: 500 16px 'Inter', sans-serif; padding: 16px 18px; }
+  #pal-parse { display: none; gap: 6px; padding: 0 16px 10px; flex-wrap: wrap; }
+  #pal-parse.on { display: flex; }
+  #pal-results { max-height: 46vh; overflow-y: auto; border-top: 1px solid var(--border); }
+  .pal-group { font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-muted); padding: 10px 18px 4px; }
+  .pal-item { display: flex; align-items: center; gap: 12px; padding: 9px 18px;
+    cursor: pointer; font-size: 13.5px; }
+  .pal-item .ico { width: 20px; text-align: center; flex-shrink: 0; }
+  .pal-item .meta { margin-left: auto; font-size: 11px; color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace; flex-shrink: 0; }
+  .pal-item.sel { background: var(--accent-dim); }
+  .pal-item.sel .go { color: var(--accent); }
+  .pal-item mark { background: none; color: var(--accent); }
+  #pal-foot { display: flex; gap: 16px; padding: 9px 18px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
+
+  #captured .card { margin-bottom: 8px; }
+  .cap-row { display: flex; align-items: center; gap: 10px; padding: 9px 0;
+    border-bottom: 1px solid var(--border); font-size: 13px; }
+  .cap-row .when { margin-left: auto; font-size: 11px; color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace; }
+  #toasts { position: fixed; top: 16px; right: 16px; z-index: 400;
+    display: flex; flex-direction: column; gap: 8px; }
+</style>
+</head>
+<body>
+
+<div id="app-lite">
+  <!-- slim stand-in for the real sidebar, so the palette is judged in context -->
+  <nav id="side-lite">
+    <div class="logo"><span>&#9670;</span><span>Personal OS</span></div>
+    <div class="nav-lite">
+      <a class="active">Dashboard</a><a>Task CRM</a><a>Finance Pulse</a><a>Habits</a>
+      <a>Nutrition</a><a>Calendar</a><a>Second Brain</a><a>Journal</a>
+    </div>
+  </nav>
+
+  <main id="main-lite">
+    <div class="section-header">
+      <span class="section-title" style="font-size:18px">Dashboard</span>
+      <button class="btn btn-primary btn-sm" id="open-pal-btn">Quick capture &nbsp;<span class="kbd" style="color:inherit;background:rgba(0,0,0,.25);border-color:rgba(255,255,255,.25)">Ctrl K</span></button>
+    </div>
+
+    <div class="section">
+      <div class="grid-4">
+        <div class="card glow"><div class="card-title">Net Worth</div><div class="card-value" style="margin-top:8px;color:var(--accent)">$125,000</div><div class="card-subtitle">savings rate 50.6%</div></div>
+        <div class="card"><div class="card-title">Tasks</div><div class="card-value" style="margin-top:8px" id="stat-tasks">2</div><div class="card-subtitle">in progress · <span id="stat-todo">3</span> todo</div></div>
+        <div class="card"><div class="card-title">Habits Today</div><div class="card-value" style="margin-top:8px">3/6</div><div class="progress-bar" style="margin-top:8px"><div class="progress-fill green" style="width:50%"></div></div></div>
+        <div class="card"><div class="card-title">Water</div><div class="card-value" style="margin-top:8px;color:var(--accent)"><span id="stat-water">4</span>/8</div><div class="card-subtitle">glasses today</div></div>
+      </div>
+    </div>
+
+    <div class="section" id="captured">
+      <div class="section-header"><span class="section-title">Captured just now</span>
+        <span style="font-size:12px;color:var(--text-muted)">everything below was added through the palette</span></div>
+      <div class="card"><div id="cap-list">
+        <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:13px">
+          Nothing yet — press <span class="kbd">Ctrl K</span> and type
+          <span class="kbd">t Pay rent !high @fri</span> or <span class="kbd">$ -4.50 coffee #Food</span>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title" style="margin-bottom:10px">What the palette understands</div>
+      <div class="grid-3">
+        <div class="card"><div class="card-title">Search</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-top:8px;line-height:1.7">
+            Type anything — fuzzy match across tasks, notes, journal entries, transactions,
+            events and habits, plus page navigation. <span class="kbd">↑</span> <span class="kbd">↓</span> then <span class="kbd">Enter</span>.</div></div>
+        <div class="card"><div class="card-title">Capture</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-top:8px;line-height:1.7;font-family:'JetBrains Mono',monospace;font-size:12px">
+            t task !high @fri #Work<br>$ -12.50 lunch #Food<br>j felt great :🚀<br>n note text<br>e 14:00 dentist<br>w &nbsp;(log a glass of water)</div></div>
+        <div class="card"><div class="card-title">Why it matters</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-top:8px;line-height:1.7">
+            Today an expense costs five clicks and a modal. One keystroke and one line
+            means data actually gets captured — and every module gets richer.</div></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ---- command palette ---- -->
+<div id="pal-overlay">
+  <div id="palette">
+    <input id="pal-input" placeholder="Search everything, or capture: t task · $ expense · j journal · n note · e event · w water" autocomplete="off">
+    <div id="pal-parse"></div>
+    <div id="pal-results"></div>
+    <div id="pal-foot">
+      <span><span class="kbd">↑↓</span> navigate</span><span><span class="kbd">Enter</span> select / capture</span>
+      <span><span class="kbd">Esc</span> close</span><span style="margin-left:auto">MOCKUP — nothing is saved</span>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<div class="mock-strip">
+  <span class="badge badge-amber">MOCKUP 1/3</span>
+  <span>Quick Capture &amp; Command Palette</span>
+  <a href="weekly-pulse.html">→ 2 · Weekly Pulse</a>
+  <a href="mobile-pwa.html">→ 3 · Mobile PWA</a>
+</div>
+
+<script>
+// ============ demo data (in-memory only — never touches os_* keys) ============
+const DB = {
+  tasks: [
+    { t: 'Connect Google Calendar', m: 'high · Integration' }, { t: 'Review weekly finances', m: 'medium · Finance' },
+    { t: 'Update project roadmap', m: 'medium · Work' }, { t: 'Meal prep planning', m: 'low · Health' },
+    { t: 'Renew car insurance', m: 'high · Admin' }, { t: 'Book dentist appointment', m: 'low · Health' },
+  ],
+  notes: [
+    { t: 'Q3 marketing ideas', m: 'Business' }, { t: 'Book notes: Deep Work', m: 'Learning' },
+    { t: 'Home renovation plan', m: 'Personal' }, { t: 'API design patterns', m: 'Projects' },
+  ],
+  journal: [
+    { t: 'Getting started', m: '🚀 Jul 1' }, { t: 'Rough Monday', m: '😕 Jun 30' }, { t: 'Big win at work', m: '😁 Jun 27' },
+  ],
+  txns: [
+    { t: 'Rent — $1,800', m: 'Housing' }, { t: 'Groceries — $320', m: 'Food' },
+    { t: 'Gym membership — $50', m: 'Health' }, { t: 'Salary deposit +$8,500', m: 'Income' },
+  ],
+  events: [
+    { t: 'Team standup 09:00', m: 'today' }, { t: 'Lunch with Alex 12:30', m: 'today' }, { t: 'Sprint review 14:00', m: 'tomorrow' },
+  ],
+  habits: [
+    { t: 'Morning workout', m: '5🔥' }, { t: 'Read 30 min', m: '12🔥' }, { t: 'Meditation', m: '8🔥' },
+  ],
+  nav: [
+    { t: 'Go to Finance Pulse', m: 'page' }, { t: 'Go to Task CRM', m: 'page' }, { t: 'Go to Journal', m: 'page' },
+    { t: 'Export backup (JSON)', m: 'action' }, { t: 'New task…', m: 'action' },
+  ],
+};
+const GROUPS = [['tasks','Tasks','☐'],['events','Calendar','🕒'],['habits','Habits','🔁'],
+  ['notes','Second Brain','🧠'],['journal','Journal','✍️'],['txns','Transactions','$'],['nav','Navigate','→']];
+
+// ============ palette machinery ============
+const overlay = document.getElementById('pal-overlay');
+const input = document.getElementById('pal-input');
+const resultsEl = document.getElementById('pal-results');
+const parseEl = document.getElementById('pal-parse');
+let items = [], sel = 0, waterCount = 4;
+
+const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+const toast = (msg, ok = true) => {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (ok ? 'success' : 'info');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+};
+
+function openPal() { overlay.classList.add('open'); input.value = ''; refresh(); input.focus(); }
+function closePal() { overlay.classList.remove('open'); }
+
+document.getElementById('open-pal-btn').onclick = openPal;
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); overlay.classList.contains('open') ? closePal() : openPal(); }
+  if (!overlay.classList.contains('open')) return;
+  if (e.key === 'Escape') closePal();
+  if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+  if (e.key === 'Enter') { e.preventDefault(); execute(); }
+});
+overlay.addEventListener('click', e => { if (e.target === overlay) closePal(); });
+input.addEventListener('input', refresh);
+
+function move(d) {
+  if (!items.length) return;
+  sel = (sel + d + items.length) % items.length;
+  paintSel();
+}
+function paintSel() {
+  resultsEl.querySelectorAll('.pal-item').forEach((el, i) => el.classList.toggle('sel', i === sel));
+  const s = resultsEl.querySelector('.pal-item.sel');
+  if (s) s.scrollIntoView({ block: 'nearest' });
+}
+
+// fuzzy: all query chars appear in order; highlight matched chars
+function fuzzy(q, str) {
+  q = q.toLowerCase(); const lower = str.toLowerCase();
+  let qi = 0; const hits = [];
+  for (let i = 0; i < lower.length && qi < q.length; i++) if (lower[i] === q[qi]) { hits.push(i); qi++; }
+  return qi === q.length ? hits : null;
+}
+const highlight = (str, hits) => str.split('').map((c, i) => hits.includes(i) ? `<mark>${esc(c)}</mark>` : esc(c)).join('');
+
+// ---- capture parsing ----
+const CAPTURE = {
+  t: q => { // task: title !priority @due #category
+    const pri = (q.match(/!(high|med(ium)?|low)/i) || [])[1];
+    const due = (q.match(/@(\S+)/) || [])[1];
+    const cat = (q.match(/#(\S+)/) || [])[1];
+    const title = q.replace(/!(high|med(ium)?|low)|@\S+|#\S+/gi, '').trim();
+    return { icon: '☐', kind: 'Task', title, chips: [
+      pri && ['badge-' + (pri[0] === 'h' ? 'red' : pri[0] === 'l' ? 'green' : 'amber'), '!' + pri],
+      due && ['badge-accent', '@' + due], cat && ['badge-purple', '#' + cat]].filter(Boolean) };
+  },
+  $: q => { // transaction: amount description #category
+    const amt = (q.match(/-?\d+(\.\d+)?/) || [])[0];
+    const cat = (q.match(/#(\S+)/) || [])[1];
+    const descr = q.replace(/-?\d+(\.\d+)?|#\S+/g, '').trim();
+    return { icon: '$', kind: 'Transaction', title: descr || '(description)', chips: [
+      amt && [Number(amt) >= 0 ? 'badge-green' : 'badge-red', (Number(amt) >= 0 ? '+$' : '−$') + Math.abs(amt)],
+      cat && ['badge-purple', '#' + cat]].filter(Boolean) };
+  },
+  j: q => { const mood = (q.match(/:(\S+)/) || [])[1];
+    return { icon: '✍️', kind: 'Journal', title: q.replace(/:(\S+)/, '').trim(), chips: [mood && ['badge-purple', mood]].filter(Boolean) }; },
+  n: q => ({ icon: '🧠', kind: 'Note', title: q.trim(), chips: [] }),
+  e: q => { const time = (q.match(/\b([01]?\d|2[0-3]):[0-5]\d\b/) || [])[0];
+    return { icon: '🕒', kind: 'Event', title: q.replace(/\b([01]?\d|2[0-3]):[0-5]\d\b/, '').trim(), chips: [time && ['badge-accent', time]].filter(Boolean) }; },
+  w: () => ({ icon: '💧', kind: 'Water', title: 'Log a glass of water', chips: [['badge-accent', (waterCount + 1) + '/8']] }),
+};
+
+function parseCapture(v) {
+  const m = v.match(/^([t$jnew])\s?(.*)$/i);
+  if (!m) return null;
+  const key = m[1].toLowerCase();
+  if (key === 'w' && m[2].trim() !== '' && m[2].trim() !== '+') return null; // 'w' alone (or w+) only
+  if (key !== 'w' && !m[0].includes(' ')) return null;                        // needs a space after the prefix
+  return { key, parsed: CAPTURE[key](m[2] || '') };
+}
+
+function refresh() {
+  const v = input.value;
+  sel = 0;
+  const cap = v && parseCapture(v);
+
+  // parse preview chips
+  parseEl.className = cap ? 'on' : '';
+  parseEl.id = 'pal-parse';
+  if (cap) {
+    parseEl.innerHTML = `<span class="badge badge-accent" style="text-transform:none">${cap.parsed.icon} New ${cap.parsed.kind}</span>` +
+      `<span style="font-size:13px;color:var(--text)">${esc(cap.parsed.title) || '<i style="color:var(--text-muted)">…</i>'}</span>` +
+      cap.parsed.chips.map(([cls, txt]) => `<span class="badge ${cls}" style="text-transform:none">${esc(txt)}</span>`).join('');
+  } else parseEl.innerHTML = '';
+
+  // result list
+  items = [];
+  let html = '';
+  if (cap) {
+    items.push({ type: 'capture', cap });
+    html += `<div class="pal-item sel"><span class="ico">${cap.parsed.icon}</span>
+      <span>Create ${cap.parsed.kind}: <b>${esc(cap.parsed.title) || '…'}</b></span>
+      <span class="meta go">Enter ↵</span></div>`;
+  } else {
+    for (const [key, label, ico] of GROUPS) {
+      const matches = DB[key]
+        .map(it => ({ it, hits: v ? fuzzy(v, it.t) : [] }))
+        .filter(x => x.hits !== null)
+        .slice(0, v ? 4 : (key === 'tasks' || key === 'nav' ? 3 : 0));
+      if (!matches.length) continue;
+      html += `<div class="pal-group">${label}</div>`;
+      for (const { it, hits } of matches) {
+        items.push({ type: 'open', label: it.t, kind: label });
+        html += `<div class="pal-item"><span class="ico">${ico}</span><span>${highlight(it.t, hits)}</span><span class="meta">${esc(it.m)}</span></div>`;
+      }
+    }
+    if (!items.length) html = `<div style="padding:22px;text-align:center;color:var(--text-muted);font-size:13px">No matches — try a capture prefix: <span class="kbd">t</span> <span class="kbd">$</span> <span class="kbd">j</span> <span class="kbd">n</span> <span class="kbd">e</span> <span class="kbd">w</span></div>`;
+  }
+  resultsEl.innerHTML = html;
+  resultsEl.querySelectorAll('.pal-item').forEach((el, i) => {
+    el.addEventListener('mouseenter', () => { sel = i; paintSel(); });
+    el.addEventListener('click', execute);
+  });
+  paintSel();
+}
+
+function execute() {
+  const item = items[sel];
+  if (!item) return;
+  if (item.type === 'open') {
+    toast(`Would open: ${item.label} (${item.kind})`, false);
+    closePal();
+    return;
+  }
+  const { cap } = item;
+  const list = document.getElementById('cap-list');
+  if (list.children.length === 1 && list.firstElementChild.style.textAlign) list.innerHTML = '';
+  const chips = cap.parsed.chips.map(([cls, txt]) => `<span class="badge ${cls}" style="text-transform:none">${esc(txt)}</span>`).join(' ');
+  list.insertAdjacentHTML('afterbegin',
+    `<div class="cap-row"><span>${cap.parsed.icon}</span><b style="font-weight:600">${esc(cap.parsed.kind)}</b>
+     <span>${esc(cap.parsed.title)}</span>${chips}<span class="when">just now</span></div>`);
+  if (cap.key === 'w') { waterCount = Math.min(waterCount + 1, 8); document.getElementById('stat-water').textContent = waterCount; }
+  if (cap.key === 't') document.getElementById('stat-todo').textContent = Number(document.getElementById('stat-todo').textContent) + 1;
+  toast(`${cap.parsed.kind} captured`);
+  input.value = '';
+  refresh();
+}
+</script>
+</body>
+</html>
