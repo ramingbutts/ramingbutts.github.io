@@ -268,6 +268,20 @@ either direction takes effect live. Verified by stubbing GLBs and stepping
 autoTier high→low→medium (models off at low, back on at medium, primitive
 rig visibility inverse throughout).
 
+## High-pressure jet + muzzle origin (iteration 15)
+
+The water now reads as a real power-washer jet: denser (N 900, spawnRate
+560), faster (`jetSpeed` 34), a tight 0.9 cone instead of a wide fan, and a
+flickering additive muzzle-burst sprite pinned to the barrel tip that fades
+the instant you release. The muzzle position is `Player.nozzle` — a
+model-aware offset that `applyModelSetting()` swaps between `NOZZLE_PRIMITIVE`
+(the short primitive nozzle, fwd 0.6) and `NOZZLE_GUN` (the long GLB
+power-washer barrel, fwd 1.55 / up 1.32 / right 0.32 toward the gun hand),
+so the stream leaves whichever weapon is actually shown. `nozzleWorldPos()`
+adds the lateral component via `forward × up`. Because this rides on
+`modelsActive()`, a low-tier device using the primitive rig also uses the
+short nozzle — consistent by construction.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
