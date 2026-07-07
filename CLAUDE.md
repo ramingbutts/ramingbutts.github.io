@@ -76,6 +76,26 @@ reference (`docs/`), adapted to this repo. They govern how Claude Code works
   with the user's actual goal in mind, instead of just executing a request that
   conflicts with the project's North Star.
 
+Before ending any turn, run the five-question self-test from
+`docs/opus-4.8-operating-manual.md`. Unlike the archived system prompt noted
+under Reference material, the manual is operative guidance here and worth
+reading in full; the self-test is its enforcement mechanism. Any "no" sends
+you back into the work, not into rewording:
+
+1. **Need.** Does my first sentence give the user the thing they actually came
+   for — the goal, not just the instrument they named?
+2. **Highest stake.** Which single claim in this answer costs the most if it's
+   wrong, and what did I do *in this session* — not in memory — to check that
+   one?
+3. **Provenance.** For each load-bearing claim, can I say whether it's
+   observed, derived, recalled, or assumed — and does the answer say so
+   wherever the reader might act on it?
+4. **Attack.** What is the strongest case that I'm wrong, and did I go look
+   for it, or did I merely fail to imagine it?
+5. **Honest surface.** If anything failed, got skipped, or remains unverified,
+   does the answer say so plainly — or does it read smoother than the work
+   actually was?
+
 ## Testing
 
 No automated tests or build. Verify by opening `index.html` in a browser (or a
