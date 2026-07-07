@@ -255,6 +255,19 @@ the striped overlay horn is suppressed on the GLB path.
 Model job IDs: images bbc810cb / abd19a8d, GLBs 5ffa09a6 (Jax),
 79d718b2 (zombie) — re-fetch URLs via job_display if the CDN links rot.
 
+## Models scale with the quality tier (iteration 14)
+
+The generated GLBs are the heaviest asset in the scene, so `modelsActive()`
+gates them on `Settings.models && activeTier() !== 'low'` — when the
+rolling-fps monitor drops Auto to 'low' on weak hardware, the characters
+fall back to the cheap primitive rigs (which are still present as invisible
+colliders), completing the auto-quality story: bloom, shadows, pixel ratio
+AND the models all scale down together. `applyQuality()` calls
+`applyModelSetting()` on every tier change so crossing the threshold in
+either direction takes effect live. Verified by stubbing GLBs and stepping
+autoTier high→low→medium (models off at low, back on at medium, primitive
+rig visibility inverse throughout).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
