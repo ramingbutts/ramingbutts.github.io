@@ -14,7 +14,7 @@ const CFG = {
   fogDensity: 0.030,
   fogColor: 0x9db3c6,
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
-  hose:   { range: 20, dps: 65, spawnRate: 320 },   // particles/sec while spraying
+  hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34 }, // dense high-pressure jet
   beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
   zombie: { count: 9, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 2.9,
             lungeSpeed: 11, lungeTime: 0.35, windup: 0.55, recover: 0.9,
@@ -1272,6 +1272,9 @@ function applyModelSetting() {
     Player.glbVisual.visible = on;
     Player.rig.visible = !on;
     if (Player.hasHorn) { Player.horn.visible = !on; Player.hornRing.visible = !on; }
+    // GLB Jax carries the long power-washer → water leaves the barrel tip;
+    // primitive Jax uses his short nozzle
+    Player.nozzle = on ? NOZZLE_GUN : NOZZLE_PRIMITIVE;
   }
   for (const z of zombies) {
     if (!z.alive) continue;
@@ -1494,7 +1497,11 @@ const Player = {
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
   hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
+  // muzzle offset from the player origin; swapped for the long GLB gun below
+  nozzle: { up: 1.5, fwd: 0.6, right: 0 },
 };
+const NOZZLE_PRIMITIVE = { up: 1.5, fwd: 0.6, right: 0 };
+const NOZZLE_GUN = { up: 1.32, fwd: 1.55, right: 0.32 }; // tip of the power-washer
 
 function buildPlayer() {
   const g = Player.group = new THREE.Group();
@@ -1885,7 +1892,7 @@ function updateSplashes(dt) {
 }
 
 const raycaster = new THREE.Raycaster();
-const HoseFX = { N: 500, idx: 0, pos: null, vel: [], life: [], points: null };
+const HoseFX = { N: 900, idx: 0, pos: null, vel: [], life: [], points: null, muzzle: null };
 
 function buildHose() {
   HoseFX.pos = new Float32Array(HoseFX.N * 3).fill(-1000);
@@ -1893,14 +1900,25 @@ function buildHose() {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(HoseFX.pos, 3));
   HoseFX.points = new THREE.Points(geo, new THREE.PointsMaterial({
-    map: GLOW_TEX, color: 0x9fdcff, size: 0.22, transparent: true, opacity: 0.85,
+    map: GLOW_TEX, color: 0xbfe8ff, size: 0.24, transparent: true, opacity: 0.9,
     blending: THREE.AdditiveBlending, depthWrite: false }));
   HoseFX.points.frustumCulled = false;
   scene.add(HoseFX.points);
+  // muzzle burst: a bright puff at the barrel tip that pulses while firing
+  HoseFX.muzzle = glowSprite(0xdff4ff, 0.7, 0);
+  HoseFX.muzzle.frustumCulled = false;
+  scene.add(HoseFX.muzzle);
 }
 
+// where the water leaves the weapon. The GLB Jax holds a long power-washer
+// gun out front, so the muzzle sits further forward and toward his gun hand;
+// the primitive rig's little nozzle stays close. applyModelSetting() flips it.
+const _nozRight = new THREE.Vector3();
 function nozzleWorldPos(out) {
-  return out.copy(Player.pos).add(new THREE.Vector3(0, 1.5, 0)).addScaledVector(Player.forward, 0.6);
+  const n = Player.nozzle;
+  out.copy(Player.pos).add(_nozRight.set(0, n.up, 0)).addScaledVector(Player.forward, n.fwd);
+  _nozRight.crossVectors(Player.forward, THREE.Object3D.DEFAULT_UP).normalize();
+  return out.addScaledVector(_nozRight, n.right);
 }
 
 let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0, hitPulse = 0;
@@ -1927,16 +1945,24 @@ function updateHose(dt) {
     sprayHeldTime += dt;
     if (sprayHeldTime > 0.4) Tutorial.fire('firstSpray');
 
-    // spawn spray particles from the nozzle along the aim
+    // spawn spray particles from the muzzle along the aim — a tight, fast,
+    // dense cone that reads as a high-pressure jet
     const nozzle = nozzleWorldPos(_v1);
+    HoseFX.muzzle.position.copy(nozzle);
+    HoseFX.muzzle.material.opacity = 0.5 + 0.4 * Math.random(); // flicker at the barrel
+    HoseFX.muzzle.scale.setScalar(0.6 + 0.25 * Math.random());
     sprayAccum += CFG.hose.spawnRate * dt;
     while (sprayAccum >= 1) {
       sprayAccum -= 1;
       const i = HoseFX.idx = (HoseFX.idx + 1) % HoseFX.N;
-      HoseFX.pos[i * 3] = nozzle.x; HoseFX.pos[i * 3 + 1] = nozzle.y; HoseFX.pos[i * 3 + 2] = nozzle.z;
-      HoseFX.vel[i].copy(Player.aim).multiplyScalar(22)
-        .add(_v2.set((Math.random() - 0.5) * 2.4, Math.random() * 1.6, (Math.random() - 0.5) * 2.4));
-      HoseFX.life[i] = 0.55;
+      // start just ahead of the muzzle so the stream reads as continuous
+      HoseFX.pos[i * 3] = nozzle.x + Player.aim.x * 0.2;
+      HoseFX.pos[i * 3 + 1] = nozzle.y + Player.aim.y * 0.2;
+      HoseFX.pos[i * 3 + 2] = nozzle.z + Player.aim.z * 0.2;
+      const spread = 0.9; // tight cone → high pressure
+      HoseFX.vel[i].copy(Player.aim).multiplyScalar(CFG.hose.jetSpeed)
+        .add(_v2.set((Math.random() - 0.5) * spread, (Math.random() - 0.4) * spread, (Math.random() - 0.5) * spread));
+      HoseFX.life[i] = 0.6;
     }
 
     // the actual cleaning: ray from the camera through the crosshair
@@ -1959,6 +1985,8 @@ function updateHose(dt) {
         spawnSplash(_v2.copy(camera.position).addScaledVector(Player.aim, tGround));
       }
     }
+  } else if (HoseFX.muzzle) {
+    HoseFX.muzzle.material.opacity = 0; // no jet, no muzzle glow
   }
 
   // advance all particles
