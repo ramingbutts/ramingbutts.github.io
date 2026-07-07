@@ -635,11 +635,26 @@ function buildBridge() {
     grp.add(b);
   });
 
-  // ocean far below (mostly hidden by fog, sells the height)
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(600, 600),
-    new THREE.MeshBasicMaterial({ color: 0x3d5a6b }));
-  sea.rotation.x = -Math.PI / 2; sea.position.y = -60;
-  grp.add(sea);
+  // ocean far below (mostly hidden by fog, sells the height) — a low-poly
+  // grid whose verts rise and fall so the water breathes instead of sitting flat
+  const seaGeo = new THREE.PlaneGeometry(600, 600, 40, 40);
+  seaMesh = new THREE.Mesh(seaGeo,
+    new THREE.MeshStandardMaterial({ color: 0x3d5a6b, roughness: 0.35, metalness: 0.25,
+      flatShading: true }));
+  seaMesh.rotation.x = -Math.PI / 2; seaMesh.position.y = -60;
+  seaBaseZ = Float32Array.from(seaGeo.attributes.position.array); // rest positions
+  grp.add(seaMesh);
+
+  // gradient sky dome behind the fog — warm at the horizon, cool overhead;
+  // rendered on the inside of a big sphere, unaffected by scene fog
+  const skyGeo = new THREE.SphereGeometry(260, 24, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, fog: false, depthWrite: false,
+    uniforms: { top: { value: new THREE.Color(0x8fa7c4) }, bot: { value: new THREE.Color(0xd9c9b0) } },
+    vertexShader: 'varying float vh; void main(){ vh = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'varying float vh; uniform vec3 top; uniform vec3 bot; void main(){ gl_FragColor = vec4(mix(bot, top, smoothstep(-0.1, 0.55, vh)), 1.0); }',
+  });
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
 
   // a soft sun disc burning through the fog (unaffected by scene fog)
   const sunGlow = glowSprite(0xfff3da, 70, 0.5);
@@ -648,6 +663,46 @@ function buildBridge() {
   grp.add(sunGlow);
 
   scene.add(grp);
+}
+
+// --- animated ocean + circling seagulls, both cheap ambient life ---
+let seaMesh, seaBaseZ;
+function updateOcean(t) {
+  if (!seaMesh || Settings.reduceMotion) return;
+  const p = seaMesh.geometry.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = seaBaseZ[i * 3], y = seaBaseZ[i * 3 + 1];
+    p.array[i * 3 + 2] = Math.sin(x * 0.05 + t * 0.7) * 1.6 + Math.cos(y * 0.06 + t * 0.5) * 1.4;
+  }
+  p.needsUpdate = true;
+  seaMesh.geometry.computeVertexNormals();
+}
+
+const gulls = [];
+function buildGulls() {
+  const gullMat = new THREE.MeshBasicMaterial({ color: 0xf4f4ee, fog: true });
+  for (let i = 0; i < 5; i++) {
+    // a simple V — two angled wing quads — is all a distant gull needs
+    const g = new THREE.Group();
+    for (const s of [-1, 1]) {
+      const wing = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.22), gullMat);
+      wing.position.x = s * 0.42; wing.rotation.z = s * 0.5; wing.rotation.y = s * 0.3;
+      g.add(wing);
+    }
+    g.userData = { r: 22 + Math.random() * 26, cy: 30 + Math.random() * 22,
+      cz: -40 - Math.random() * 90, sp: 0.15 + Math.random() * 0.2, ph: Math.random() * 6.28,
+      wings: g.children };
+    scene.add(g); gulls.push(g);
+  }
+}
+function updateGulls(t) {
+  for (const g of gulls) {
+    const u = g.userData, a = t * u.sp + u.ph;
+    g.position.set(Math.cos(a) * u.r, u.cy + Math.sin(a * 2) * 2, u.cz + Math.sin(a) * u.r);
+    g.rotation.y = -a + Math.PI / 2;
+    const flap = Math.sin(t * 6 + u.ph) * 0.4;               // slow wing-beat
+    u.wings[0].rotation.z = 0.5 + flap; u.wings[1].rotation.z = -0.5 - flap;
+  }
 }
 
 /* =====================================================================
@@ -846,7 +901,25 @@ class PoopPile {
     gainXP(25, this.group.position);
     Tutorial.fire('pileCleaned');
     updateObjectiveHUD();
+    maybeTriggerClimax();
     checkWin();
+  }
+}
+
+// design doc "Bridge Escape": once 80% of piles are clean, every remaining
+// zombie aggros at once for a minor climax before the level ends
+let climaxFired = false;
+function maybeTriggerClimax() {
+  if (climaxFired || Game.totalPiles === 0) return;
+  if (Game.pilesCleaned / Game.totalPiles < 0.8) return;
+  climaxFired = true;
+  let woken = 0;
+  for (const z of zombies) if (z.alive && z.state !== 'stunned') { z.setState('chase'); woken++; }
+  if (woken > 0) {
+    showToast('🌉 BRIDGE ESCAPE! Every zombie has your scent — clear them out!');
+    narrate('The horde has your scent. Clear the bridge, janitor!', 0.6);
+    SFX.setMusicMood('hero');
+    Player.shake = Math.max(Player.shake, 0.25);
   }
 }
 
@@ -1609,7 +1682,9 @@ function updatePlayer(dt, t) {
 
   // body faces where the camera faces; bob a little when running
   Player.group.rotation.y = Player.yaw;
-  Player.group.position.y = Player.pos.y + (moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : 0);
+  // running bob, or a slow idle-breathing rise when standing still
+  const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
+  Player.group.position.y = Player.pos.y + bob;
 
   // run cycle: legs and arms counter-swing while moving, relax when idle
   const swing = (moving && Player.onGround) ? Math.sin(t * 10) : 0;
@@ -2196,7 +2271,9 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false };
+let fpsAccum = 0, fpsCount = 0;
+const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
 function saveSettings() { try { localStorage.setItem('uj_settings', JSON.stringify(Settings)); } catch (e) {} }
 
@@ -2235,6 +2312,8 @@ function refreshSettingsUI() {
   document.getElementById('setQuality').textContent =
     Settings.quality.toUpperCase() + (Settings.quality === 'auto' ? ' · ' + autoTier.toUpperCase() : '');
   document.getElementById('setMotion').textContent = Settings.reduceMotion ? 'ON' : 'OFF';
+  document.getElementById('setFps').textContent = Settings.showFps ? 'ON' : 'OFF';
+  fpsEl.style.display = Settings.showFps ? 'block' : 'none';
 }
 
 // rolling-fps monitor: three bad seconds on Auto steps the tier down
@@ -2404,10 +2483,23 @@ function checkWin() {
       localStorage.setItem('uj_l1_best', best);
       bestTxt = ` · Best: ${fmt(best)}${secs <= prev ? ' — NEW RECORD!' : ''}`;
     } catch (e) { /* private mode: no persistence */ }
+    // performance rank: secondary objectives + speed + survival earn an S–C
+    const objs = [Game.zombiesDefeated >= 5, Game.civSaved >= Game.civTotal, Game.shardFound];
+    let score = objs.filter(Boolean).length * 2;           // up to 6 for objectives
+    if (Player.hp >= 90) score += 2; else if (Player.hp >= 50) score += 1; // survival
+    if (secs <= 240) score += 2; else if (secs <= 360) score += 1;         // speed
+    const rank = score >= 9 ? 'S' : score >= 7 ? 'A' : score >= 4 ? 'B' : 'C';
+    const rankColor = { S: '#ffd94f', A: '#5fffb0', B: '#5fc8ff', C: '#c58fff' }[rank];
+    try {
+      const prevRank = localStorage.getItem('uj_l1_rank') || 'C';
+      if ('SABC'.indexOf(rank) <= 'SABC'.indexOf(prevRank)) localStorage.setItem('uj_l1_rank', rank);
+    } catch (e) {}
+    document.getElementById('winRank').innerHTML =
+      `<span style="color:${rankColor}">RANK ${rank}</span>`;
     document.getElementById('winStats').textContent =
       `Cleared in ${fmt(secs)} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP${bestTxt}`;
     document.getElementById('winObjectives').innerHTML = [
-      ['Cleaned every poop pile (80% bonus met)', true],
+      ['Cleaned every poop pile', true],
       [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
       [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
       ['Meteor Shard Fragment found', Game.shardFound],
@@ -2433,6 +2525,7 @@ function gameOver() {
    ===================================================================== */
 function buildLevel() {
   buildBridge();
+  buildGulls();
   buildCrater();
   buildFogParticles();
   buildPlayer();
@@ -2507,6 +2600,9 @@ document.getElementById('setQuality').addEventListener('click', () => {
 document.getElementById('setMotion').addEventListener('click', () => {
   Settings.reduceMotion = !Settings.reduceMotion; saveSettings(); refreshSettingsUI();
 });
+document.getElementById('setFps').addEventListener('click', () => {
+  Settings.showFps = !Settings.showFps; saveSettings(); refreshSettingsUI();
+});
 refreshSettingsUI();
 applyQuality();
 // clicking back into the game re-locks the pointer on desktop
@@ -2544,8 +2640,19 @@ function tick() {
 
   updateCrater(dt, t);
   updateFogParticles(dt, t);
+  updateOcean(t);
+  updateGulls(t);
   updateGlitter(dt);
   updateSplashes(dt);
+
+  // optional FPS readout (settings toggle) — helps real-device playtesting
+  if (Settings.showFps) {
+    fpsAccum += rawDt; fpsCount++;
+    if (fpsAccum >= 0.5) {
+      fpsEl.textContent = Math.round(fpsCount / fpsAccum) + ' FPS · ' + activeTier().toUpperCase();
+      fpsAccum = 0; fpsCount = 0;
+    }
+  }
   // living emissives: pile glow breathes with its remaining dirt
   for (let i = 0; i < piles.length; i++) {
     const p = piles[i];

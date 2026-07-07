@@ -175,6 +175,7 @@
   <div id="tutorial"></div>
   <div id="toastMsg"></div>
   <div id="dmgFlash"></div>
+  <div id="fpsMeter" style="position:absolute; left:50%; bottom:8px; transform:translateX(-50%); display:none; color:#9fffcf; font-size:12px; font-family:monospace; text-shadow:0 1px 3px #000; letter-spacing:1px;"></div>
   <div id="resumeHint" class="hidden">Click to resume</div>
 </div>
 <div id="cineTop"></div><div id="cineBot"></div>
@@ -194,7 +195,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 11</div>
+  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 12</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -206,6 +207,7 @@
 
 <div id="winOverlay" class="overlay hidden">
   <h1>FIRST POOPOCALYPSE VICTORY!</h1>
+  <div id="winRank" style="font-size:clamp(30px,7vw,58px); font-weight:800; letter-spacing:3px; margin:2px 0 8px; text-shadow:0 0 22px currentColor;"></div>
   <h2>The bridge sparkles again. Hose &amp; Magic Beam fully unlocked!</h2>
   <div class="stats" id="winStats"></div>
   <div class="stats" id="winObjectives" style="text-align:left; line-height:2; margin-top:10px;"></div>
@@ -228,6 +230,7 @@
   <div class="setRow"><span>NARRATION</span><button class="tog" id="setVoice">ON</button></div>
   <div class="setRow"><span>QUALITY</span><button class="tog" id="setQuality">AUTO</button></div>
   <div class="setRow"><span>REDUCE MOTION</span><button class="tog" id="setMotion">OFF</button></div>
+  <div class="setRow"><span>FPS COUNTER</span><button class="tog" id="setFps">OFF</button></div>
   <button id="pauseResume" style="margin-top:20px;">RESUME</button>
   <button id="pauseRestart" style="margin-top:10px; font-size:14px; padding:9px 24px; background:rgba(255,255,255,.14); color:#fff; box-shadow:none; animation:none;">RESTART LEVEL</button>
 </div>

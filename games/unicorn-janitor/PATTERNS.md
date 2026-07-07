@@ -216,6 +216,23 @@ a 'stunned' FSM state with a dizzy-stars sprite; this is the player's
 defensive verb per the design doc. Objective counters pop (CSS class
 re-trigger via `void el.offsetWidth`) when values change.
 
+## Living world + climax + rank (iteration 12)
+
+Ambient life, all cheap and reduce-motion-aware: the ocean is a 40×40 plane
+whose verts ride two sine waves with `computeVertexNormals()` each frame
+(cache rest positions in a Float32Array); a `ShaderMaterial` BackSide sphere
+gives a horizon→zenith sky gradient (`fog:false`, `depthWrite:false`); five
+seagull V-meshes orbit the towers with a flap cycle; Jax breathes (slow
+y-sine) when idle. Design-doc "Bridge Escape" climax: `maybeTriggerClimax()`
+fires once at 80% piles cleaned — every non-stunned zombie force-chases, with
+a toast, hero-music swap, and a shake. Win rank: 0–10 score from secondary
+objectives (2 each) + survival (HP≥90→2, ≥50→1) + speed (≤240s→2, ≤360s→1)
+maps to S/A/B/C, shown in a glowing colored grade above the checklist, best
+persisted in `localStorage('uj_l1_rank')`. FPS counter is a settings toggle
+(`Settings.showFps`) reading real unclamped dt — for real-device playtests it
+shows "N FPS · TIER". The find-mesh-by-vertex-count trick (`position.count
+=== 1681`) is how tests reach un-exported meshes.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
