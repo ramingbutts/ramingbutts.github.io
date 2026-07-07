@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /* =====================================================================
    0. CONFIG — one place to tune the whole level
@@ -1057,8 +1058,25 @@ class Zombie {
     this.stunStars.position.y = 2.55;
     g.add(this.stunStars);
 
+    // partition: primitive cosmetics into a rig subgroup (hidden when the
+    // generated GLB loads — they stay forever as invisible hitboxes);
+    // gameplay overlays (drips, sparkle, stars) stay at group level
+    const keep = new Set([...this.gooBlobs, this.sparkle, this.stunStars]);
+    this.rig = new THREE.Group();
+    for (const child of [...g.children]) if (!keep.has(child)) this.rig.add(child);
+    g.add(this.rig);
+
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
     scene.add(g);
+    this.applyModel(); // if the GLB prototype is already loaded, wear it now
+  }
+
+  applyModel() {
+    if (!zombieProto || this.glb || !this.alive || !Settings.models) return;
+    this.glb = normalizeModel(zombieProto.scene.clone(true), zombieProto.spec);
+    this.glb.traverse(o => { if (o.isMesh) o.userData.entity = this; });
+    this.group.add(this.glb);
+    this.rig.visible = false;
   }
 
   stun(dur) { // design doc: the Magic Beam stuns as well as cleans
@@ -1191,6 +1209,68 @@ class Zombie {
     this.eyeMat.emissiveIntensity = this.state === 'chase' || this.state === 'windup' || this.state === 'lunge'
       ? 1.6 + 0.5 * Math.sin(t * 12)
       : 0.8 + 0.2 * Math.sin(t * 4);
+  }
+}
+
+/* =====================================================================
+   9.4 GENERATED CHARACTER MODELS — textured GLB meshes generated from
+   the concept art (image → 3D). They stream in from the media CDN at
+   runtime; if the fetch fails the primitive rigs simply stay visible,
+   and either way the primitives remain as invisible collision proxies.
+   ===================================================================== */
+const MODELS = {
+  jax: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/fe7f128e-eb80-4109-ac5a-fa8c7d67e077.glb',
+    height: 2.05, rotY: 0 },
+  zombie: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
+    height: 1.95, rotY: 0 },
+};
+let zombieProto = null, modelsLoadStarted = false;
+const gltfLoader = new GLTFLoader();
+
+// scale to a target height, center on the origin, plant feet at y = 0
+function normalizeModel(sceneRoot, spec) {
+  const wrap = new THREE.Group();
+  wrap.add(sceneRoot);
+  const box = new THREE.Box3().setFromObject(sceneRoot);
+  const size = box.getSize(new THREE.Vector3());
+  sceneRoot.scale.setScalar(spec.height / Math.max(size.y, 0.001));
+  const box2 = new THREE.Box3().setFromObject(sceneRoot);
+  sceneRoot.position.x -= (box2.min.x + box2.max.x) / 2;
+  sceneRoot.position.z -= (box2.min.z + box2.max.z) / 2;
+  sceneRoot.position.y -= box2.min.y;
+  wrap.rotation.y = spec.rotY;
+  wrap.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return wrap;
+}
+
+function loadCharacterModels() {
+  if (modelsLoadStarted || MODELS.jax.url.startsWith('MODEL_URL')) return;
+  modelsLoadStarted = true;
+  gltfLoader.load(MODELS.jax.url, gltf => {
+    Player.glbVisual = normalizeModel(gltf.scene, MODELS.jax);
+    Player.group.add(Player.glbVisual);
+    if (Player.hasHorn) { Player.horn.visible = false; Player.hornRing.visible = false; }
+    applyModelSetting();
+  }, undefined, () => console.info('Jax model unavailable — primitive rig stays on'));
+  gltfLoader.load(MODELS.zombie.url, gltf => {
+    zombieProto = { scene: gltf.scene, spec: MODELS.zombie };
+    for (const z of zombies) if (z.alive) z.applyModel();
+    applyModelSetting();
+  }, undefined, () => console.info('Zombie model unavailable — primitive rigs stay on'));
+}
+
+// live toggle between generated models and the classic primitive look
+function applyModelSetting() {
+  const on = Settings.models;
+  if (Player.glbVisual) {
+    Player.glbVisual.visible = on;
+    Player.rig.visible = !on;
+    if (Player.hasHorn) { Player.horn.visible = !on; Player.hornRing.visible = !on; }
+  }
+  for (const z of zombies) {
+    if (!z.alive) continue;
+    if (on && !z.glb) z.applyModel();
+    if (z.glb) { z.glb.visible = on; z.rig.visible = !on; }
   }
 }
 
@@ -1605,6 +1685,13 @@ function buildPlayer() {
   Player.hornLight.position.set(0, 2.5, 0.2);
   g.add(Player.hornLight);
 
+  // partition: primitive cosmetics into a rig subgroup (hidden when the
+  // generated GLB loads); the weapon and horn overlays stay on top of it
+  const keep = new Set([Player.horn, Player.hornRing, Player.hornGlow, Player.hornLight, nozzle, tip, hose]);
+  Player.rig = new THREE.Group();
+  for (const child of [...g.children]) if (!keep.has(child)) Player.rig.add(child);
+  g.add(Player.rig);
+
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   scene.add(g);
 }
@@ -1720,8 +1807,12 @@ function updatePlayer(dt, t) {
     hornPickup.position.y = 1.3 + Math.sin(t * 2.5) * 0.25;
     if (Player.pos.distanceTo(hornPickup.position) < 2.4) {
       Player.hasHorn = true;
-      Player.horn.visible = true;
-      Player.hornRing.visible = true;
+      // GLB Jax has the horn baked in (dormant until now) — the striped
+      // overlay horn is only for the primitive rig
+      if (!Player.glbVisual || !Settings.models) {
+        Player.horn.visible = true;
+        Player.hornRing.visible = true;
+      }
       Player.hornGlow.visible = true;
       Player.hornLight.intensity = 3;
       scene.remove(hornPickup); hornPickup = null;
@@ -2271,7 +2362,7 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true };
 let fpsAccum = 0, fpsCount = 0;
 const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
@@ -2313,6 +2404,7 @@ function refreshSettingsUI() {
     Settings.quality.toUpperCase() + (Settings.quality === 'auto' ? ' · ' + autoTier.toUpperCase() : '');
   document.getElementById('setMotion').textContent = Settings.reduceMotion ? 'ON' : 'OFF';
   document.getElementById('setFps').textContent = Settings.showFps ? 'ON' : 'OFF';
+  document.getElementById('setModels').textContent = Settings.models ? '3D' : 'CLASSIC';
   fpsEl.style.display = Settings.showFps ? 'block' : 'none';
 }
 
@@ -2603,6 +2695,13 @@ document.getElementById('setMotion').addEventListener('click', () => {
 document.getElementById('setFps').addEventListener('click', () => {
   Settings.showFps = !Settings.showFps; saveSettings(); refreshSettingsUI();
 });
+document.getElementById('setModels').addEventListener('click', () => {
+  Settings.models = !Settings.models;
+  saveSettings();
+  if (Settings.models) loadCharacterModels();
+  applyModelSetting();
+  refreshSettingsUI();
+});
 refreshSettingsUI();
 applyQuality();
 // clicking back into the game re-locks the pointer on desktop
@@ -2612,6 +2711,7 @@ canvas.addEventListener('click', () => {
 
 if (IS_TOUCH) setupTouch();
 buildLevel();
+if (Settings.models) loadCharacterModels();
 
 /* =====================================================================
    16. MAIN LOOP

@@ -233,6 +233,28 @@ persisted in `localStorage('uj_l1_rank')`. FPS counter is a settings toggle
 shows "N FPS · TIER". The find-mesh-by-vertex-count trick (`position.count
 === 1681`) is how tests reach un-exported meshes.
 
+## Generated character models (iteration 13)
+
+Pipeline: text→image (nano_banana_pro, full-body A-pose, plain grey
+background, "no props no text") → image→3D (`image_to_3d`,
+`should_texture: true` — the default is UNtextured; always set it) →
+textured GLB on the media CDN. Integration pattern: the primitive
+character rigs are partitioned into a `rig` subgroup at the end of each
+constructor (a `keep` Set holds gameplay overlays — horn, weapon, drips,
+sparkles — at group level); when the GLB streams in, `normalizeModel()`
+wraps it, scales to a target height, centers it, plants feet at y=0, and
+the rig turns invisible but REMAINS as the collision proxy (raycasts
+against the `cleanTargets` array hit invisible meshes — tuned hitboxes
+survive any visual swap). Zombies clone one prototype scene (static
+meshes share geometry). Loads that fail fall back to primitives silently;
+a CHARACTERS 3D/CLASSIC settings toggle switches live. Known constraints:
+the sandbox proxy can't reach the CDN so GLB rendering is verified only
+on real clients; `rotY` in the `MODELS` spec is the facing fix-up if a
+generated mesh faces backwards; the GLB Jax has the horn baked in, so
+the striped overlay horn is suppressed on the GLB path.
+Model job IDs: images bbc810cb / abd19a8d, GLBs 5ffa09a6 (Jax),
+79d718b2 (zombie) — re-fetch URLs via job_display if the CDN links rot.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
