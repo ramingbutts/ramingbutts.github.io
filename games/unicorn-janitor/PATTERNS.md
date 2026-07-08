@@ -312,6 +312,16 @@ gives fwd 1.35 facing forward, 0.35 flipped 180°, 0.4 at 90°). The manual
 correct for any future character model. No-ops safely on the primitive path
 (no localBox).
 
+## High-pressure knockback (iteration 21)
+
+The hose now shoves zombies: while a zombie is being sprayed, `Zombie.push(dt)`
+slides it directly away from the player at `CFG.zombie.knockback` (3.6 m/s) —
+faster than its 2.9 m/s chase, so a hosed zombie nets backward — with a brief
+lean-back, clamped to the deck. A committed lunge resists (early-return on
+`state === 'lunge'`) so the shove is crowd-control, not an i-win button. This
+is the "cleaning as combat" payoff of the high-pressure fantasy and is
+model-independent (works on GLB and primitive Jax alike).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

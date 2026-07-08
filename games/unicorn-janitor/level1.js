@@ -18,7 +18,7 @@ const CFG = {
   beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
   zombie: { count: 9, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 2.9,
             lungeSpeed: 11, lungeTime: 0.35, windup: 0.55, recover: 0.9,
-            hitRange: 1.5, damage: 12, goo: 100 },
+            hitRange: 1.5, damage: 12, goo: 100, knockback: 3.6 }, // high-pressure shove
   pile:   { dirt: 100 },
 };
 
@@ -943,7 +943,7 @@ function removeCleanTargets(group) {
       FSM: wander -> chase -> windup -> lunge -> recover
    ===================================================================== */
 const zombies = [];
-const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.Vector3();
 
 class Zombie {
   constructor(x, z) {
@@ -1125,6 +1125,21 @@ class Zombie {
   }
 
   setState(s) { this.state = s; this.stateT = 0; }
+
+  // shoved backward by the high-pressure jet — the hose's crowd control. A
+  // mid-lunge zombie resists (it has committed momentum); otherwise it slides
+  // away and leans back, clamped to the deck.
+  push(dt) {
+    if (!this.alive || this.state === 'lunge') return;
+    _knockV.subVectors(this.group.position, Player.pos); _knockV.y = 0;
+    if (_knockV.lengthSq() < 1e-4) return;
+    _knockV.normalize();
+    const p = this.group.position;
+    p.addScaledVector(_knockV, CFG.zombie.knockback * dt);
+    p.x = THREE.MathUtils.clamp(p.x, -7.5, 7.5);
+    p.z = THREE.MathUtils.clamp(p.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
+    this.group.rotation.x = -0.18; // brief lean-back from the blast
+  }
 
   update(dt, t) {
     if (!this.alive) return;
@@ -2064,6 +2079,7 @@ function updateHose(dt) {
       const e = hits[0].object.userData.entity;
       if (e) {
         e.clean(CFG.hose.dps * RPG.hoseMul() * dt, hits[0].point);
+        if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
         if (Math.random() < dt * 14) spawnSplash(hits[0].point);
