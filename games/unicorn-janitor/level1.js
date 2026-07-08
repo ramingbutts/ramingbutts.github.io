@@ -1239,10 +1239,16 @@ class Zombie {
    runtime; if the fetch fails the primitive rigs simply stay visible,
    and either way the primitives remain as invisible collision proxies.
    ===================================================================== */
+// Each model is tried LOCAL-first, then the CDN, then it silently leaves the
+// primitive rig on. Dropping a vendored copy at `local` (e.g. models/jax.glb)
+// makes the AAA mesh load offline and on GitHub Pages with zero code change —
+// which is the whole project's "no CDN dependency, works offline" principle.
 const MODELS = {
-  jax: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
+  jax: { local: 'models/jax.glb',
+    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
     height: 2.05, rotY: 0 }, // gun-toting Jax with red pressure tank + power-washer
-  zombie: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
+  zombie: { local: 'models/zombie.glb',
+    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
     height: 1.95, rotY: 0 },
 };
 let zombieProto = null, modelsLoadStarted = false;
@@ -1288,21 +1294,33 @@ function computeGunNozzle(wrap) {
   NOZZLE_GUN.up = THREE.MathUtils.clamp(b.min.y + (b.max.y - b.min.y) * 0.6, 1.0, 1.7);
 }
 
+// try the vendored local file first, fall back to the CDN, then give up quietly
+// (the improved primitive rig stays on). onLoad only fires on success.
+function loadModelWithFallback(spec, label, onLoad) {
+  gltfLoader.load(spec.local,
+    gltf => { console.info(`${label}: loaded vendored ${spec.local}`); onLoad(gltf); },
+    undefined,
+    () => gltfLoader.load(spec.url,
+      gltf => { console.info(`${label}: loaded from CDN (no local copy)`); onLoad(gltf); },
+      undefined,
+      () => console.info(`${label}: no local or CDN model — primitive rig stays on`)));
+}
+
 function loadCharacterModels() {
   if (modelsLoadStarted || MODELS.jax.url.startsWith('MODEL_URL')) return;
   modelsLoadStarted = true;
-  gltfLoader.load(MODELS.jax.url, gltf => {
+  loadModelWithFallback(MODELS.jax, 'Jax', gltf => {
     Player.glbVisual = normalizeModel(gltf.scene, MODELS.jax);
     Player.group.add(Player.glbVisual);
     computeGunNozzle(Player.glbVisual); // place the muzzle at the measured barrel tip
     if (Player.hasHorn) { Player.horn.visible = false; Player.hornRing.visible = false; }
     applyModelSetting();
-  }, undefined, () => console.info('Jax model unavailable — primitive rig stays on'));
-  gltfLoader.load(MODELS.zombie.url, gltf => {
+  });
+  loadModelWithFallback(MODELS.zombie, 'Zombie', gltf => {
     zombieProto = { scene: gltf.scene, spec: MODELS.zombie };
     for (const z of zombies) if (z.alive) z.applyModel();
     applyModelSetting();
-  }, undefined, () => console.info('Zombie model unavailable — primitive rigs stay on'));
+  });
 }
 
 // generated GLBs are the heaviest asset in the scene, so they only show when
