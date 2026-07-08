@@ -1661,13 +1661,20 @@ function buildPlayer() {
   g.add(buckle);
 
   // muscular bare arms — pivoted at the shoulder for the run swing
+  // muscular bare arms, brought inward so both hands can grip the gun out front;
+  // the run cycle keeps them in the forward hold (see updatePlayer) rather than
+  // swinging them like an empty-handed run.
   Player.armsM = [];
-  const armGeo = new THREE.CapsuleGeometry(0.13, 0.5, 3, 6);
+  const glove = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.7 });
+  const armGeo = new THREE.CapsuleGeometry(0.12, 0.5, 3, 6);
   armGeo.translate(0, -0.28, 0); // pivot at the shoulder
   for (const s of [-1, 1]) {
     const arm = new THREE.Mesh(armGeo, skin);
-    arm.position.set(s * 0.56, 1.58, 0.05);
-    arm.rotation.z = s * 0.25;
+    arm.position.set(s * 0.33, 1.6, 0.08);
+    arm.rotation.z = s * 0.12;
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), glove);
+    hand.position.set(0, -0.82, 0); // at the forearm tip, follows the reach
+    arm.add(hand);
     g.add(arm);
     Player.armsM.push(arm);
   }
@@ -1718,23 +1725,47 @@ function buildPlayer() {
     g.add(spike);
   }
 
-  // pressure rig: chunky steel nozzle, blue tip, red hose looping to the belt
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, 0.55, 8), steel);
-  nozzle.rotation.x = Math.PI / 2;
-  nozzle.position.set(0.3, 1.2, 0.5);
-  g.add(nozzle);
-  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.1, 8),
+  // chrome power-washer gun, held two-handed out front. Built as its own group
+  // so it can recoil, and positioned so the barrel TIP lands on the primitive
+  // muzzle point (local 0,1.5,0.6 = NOZZLE_PRIMITIVE) — water leaves the barrel,
+  // not the chest. Player faces local +Z, so the barrel points +Z.
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xd7dde6, metalness: 0.85, roughness: 0.22 });
+  const gun = Player.gun = new THREE.Group();
+  gun.position.set(0, 1.5, 0);
+  // pistol grip (rear, angled down so the hand wraps it)
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 0.12), black);
+  grip.position.set(0, -0.16, 0.26); grip.rotation.x = 0.5;
+  gun.add(grip);
+  // pump housing / body — the chunky chrome block
+  const gbody = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.2, 0.36), chrome);
+  gbody.position.set(0, 0, 0.36);
+  gun.add(gbody);
+  // trigger guard
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.017, 6, 10), steel);
+  guard.position.set(0, -0.08, 0.28); guard.rotation.x = Math.PI / 2;
+  gun.add(guard);
+  // long chrome barrel down the middle, tip at local z≈0.6 (the muzzle)
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.42, 10), chrome);
+  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, 0.42);
+  gun.add(barrel);
+  // blue nozzle collar + emissive tip ring right at the muzzle
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.07, 10),
     new THREE.MeshStandardMaterial({ color: 0x3f8fdf, metalness: 0.5, roughness: 0.3 }));
-  tip.rotation.x = Math.PI / 2;
-  tip.position.set(0.3, 1.2, 0.79);
-  g.add(tip);
+  collar.rotation.x = Math.PI / 2; collar.position.set(0, 0.01, 0.585);
+  gun.add(collar);
+  const muzzleRing = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.012, 6, 12),
+    new THREE.MeshStandardMaterial({ color: 0x8fe0ff, emissive: 0x4fb8ff, emissiveIntensity: 1.4, roughness: 0.3 }));
+  muzzleRing.position.set(0, 0.01, 0.62);
+  gun.add(muzzleRing);
+  g.add(gun);
+  // red high-pressure hose from the grip base looping down to the tool belt
   const hoseCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.3, 1.2, 0.24),
-    new THREE.Vector3(0.44, 0.95, 0.08),
-    new THREE.Vector3(0.3, 0.78, -0.26),
+    new THREE.Vector3(0, 1.3, 0.28),
+    new THREE.Vector3(0.28, 1.02, 0.06),
+    new THREE.Vector3(0.34, 0.82, -0.24),
     new THREE.Vector3(0, 0.86, -0.34),
   ]);
-  const hose = new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 16, 0.045, 6),
+  const hose = new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 18, 0.045, 6),
     new THREE.MeshStandardMaterial({ color: 0xa32c22, roughness: 0.55 }));
   g.add(hose);
 
@@ -1868,8 +1899,20 @@ function updatePlayer(dt, t) {
   const ease = 1 - Math.pow(0.001, dt);
   Player.legs[0].rotation.x += (swing * 0.55 - Player.legs[0].rotation.x) * ease;
   Player.legs[1].rotation.x += (-swing * 0.55 - Player.legs[1].rotation.x) * ease;
-  Player.armsM[0].rotation.x += (-swing * 0.45 - Player.armsM[0].rotation.x) * ease;
-  Player.armsM[1].rotation.x += (swing * 0.45 - Player.armsM[1].rotation.x) * ease;
+  // arms stay in the two-handed forward hold (reach ≈ -1.2 rad) with only a small
+  // sway while running — so the power-washer stays gripped in both hands
+  const HOLD = -1.2;
+  Player.armsM[0].rotation.x += ((HOLD - swing * 0.08) - Player.armsM[0].rotation.x) * ease;
+  Player.armsM[1].rotation.x += ((HOLD + swing * 0.08) - Player.armsM[1].rotation.x) * ease;
+
+  // primitive-rig recoil: kick the gun back + up a touch while firing
+  if (Player.gun) {
+    Player._gunRecoil = Math.max(0, (Player._gunRecoil || 0) - dt * 5);
+    if (Player.firing) Player._gunRecoil = Math.min(0.1, Player._gunRecoil + dt * 3.5);
+    const gk = 1 - Math.pow(0.02, dt);
+    Player.gun.position.z += ((-Player._gunRecoil) - Player.gun.position.z) * gk;
+    Player.gun.rotation.x += ((-Player._gunRecoil * 1.4) - Player.gun.rotation.x) * gk;
+  }
 
   // procedural life for the GLB body (a static mesh, so it needs motion here):
   // a walk sway + lean while moving, gentle idle breathing when still, and a
