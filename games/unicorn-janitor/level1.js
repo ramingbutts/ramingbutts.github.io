@@ -1986,6 +1986,10 @@ function buildHose() {
   HoseFX.muzzle = glowSprite(0xdff4ff, 0.7, 0);
   HoseFX.muzzle.frustumCulled = false;
   scene.add(HoseFX.muzzle);
+  // a cool point-light that rides the jet while firing, so the high-pressure
+  // water actually casts light into the fog — pure atmosphere, no balance change
+  HoseFX.light = new THREE.PointLight(0x9fe4ff, 0, 9);
+  scene.add(HoseFX.light);
 }
 
 // where the water leaves the weapon. The GLB Jax holds a long power-washer
@@ -2053,6 +2057,9 @@ function updateHose(dt) {
     raycaster.set(camera.position, Player.aim);
     raycaster.far = CFG.hose.range + 6; // camera sits ~5.4 behind the player
     const hits = raycaster.intersectObjects(cleanTargets, false);
+    // ride the jet light out to whatever the water is hitting (or ~3m ahead)
+    HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(Player.aim, 3));
+    HoseFX.light.intensity = 1.7 + (Settings.reduceMotion ? 0 : Math.random() * 0.5);
     if (hits.length) {
       const e = hits[0].object.userData.entity;
       if (e) {
@@ -2071,6 +2078,7 @@ function updateHose(dt) {
     }
   } else if (HoseFX.muzzle) {
     HoseFX.muzzle.material.opacity = 0; // no jet, no muzzle glow
+    HoseFX.light.intensity = 0;
   }
 
   // advance all particles
