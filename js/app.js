@@ -63,7 +63,8 @@ const App = {
       calendar: 'Calendar',
       brain: 'Second Brain',
       graph: 'Knowledge Graph',
-      journal: 'Journal'
+      journal: 'Journal',
+      pulse: 'Weekly Pulse'
     };
     document.getElementById('page-title').textContent = titles[page] || page;
   },
