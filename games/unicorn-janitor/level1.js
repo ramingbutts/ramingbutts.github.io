@@ -329,6 +329,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyF') Input.novaPressed = true;
   if (e.code === 'KeyC') Input.pingPressed = true;
   if (e.code === 'KeyT') toggleSkillPanel();
+  if (e.code === 'KeyR' && e.shiftKey) cycleModelYaw();
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
@@ -1238,7 +1239,11 @@ function normalizeModel(sceneRoot, spec) {
   sceneRoot.position.x -= (box2.min.x + box2.max.x) / 2;
   sceneRoot.position.z -= (box2.min.z + box2.max.z) / 2;
   sceneRoot.position.y -= box2.min.y;
-  wrap.rotation.y = spec.rotY;
+  // spec.rotY is the baked default; Settings.modelYaw is the player's live
+  // correction (Shift+R) — image→3D meshes sometimes come out facing away,
+  // and this lets it be fixed without a code round-trip
+  wrap.userData.baseRotY = spec.rotY;
+  wrap.rotation.y = spec.rotY + (Settings.modelYaw || 0);
   wrap.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return wrap;
 }
@@ -1281,6 +1286,24 @@ function applyModelSetting() {
     if (on && !z.glb) z.applyModel();
     if (z.glb) { z.glb.visible = on; z.rig.visible = !on; }
   }
+}
+
+// Shift+R: rotate the generated models 90° and remember it. Fixes a
+// back-facing image→3D mesh in-game without a code change; the chosen
+// angle persists so the fix survives a reload.
+function applyModelYaw() {
+  const extra = Settings.modelYaw || 0;
+  if (Player.glbVisual) Player.glbVisual.rotation.y = (Player.glbVisual.userData.baseRotY || 0) + extra;
+  for (const z of zombies) if (z.glb) z.glb.rotation.y = (z.glb.userData.baseRotY || 0) + extra;
+}
+function cycleModelYaw() {
+  if (!Player.glbVisual && !zombies.some(z => z.glb)) {
+    showToast('No 3D model loaded to rotate'); return;
+  }
+  Settings.modelYaw = ((Settings.modelYaw || 0) + Math.PI / 2) % (Math.PI * 2);
+  saveSettings();
+  applyModelYaw();
+  showToast('🔄 Model facing: ' + Math.round(Settings.modelYaw * 180 / Math.PI) + '°');
 }
 
 /* =====================================================================
@@ -2398,7 +2421,7 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0 };
 let fpsAccum = 0, fpsCount = 0;
 const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
