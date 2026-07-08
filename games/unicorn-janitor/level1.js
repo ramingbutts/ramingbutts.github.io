@@ -11,8 +11,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
    ===================================================================== */
 const CFG = {
   bridge: { width: 18, zStart: 15, zEnd: -205, playZEnd: -132 }, // playable section ends before second tower
-  fogDensity: 0.030,
-  fogColor: 0x9db3c6,
+  fogDensity: 0.032,
+  fogColor: 0x74879c, // deeper, cooler fog — moody dawn instead of milky washout
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
   hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34 }, // dense high-pressure jet
   beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
@@ -428,7 +428,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping; // filmic response, cinematic highlights
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 0.98; // pulled back from 1.15 to recover highlight detail
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -453,7 +453,7 @@ scene.add(sun.target); // sun follows the player so the shadow window stays tigh
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight,
   { samples: 4, type: THREE.HalfFloatType }));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.5, 0.55, 0.75);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.42, 0.6, 0.82); // higher threshold: only real light sources bloom, not the whole sky
 composer.addPass(bloom);
 const vignette = new ShaderPass({
   name: 'VignetteShader',
@@ -657,7 +657,7 @@ function buildBridge() {
   const skyGeo = new THREE.SphereGeometry(260, 24, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide, fog: false, depthWrite: false,
-    uniforms: { top: { value: new THREE.Color(0x8fa7c4) }, bot: { value: new THREE.Color(0xd9c9b0) } },
+    uniforms: { top: { value: new THREE.Color(0x556a86) }, bot: { value: new THREE.Color(0xa38f77) } },
     vertexShader: 'varying float vh; void main(){ vh = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: 'varying float vh; uniform vec3 top; uniform vec3 bot; void main(){ gl_FragColor = vec4(mix(bot, top, smoothstep(-0.1, 0.55, vh)), 1.0); }',
   });
@@ -2890,7 +2890,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     for (const z of zombies) z.update(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateShard(dt, t); updateDying(dt);
-  } };
+  },
+  renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
 let _frameCount = 0;
