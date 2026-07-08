@@ -282,6 +282,23 @@ adds the lateral component via `forward × up`. Because this rides on
 `modelsActive()`, a low-tier device using the primitive rig also uses the
 short nozzle — consistent by construction.
 
+## Water-from-barrel + GLB body motion (iteration 18)
+
+The jet was originating at NOZZLE_GUN fwd 1.55 — mid-gun / hand height, so
+it read as "from the chest." Pushed to fwd 2.4 / up 1.24 (the long barrel
+tip) and added a persisted live nudge: `[` `]` move the muzzle back/forward,
+`;` `'` down/up (`Settings.nozzleAdj`, applied only to the gun nozzle in
+`nozzleWorldPos`), so the origin can be dialled exactly onto the barrel and
+the toast reports the resolved value to bake as the default. GLB fluidity:
+the run cycle only animated the *primitive* limbs, so the GLB body sat
+static. Added procedural motion on `Player.glbVisual` — walk hip-roll
+(`rotation.z`) + lean (`rotation.x`) while moving, idle breathing when still,
+and a `Player.firing`-driven recoil lean while spraying — all on x/z so it
+never fights the `rotation.y` facing (Shift+R / modelYaw). A rigged skeletal
+walk was rejected on purpose: auto-rig locomotion swings the arms and would
+pull the power-washer out of his hands; procedural whole-body motion keeps
+the gun pose intact and is verifiable in-sandbox.
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared

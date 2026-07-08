@@ -330,6 +330,11 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyC') Input.pingPressed = true;
   if (e.code === 'KeyT') toggleSkillPanel();
   if (e.code === 'KeyR' && e.shiftKey) cycleModelYaw();
+  // live muzzle placement: [ ] move the jet origin back/forward, ; ' down/up
+  if (e.code === 'BracketRight') nudgeNozzle('fwd', 0.15);
+  if (e.code === 'BracketLeft') nudgeNozzle('fwd', -0.15);
+  if (e.code === 'Quote') nudgeNozzle('up', 0.1);
+  if (e.code === 'Semicolon') nudgeNozzle('up', -0.1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
@@ -1306,6 +1311,15 @@ function cycleModelYaw() {
   showToast('🔄 Model facing: ' + Math.round(Settings.modelYaw * 180 / Math.PI) + '°');
 }
 
+// nudge the water-jet origin so it sits exactly on the gun barrel; persists
+function nudgeNozzle(axis, delta) {
+  if (Game.state !== 'playing') return;
+  const a = Settings.nozzleAdj;
+  a[axis] = Math.round((a[axis] + delta) * 100) / 100;
+  saveSettings();
+  showToast(`💦 Muzzle: fwd ${(NOZZLE_GUN.fwd + a.fwd).toFixed(2)} · up ${(NOZZLE_GUN.up + a.up).toFixed(2)}`);
+}
+
 /* =====================================================================
    9.5 STORY CONTENT (design doc) — transforming civilians, the hidden
    meteor shard, flickering streetlights, and Jax's graffiti job site.
@@ -1524,7 +1538,8 @@ const Player = {
   nozzle: { up: 1.5, fwd: 0.6, right: 0 },
 };
 const NOZZLE_PRIMITIVE = { up: 1.5, fwd: 0.6, right: 0 };
-const NOZZLE_GUN = { up: 1.32, fwd: 1.55, right: 0.32 }; // tip of the power-washer
+// tip of the long power-washer barrel, well out in front (not at his hands/chest)
+const NOZZLE_GUN = { up: 1.24, fwd: 2.4, right: 0.16 };
 
 function buildPlayer() {
   const g = Player.group = new THREE.Group();
@@ -1819,6 +1834,22 @@ function updatePlayer(dt, t) {
   Player.armsM[0].rotation.x += (-swing * 0.45 - Player.armsM[0].rotation.x) * ease;
   Player.armsM[1].rotation.x += (swing * 0.45 - Player.armsM[1].rotation.x) * ease;
 
+  // procedural life for the GLB body (a static mesh, so it needs motion here):
+  // a walk sway + lean while moving, gentle idle breathing when still, and a
+  // recoil lean while the power-washer is firing — keeps the gun in his hands
+  if (Player.glbVisual) {
+    const g = Player.glbVisual;
+    const walk = (moving && Player.onGround) ? 1 : 0;
+    const sway = Math.sin(t * 8) * 0.06 * walk;              // hip roll
+    const lean = walk * 0.05;                                // lean into the run
+    const breathe = Math.sin(t * 1.8) * 0.012 * (1 - walk);  // idle chest rise
+    Player._recoil = Math.max(0, (Player._recoil || 0) - dt * 4);
+    if (Player.firing) Player._recoil = Math.min(0.12, Player._recoil + dt * 3);
+    const k = 1 - Math.pow(0.02, dt);
+    g.rotation.z += (sway - g.rotation.z) * k;
+    g.rotation.x += ((lean + breathe - Player._recoil) - g.rotation.x) * k;
+  }
+
   // --- camera: third-person follow, slightly damped ---
   const headPos = _v1.copy(Player.pos).add(new THREE.Vector3(0, 1.9, 0));
   const camTarget = _v2.copy(headPos).addScaledVector(Player.aim, -5.4).add(new THREE.Vector3(0, 0.4, 0));
@@ -1941,7 +1972,12 @@ function buildHose() {
 const _nozRight = new THREE.Vector3();
 function nozzleWorldPos(out) {
   const n = Player.nozzle;
-  out.copy(Player.pos).add(_nozRight.set(0, n.up, 0)).addScaledVector(Player.forward, n.fwd);
+  // on the gun, add the player's live muzzle nudge ([ ] and ; ') so the jet
+  // can be dialled exactly onto the barrel tip and the fix persists
+  const adj = (n === NOZZLE_GUN) ? Settings.nozzleAdj : null;
+  const up = n.up + (adj ? adj.up : 0);
+  const fwd = n.fwd + (adj ? adj.fwd : 0);
+  out.copy(Player.pos).add(_nozRight.set(0, up, 0)).addScaledVector(Player.forward, fwd);
   _nozRight.crossVectors(Player.forward, THREE.Object3D.DEFAULT_UP).normalize();
   return out.addScaledVector(_nozRight, n.right);
 }
@@ -1965,6 +2001,7 @@ function updateHose(dt) {
   pressureFill.style.width = Meters.pressure + '%';
   rainbowFill.style.width = Meters.rainbow + '%';
   if (spraying !== sprayWasOn) { SFX.setSpray(spraying); sprayWasOn = spraying; }
+  Player.firing = spraying; // drives the GLB recoil lean
 
   if (spraying) {
     sprayHeldTime += dt;
@@ -2421,7 +2458,8 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0 };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0, nozzleAdj: { fwd: 0, up: 0 } };
+if (!Settings.nozzleAdj) Settings.nozzleAdj = { fwd: 0, up: 0 }; // heal older saves
 let fpsAccum = 0, fpsCount = 0;
 const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
