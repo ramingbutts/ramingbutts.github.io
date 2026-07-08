@@ -1244,6 +1244,10 @@ function normalizeModel(sceneRoot, spec) {
   sceneRoot.position.x -= (box2.min.x + box2.max.x) / 2;
   sceneRoot.position.z -= (box2.min.z + box2.max.z) / 2;
   sceneRoot.position.y -= box2.min.y;
+  // capture the model's local bounding box (feet-planted, centered, unrotated)
+  // so the muzzle can be placed at its forward-most point — the barrel tip
+  const lb = new THREE.Box3().setFromObject(sceneRoot);
+  wrap.userData.localBox = { min: lb.min.clone(), max: lb.max.clone() };
   // spec.rotY is the baked default; Settings.modelYaw is the player's live
   // correction (Shift+R) — image→3D meshes sometimes come out facing away,
   // and this lets it be fixed without a code round-trip
@@ -1253,12 +1257,29 @@ function normalizeModel(sceneRoot, spec) {
   return wrap;
 }
 
+// derive the gun-muzzle offset from Jax's own geometry: the barrel tip is the
+// model's forward-most point in the player's local frame (forward = +Z), so it
+// stays correct for whatever model loads and re-tracks when Shift+R re-faces him
+function computeGunNozzle(wrap) {
+  const b = wrap && wrap.userData.localBox;
+  if (!b) return;
+  const ry = wrap.rotation.y, cos = Math.cos(ry), sin = Math.sin(ry);
+  let maxZ = -Infinity;
+  for (const x of [b.min.x, b.max.x]) for (const z of [b.min.z, b.max.z]) {
+    const zr = -x * sin + z * cos;       // Y-rotation of the corner
+    if (zr > maxZ) maxZ = zr;
+  }
+  NOZZLE_GUN.fwd = THREE.MathUtils.clamp(maxZ + 0.15, 0.9, 3.4); // just past the tip
+  NOZZLE_GUN.up = THREE.MathUtils.clamp(b.min.y + (b.max.y - b.min.y) * 0.6, 1.0, 1.7);
+}
+
 function loadCharacterModels() {
   if (modelsLoadStarted || MODELS.jax.url.startsWith('MODEL_URL')) return;
   modelsLoadStarted = true;
   gltfLoader.load(MODELS.jax.url, gltf => {
     Player.glbVisual = normalizeModel(gltf.scene, MODELS.jax);
     Player.group.add(Player.glbVisual);
+    computeGunNozzle(Player.glbVisual); // place the muzzle at the measured barrel tip
     if (Player.hasHorn) { Player.horn.visible = false; Player.hornRing.visible = false; }
     applyModelSetting();
   }, undefined, () => console.info('Jax model unavailable — primitive rig stays on'));
@@ -1300,6 +1321,7 @@ function applyModelYaw() {
   const extra = Settings.modelYaw || 0;
   if (Player.glbVisual) Player.glbVisual.rotation.y = (Player.glbVisual.userData.baseRotY || 0) + extra;
   for (const z of zombies) if (z.glb) z.glb.rotation.y = (z.glb.userData.baseRotY || 0) + extra;
+  computeGunNozzle(Player.glbVisual); // barrel tip moves with the new facing
 }
 function cycleModelYaw() {
   if (!Player.glbVisual && !zombies.some(z => z.glb)) {

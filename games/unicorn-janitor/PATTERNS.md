@@ -299,6 +299,19 @@ walk was rejected on purpose: auto-rig locomotion swings the arms and would
 pull the power-washer out of his hands; procedural whole-body motion keeps
 the gun pose intact and is verifiable in-sandbox.
 
+## Auto-measured barrel muzzle (iteration 19)
+
+Instead of a hardcoded gun-muzzle distance, `computeGunNozzle()` measures it
+from the model: `normalizeModel()` stores the feet-planted, centered local
+bounding box, and the muzzle's forward offset (`NOZZLE_GUN.fwd`) is set to the
+box's forward-most extent along player-forward (+Z) — the barrel tip — with
+`up` at 60% of model height. It runs on model load and re-runs on every
+Shift+R, so the muzzle tracks the facing correction (verified: a +Z 1.2 barrel
+gives fwd 1.35 facing forward, 0.35 flipped 180°, 0.4 at 90°). The manual
+`[ ] ; '` nudge still layers on top for final tuning. Data-driven, so it stays
+correct for any future character model. No-ops safely on the primitive path
+(no localBox).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
