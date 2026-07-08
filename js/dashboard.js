@@ -20,6 +20,15 @@ App.registerPage('dashboard', {
 
     container.innerHTML = `
       <div class="section">
+        <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px">
+          <span style="font-size:13px;color:var(--text-secondary)">Jump in:</span>
+          <button class="btn btn-secondary btn-sm" id="dash-quickcap">⌘K Quick capture</button>
+          <a href="#/pulse" class="btn btn-ghost btn-sm">📊 Weekly Pulse →</a>
+          <span style="margin-left:auto;font-size:12px;color:var(--text-muted)">Press <b style="color:var(--text-secondary);font-family:'JetBrains Mono',monospace">Ctrl</b>+<b style="color:var(--text-secondary);font-family:'JetBrains Mono',monospace">K</b> anywhere to capture a task, expense, note or journal in one line</span>
+        </div>
+      </div>
+
+      <div class="section">
         <div class="grid-4">
           <div class="card glow">
             <div class="card-header"><span class="card-title">Net Worth</span><span class="badge badge-green">LIVE</span></div>
@@ -135,6 +144,8 @@ App.registerPage('dashboard', {
     container.querySelectorAll('.dash-habit-btn').forEach(btn => {
       btn.addEventListener('click', () => this._toggleHabit(btn.dataset.habit));
     });
+    const qc = document.getElementById('dash-quickcap');
+    if (qc) qc.addEventListener('click', () => { if (typeof Capture !== 'undefined') Capture.show(); });
   },
 
   _renderBlockers(tasks) {
