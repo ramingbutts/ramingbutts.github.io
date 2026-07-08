@@ -2867,11 +2867,36 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   getShard: () => shard,
   skipIntro: () => { introSkip = true; },
   getCombo: () => comboCount,
-  getDying: () => dyingZombies.length };
+  getDying: () => dyingZombies.length,
+  // muzzle/spray introspection — lets a headless playtest confirm water leaves
+  // the barrel tip rather than the chest without needing to see the render
+  HoseFX,
+  nozzleWorldPos: (out) => nozzleWorldPos(out || new THREE.Vector3()),
+  spawnZombieAt: (x, z) => { const z2 = new Zombie(x, z); z2.setState('chase'); zombies.push(z2); Game.totalZombies++; return z2; },
+  getZombies: () => zombies,
+  getFrames: () => _frameCount,
+  camera,
+  aimAt: (tx, ty, tz) => { // point the player's aim from the camera toward a world point
+    const d = new THREE.Vector3(tx, ty, tz).sub(camera.position).normalize();
+    Player.yaw = Math.atan2(d.x, d.z); Player.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
+  },
+  // deterministic single-frame advance for headless testing, where the browser
+  // throttles requestAnimationFrame. Runs the same updates as the 'playing' tick.
+  step: (dt = 0.03) => {
+    dt = Math.min(dt, 0.05);
+    const t = clock.elapsedTime;
+    if (Game.state !== 'playing') return;
+    updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
+    for (const z of zombies) z.update(dt, t);
+    for (const c of civilians) c.update(dt, t);
+    updateShard(dt, t); updateDying(dt);
+  } };
 
 const clock = new THREE.Clock();
+let _frameCount = 0;
 function tick() {
   requestAnimationFrame(tick);
+  _frameCount++;
   const rawDt = clock.getDelta();
   let dt = Math.min(rawDt, 0.05);
   const t = clock.elapsedTime;

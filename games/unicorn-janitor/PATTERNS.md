@@ -341,3 +341,24 @@ ray-dependent assertions, and DOM read-backs of per-frame HUD writes race the
 frame — assert on game state (e.g. `Tutorial.fired.firstBeam`), not on style
 strings. Touch is testable by dispatching synthetic `TouchEvent`s; handlers
 must not require `isTrusted`.
+
+### Deterministic stepping beats wall-clock frames
+
+Headless Chromium throttles `requestAnimationFrame` to ~2 fps (the compositor
+treats the page as hidden regardless of `document.visibilityState`), so a test
+that waits real seconds barely advances the game. `UJ.step(dt)` runs the same
+updates as the `playing` branch of `tick()` for one frame, so the harness drives
+frames itself and the run is deterministic and fast. Companion hooks: `UJ.aimAt(x,y,z)`
+points the aim from the *camera* (the hose ray originates there, ~5.4 m behind
+the player — aiming from the player's own position misses), `UJ.spawnZombieAt`,
+`UJ.getFrames`, `UJ.HoseFX`, `UJ.nozzleWorldPos`. `games/unicorn-janitor/playtest.mjs`
+is the committed harness (9 checks, all green).
+
+Gotchas that bit real assertions: the hose needs `Player.hasHorn = true` (it's a
+tutorial pickup, false at spawn); a chaser must spawn **beyond 3.2 m** or it
+enters windup→lunge, which is deliberately knockback-immune, so a knockback test
+placed too close reads as "moved closer"; and a fresh spray particle is already
+~1 frame (≈1 m at `jetSpeed 34`) downstream of the muzzle, so "water from the
+barrel" is proven by the muzzle *sprite* sitting exactly on `nozzleWorldPos()`
+(Δ≈0) plus the particle being nearer the nozzle than the chest — not by an
+absolute distance to the spawn point.
