@@ -152,7 +152,7 @@ const Capture = {
     switch (key) {
       case 't': {
         const pri = (rest.match(/!(high|med(?:ium)?|low)/i) || [])[1];
-        const due = (rest.match(/@(\S+)/) || [])[1];
+        const due = this._parseDue((rest.match(/@(\S+)/) || [])[1]);
         const cat = (rest.match(/#(\S+)/) || [])[1];
         const title = rest.replace(/!(high|med(?:ium)?|low)|@\S+|#\S+/gi, '').trim();
         return { key, kind: 'Task', title, priority: pri ? (pri[0].toLowerCase() === 'h' ? 'high' : pri[0].toLowerCase() === 'l' ? 'low' : 'medium') : 'medium', due, cat,
@@ -179,6 +179,20 @@ const Capture = {
   },
 
   _kindName(key) { return { t: 'Task', $: 'Transaction', j: 'Journal', n: 'Note', e: 'Event', w: 'Water' }[key] || ''; },
+
+  // normalize a @-token to YYYY-MM-DD so it populates <input type="date"> and
+  // App.formatDate() cleanly; unrecognized tokens are dropped (no invalid dates)
+  _parseDue(tok) {
+    if (!tok) return null;
+    const t = tok.toLowerCase();
+    if (t === 'today') return App.getToday();
+    if (t === 'tomorrow' || t === 'tmr') {
+      const d = new Date(App.getToday() + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    return /^\d{4}-\d{2}-\d{2}$/.test(tok) ? tok : null;
+  },
 
   _refresh() {
     const v = this.input.value.trim();

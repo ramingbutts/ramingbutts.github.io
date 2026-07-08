@@ -186,7 +186,7 @@ App.registerPage('tasks', {
       <div class="form-group">
         <label>Repeat</label>
         <select id="f-recurrence">
-          ${['none', 'daily', 'weekly', 'monthly'].map(r => `<option value="${r}" ${(task?.recurrence || 'none') === r ? 'selected' : ''}>${r === 'none' ? 'Does not repeat' : 'Every ' + r.replace('ly', r === 'daily' ? ' day' : r === 'weekly' ? ' week' : ' month')}</option>`).join('')}
+          ${[['none', 'Does not repeat'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month']].map(([r, label]) => `<option value="${r}" ${(task?.recurrence || 'none') === r ? 'selected' : ''}>${label}</option>`).join('')}
         </select>
       </div>
       <div class="form-group">

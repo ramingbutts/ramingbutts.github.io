@@ -8,15 +8,20 @@
 //   run:  python3 -m http.server 8099   (from repo root)
 //         node games/unicorn-janitor/playtest.mjs
 //
-// Paths below are the sandbox's Chromium/Playwright locations; adjust for local runs.
-import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
+// Environment overrides (all optional — defaults target a standard local setup):
+//   PW_MODULE    module specifier for playwright (default: bare 'playwright')
+//   PW_CHROMIUM  explicit Chromium executable (default: playwright's bundled one)
+//   PLAYTEST_URL page URL (default: http://127.0.0.1:8099/…/level1.html)
+// In this repo's sandbox: PW_MODULE=/opt/node22/lib/node_modules/playwright/index.mjs
+// and PW_CHROMIUM=/opt/pw-browsers/chromium-1194/chrome-linux/chrome.
+const { chromium } = await import(process.env.PW_MODULE || 'playwright');
 
-const URL = 'http://127.0.0.1:8099/games/unicorn-janitor/level1.html';
+const URL = process.env.PLAYTEST_URL || 'http://127.0.0.1:8099/games/unicorn-janitor/level1.html';
 const results = [];
 const ok = (name, cond, detail='') => { results.push({name, pass: !!cond, detail}); console.log(`${cond?'PASS':'FAIL'}  ${name}${detail?'  — '+detail:''}`); };
 
 const browser = await chromium.launch({
-  executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+  ...(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {}),
   args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage']
 });
 const page = await browser.newPage();

@@ -31,7 +31,8 @@ App.registerPage('pulse', {
 
     const moodByDay = days.map(d => this._moodOn(journal, d));       // 0..5 or null
     const journalCount = journal.filter(j => days.includes(j.date || (j.createdAt || '').slice(0, 10))).length;
-    const avgMood = this._avg(moodByDay.filter(m => m != null));
+    const moodSamples = moodByDay.filter(m => m != null);
+    const avgMood = moodSamples.length ? this._avg(moodSamples) : null; // null (not 0) when the week has no mood data
 
     const weekTxns = txns.filter(t => days.includes(t.date));
     const saved = weekTxns.reduce((s, t) => s + t.amount, 0);

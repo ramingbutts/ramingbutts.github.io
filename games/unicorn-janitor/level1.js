@@ -2943,9 +2943,12 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   },
   // deterministic single-frame advance for headless testing, where the browser
   // throttles requestAnimationFrame. Runs the same updates as the 'playing' tick.
+  // Advances its own time accumulator so `t`-driven animation (sway, breathe,
+  // glow pulse) evolves across steps instead of freezing at clock.elapsedTime.
   step: (dt = 0.03) => {
     dt = Math.min(dt, 0.05);
-    const t = clock.elapsedTime;
+    _stepTime += dt;
+    const t = clock.elapsedTime + _stepTime;
     if (Game.state !== 'playing') return;
     updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
     for (const z of zombies) z.update(dt, t);
@@ -2956,6 +2959,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
 
 const clock = new THREE.Clock();
 let _frameCount = 0;
+let _stepTime = 0; // headless UJ.step() time accumulator (see the step hook above)
 function tick() {
   requestAnimationFrame(tick);
   _frameCount++;
