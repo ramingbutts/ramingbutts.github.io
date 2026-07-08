@@ -1000,6 +1000,9 @@ tr:hover td {
   align-items: flex-start; justify-content: center; padding-top: 12vh;
   background: rgba(4, 4, 10, 0.72); backdrop-filter: blur(2px);
 }
+/* the app has no global .hidden rule (only .modal-overlay.hidden), so the
+   palette needs its own — without this it would cover the page permanently */
+#capture-overlay.hidden { display: none; }
 #capture-box {
   width: min(640px, 92vw); background: var(--bg-card);
   border: 1px solid var(--border-light); border-radius: var(--radius-lg);
