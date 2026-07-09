@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Poopocalypse: Filth Cup</title>
+<style>
+  /* ---------- layout & chrome ---------- */
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#1a0c22; font-family:'Segoe UI',system-ui,sans-serif; }
+  #wrap { position:fixed; inset:0; touch-action:none; }
+  canvas#game { position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:absolute; inset:0; pointer-events:none; color:#fff; user-select:none; }
+  .panel { background:rgba(20,8,30,.55); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.14);
+           border-radius:14px; padding:8px 12px; }
+  #scoreBox { position:absolute; top:max(10px, env(safe-area-inset-top)); left:10px; text-align:left; }
+  #score { font-size:28px; font-weight:800; text-shadow:0 2px 8px rgba(255,80,200,.6); line-height:1; }
+  #best  { font-size:12px; opacity:.75; margin-top:3px; }
+  #combo { font-size:13px; font-weight:700; color:#ffd84a; height:16px; margin-top:2px;
+           text-shadow:0 0 8px rgba(255,216,74,.8); }
+
+  #nextBox { position:absolute; top:max(10px, env(safe-area-inset-top)); right:10px; text-align:center; }
+  #nextBox .lbl { font-size:10px; letter-spacing:2px; opacity:.7; }
+  #nextCv { display:block; margin:2px auto 0; }
+  #nextName { font-size:10px; opacity:.85; max-width:86px; }
+
+  #corrBox { position:absolute; top:max(10px, env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+             width:min(46vw,230px); text-align:center; }
+  #corrBox .lbl { font-size:10px; letter-spacing:3px; opacity:.85; }
+  #corrBar { height:12px; border-radius:8px; background:rgba(0,0,0,.5); margin-top:4px; overflow:hidden;
+             border:1px solid rgba(255,255,255,.2); }
+  #corrFill { height:100%; width:0%; border-radius:8px;
+              background:linear-gradient(90deg,#7a4a2b,#c86bd6,#ff4ecd,#b400ff);
+              box-shadow:0 0 10px rgba(255,78,205,.9); transition:width .25s; }
+  #corrTag { font-size:10px; margin-top:2px; color:#ff9be0; height:13px; font-weight:700; }
+
+  #btns { position:absolute; top:calc(max(10px, env(safe-area-inset-top)) + 82px); right:10px;
+          display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
+  .btn { width:42px; height:42px; border-radius:12px; border:1px solid rgba(255,255,255,.25);
+         background:rgba(40,15,55,.7); color:#fff; font-size:20px; cursor:pointer; }
+  .btn:active { transform:scale(.92); background:rgba(255,78,205,.4); }
+
+  /* ---------- announcements ---------- */
+  #announce { position:absolute; top:22%; left:50%; transform:translateX(-50%); width:92%; text-align:center;
+              font-size:clamp(16px,4.5vw,26px); font-weight:900; color:#fff; pointer-events:none;
+              text-shadow:0 0 12px #ff4ecd, 0 0 30px #b400ff, 0 3px 2px rgba(0,0,0,.6);
+              opacity:0; letter-spacing:1px; }
+  #announce.show { animation:ann 2s ease-out forwards; }
+  @keyframes ann { 0%{opacity:0;transform:translateX(-50%) scale(.4) rotate(-4deg);}
+                   12%{opacity:1;transform:translateX(-50%) scale(1.15) rotate(2deg);}
+                   22%{transform:translateX(-50%) scale(1) rotate(0);}
+                   75%{opacity:1;} 100%{opacity:0;transform:translateX(-50%) scale(1.05) translateY(-24px);} }
+
+  /* ---------- full-screen screens ---------- */
+  #screen { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+            background:rgba(12,4,20,.82); backdrop-filter:blur(4px); pointer-events:auto; z-index:5; }
+  #screen.hidden { display:none; }
+  #card { text-align:center; padding:26px 22px; max-width:400px; width:88%;
+          background:linear-gradient(160deg,rgba(60,20,80,.9),rgba(25,8,40,.95));
+          border:2px solid rgba(255,120,220,.5); border-radius:22px;
+          box-shadow:0 0 50px rgba(255,78,205,.35), inset 0 0 40px rgba(180,0,255,.12); color:#fff; }
+  #card h1 { font-size:clamp(24px,7vw,34px); line-height:1.1; margin-bottom:4px;
+             background:linear-gradient(90deg,#ffd84a,#ff4ecd,#8a5a2b,#b400ff);
+             -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+             filter:drop-shadow(0 2px 6px rgba(255,78,205,.6)); }
+  #card h2 { font-size:14px; font-weight:600; color:#ff9be0; margin-bottom:14px; min-height:18px; }
+  #card p  { font-size:13px; opacity:.85; margin:8px 0; line-height:1.45; }
+  #stats { text-align:left; font-size:13px; margin:12px auto; display:none; }
+  #stats div { display:flex; justify-content:space-between; padding:3px 0;
+               border-bottom:1px dashed rgba(255,255,255,.15); }
+  #stats span:last-child { font-weight:700; color:#ffd84a; }
+  #bigBtn { margin-top:14px; padding:13px 34px; font-size:17px; font-weight:800; color:#2a0a3a;
+            background:linear-gradient(180deg,#ffd84a,#ff9e2c); border:none; border-radius:999px;
+            cursor:pointer; box-shadow:0 4px 0 #a8641a, 0 0 22px rgba(255,216,74,.5); }
+  #bigBtn:active { transform:translateY(3px); box-shadow:0 1px 0 #a8641a; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div id="scoreBox" class="panel">
+      <div id="score">0</div>
+      <div id="best">BEST 0</div>
+      <div id="combo"></div>
+    </div>
+    <div id="corrBox" class="panel">
+      <div class="lbl">CORRUPTION</div>
+      <div id="corrBar"><div id="corrFill"></div></div>
+      <div id="corrTag"></div>
+    </div>
+    <div id="nextBox" class="panel">
+      <div class="lbl">NEXT</div>
+      <canvas id="nextCv" width="56" height="56"></canvas>
+      <div id="nextName"></div>
+    </div>
+    <div id="btns">
+      <button class="btn" id="pauseBtn" title="Pause">⏸</button>
+      <button class="btn" id="restartBtn" title="Restart">↺</button>
+    </div>
+    <div id="announce"></div>
+  </div>
+  <div id="screen">
+    <div id="card">
+      <h1 id="cardTitle">POOPOCALYPSE<br>FILTH CUP</h1>
+      <h2 id="cardSub">a disgusting little merge game</h2>
+      <div id="stats">
+        <div><span>Final score</span><span id="stScore">0</span></div>
+        <div><span>Biggest merge</span><span id="stBig">—</span></div>
+        <div><span>Total merges</span><span id="stMerges">0</span></div>
+        <div><span>Glitter exploded</span><span id="stGlitter">0</span></div>
+        <div><span>How corrupted Jax got</span><span id="stCorr">0%</span></div>
+      </div>
+      <p id="cardBody">Drag to aim. Tap to drop. Merge two identical filth blobs into
+      something bigger, wetter and more fabulous. Don't cross the red line —
+      Jax is watching, and he is <i>barely</i> holding it together.</p>
+      <button id="bigBtn">DROP IN</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* =====================================================================
+   POOPOCALYPSE: FILTH CUP
+   Suika-style physics merge game. Zero dependencies: plain Canvas 2D,
+   a custom circle-constraint physics solver, Web Audio synth SFX.
+   Systems, in file order:
+     1. tiers & flavor text     6. corruption / Jax / chaos events
+     2. audio synth             7. particles, popups, shake
+     3. state & reset           8. rendering
+     4. input                   9. HUD / screens
+     5. physics & merging      10. main loop
+   ===================================================================== */
+
+/* ---------------- 1. TIERS ----------------
+   Radii are in world units (world is 540x880). The 10-tier ladder;
+   `deco` picks the extra visual flair drawn on top of the base blob. */
+const TIERS = [
+  { name:'Street Poop',          r:13,  hue:26,  sat:45, lit:35, deco:'plain',   pts:2   },
+  { name:'Tourist Dropping',     r:18,  hue:30,  sat:50, lit:42, deco:'spark',   pts:5   },
+  { name:'Seal Pile',            r:24,  hue:38,  sat:30, lit:40, deco:'wet',     pts:10  },
+  { name:'Glitter Cluster',      r:32,  hue:285, sat:45, lit:52, deco:'glitter', pts:18  },
+  { name:'Theater Kid Dump',     r:42,  hue:330, sat:55, lit:50, deco:'drama',   pts:30  },
+  { name:'Business Suit Filth',  r:53,  hue:220, sat:30, lit:45, deco:'shiny',   pts:50  },
+  { name:'Disco Overlord Pile',  r:66,  hue:270, sat:70, lit:48, deco:'sequin',  pts:80  },
+  { name:'Pride Parade Blob',    r:80,  hue:0,   sat:0,  lit:50, deco:'rainbow', pts:130 },
+  { name:'Unicorn Horn Core',    r:96,  hue:46,  sat:90, lit:58, deco:'horn',    pts:210 },
+  { name:'Prismalox Final Form', r:114, hue:280, sat:80, lit:18, deco:'prisma',  pts:400 },
+];
+const SPAWN_WEIGHTS = [30, 26, 20, 14, 10];   // tiers 0-4 only get dropped
+
+const MERGE_TEXT = [
+  "They touched... now they're dating.",
+  "They merged... and now they're grinding.",
+  "Massive glitter orgy detected.",
+  "Prismalox would be proud.",
+  "That squelch was consensual.",
+  "Two piles, one destiny.",
+  "The cup is thirstier than Jax.",
+  "Repression levels dropping rapidly.",
+  "Somewhere, a purity blogger just fainted.",
+  "Moist. Deal with it.",
+  "Filth finds a way.",
+];
+const BIG_MERGE_TEXT = [
+  "MASSIVE GLITTER ORGY DETECTED",
+  "THE FILTH ASCENDS",
+  "PRISMALOX FEELS THAT",
+  "JAX NEEDS A MINUTE",
+  "ABSOLUTELY FILTHY. TEN OUT OF TEN.",
+];
+const GAMEOVER_TEXT = [
+  "Jax: \"IT'S OVER THE LINE! I'M NOT READY FOR FEELINGS!\"",
+  "The cup runneth over. Disgusting. Beautiful.",
+  "Jax fainted dramatically. The zombies applauded.",
+  "Jax: \"I looked away for ONE second—\"",
+];
+const GAMEOVER_CORRUPT = [
+  "Jax is turning... the horn is fully aglow. The vogue is eternal.",
+  "Jax is turning... he just bought glitter in bulk. It's done.",
+  "Jax is turning... and honestly? He's thriving.",
+];
+
+/* ---------------- world geometry ---------------- */
+const W = 540, H = 880;
+const CUP = { left:130, right:430, bottom:840 };
+const DANGER_Y = 268;
+const DROP_Y   = 188;
+const GRAV = 1950;
+
+/* ---------------- 2. AUDIO (Web Audio synth) ----------------
+   Every SFX is synthesized: plop = pitch-dive sine, squish = filtered
+   noise, merge = pop + pentatonic sparkle arpeggio that scales with tier. */
+let AC = null, master = null, noiseBuf = null;
+function ensureAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = 0.5; master.connect(AC.destination);
+    noiseBuf = AC.createBuffer(1, AC.sampleRate * 0.4, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+}
+function tone(freq, dur, type, vol, slideTo) {
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime;
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
+}
+function squish(vol, dur, cutoff) {
+  if (!AC) return;
+  const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain(), t = AC.currentTime;
+  s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.value = cutoff || 600;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur + 0.02);
+}
+function sfxDrop()        { tone(300, 0.12, 'sine', 0.25, 110); }
+function sfxLand(v)       { squish(Math.min(0.3, v), 0.09, 500); }
+function sfxMerge(tier) {
+  const f0 = Math.max(90, 480 - tier * 36);
+  tone(f0, 0.22, 'triangle', 0.35, f0 * 1.9);       // squishy pop
+  squish(0.28, 0.16, 900);
+  if (tier >= 3) {                                   // sparkle arpeggio on bigger merges
+    const scale = [0, 3, 7, 12, 15];
+    for (let i = 0; i <= Math.min(4, tier - 2); i++)
+      setTimeout(() => tone(880 * Math.pow(2, scale[i] / 12), 0.14, 'sine', 0.12), i * 55);
+  }
+}
+function sfxPurge()   { tone(1200, 0.4, 'sine', 0.25, 2400); squish(0.3, 0.3, 3000); }
+function sfxZombie()  { tone(160, 0.5, 'sawtooth', 0.15, 320); tone(90, 0.5, 'square', 0.08, 60); }
+function sfxOver() {
+  [392, 311, 233, 155].forEach((f, i) => setTimeout(() => tone(f, 0.45, 'triangle', 0.25), i * 220));
+}
+
+/* ---------------- 3. STATE ---------------- */
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+let scaleF = 1, offX = 0, offY = 0, dpr = 1;
+
+const S = {};                    // whole mutable game state lives here
+function resetState() {
+  S.blobs = [];                  // physics bodies
+  S.particles = [];
+  S.popups = [];
+  S.state = 'menu';              // menu | play | paused | over
+  S.score = 0;
+  S.best = +(localStorage.getItem('poopocalypse.best') || 0);
+  S.dropX = W / 2; S.dropTargetX = W / 2;
+  S.canDrop = true; S.dropCd = 0;
+  S.current = rollSpawn(); S.next = rollSpawn();
+  S.combo = 0; S.comboT = 0;
+  S.corruption = 0; S.maxCorruption = 0;
+  S.shake = 0; S.time = 0;
+  S.zombie = null; S.zombieCd = 8;
+  S.prismaT = 70 + Math.random() * 40;   // Prismalox Intervention countdown
+  S.warn = 0;                            // danger-line warning intensity
+  S.stats = { merges:0, biggest:-1, glitter:0 };
+  S.idSeq = 1;
+  updateHUD(); drawNextPreview();
+}
+function rollSpawn() {
+  let t = 0, sum = SPAWN_WEIGHTS.reduce((a, b) => a + b), r = Math.random() * sum;
+  for (let i = 0; i < SPAWN_WEIGHTS.length; i++) { r -= SPAWN_WEIGHTS[i]; if (r <= 0) { t = i; break; } }
+  // Rare Golden Unicorn Poop: clears smaller blobs around its merge
+  const golden = Math.random() < 0.03 && t <= 2;
+  return { tier: t, golden };
+}
+function makeBlob(x, y, tier, golden) {
+  return {
+    id: S.idSeq++, x, y, vx: 0, vy: 0, tier, r: TIERS[tier].r,
+    golden: !!golden, rot: (Math.random() - .5) * .6,
+    squash: 0, scale: 0.35,           // spawn pop-in
+    mergeCd: 0.12, touched: false, overT: 0,
+    blink: 1 + Math.random() * 3, seed: Math.random() * 7,
+    dead: false,
+  };
+}
+
+/* ---------------- 4. INPUT ----------------
+   Mouse: move to aim, click to drop. Touch: drag to aim, release to drop. */
+function toWorldX(clientX) {
+  return (clientX * dpr - offX) / scaleF;
+}
+let pDown = false;
+cv.addEventListener('pointerdown', e => {
+  ensureAudio(); pDown = true;
+  if (S.state === 'play') S.dropTargetX = toWorldX(e.clientX);
+});
+cv.addEventListener('pointermove', e => {
+  if (S.state === 'play') S.dropTargetX = toWorldX(e.clientX);
+});
+cv.addEventListener('pointerup', e => {
+  if (!pDown) return;
+  pDown = false;
+  if (S.state === 'play') { S.dropTargetX = toWorldX(e.clientX); tryDrop(); }
+});
+window.addEventListener('keydown', e => {
+  if (e.key === ' ' && S.state === 'play') tryDrop();
+  if (e.key === 'p' || e.key === 'P') togglePause();
+});
+
+function tryDrop() {
+  if (!S.canDrop || S.state !== 'play') return;
+  const t = S.current, r = TIERS[t.tier].r;
+  const x = clamp(S.dropX, CUP.left + r + 2, CUP.right - r - 2);
+  const b = makeBlob(x, DROP_Y, t.tier, t.golden);
+  b.scale = 1;
+  S.blobs.push(b);
+  S.canDrop = false; S.dropCd = 0.55;
+  S.current = S.next; S.next = rollSpawn();
+  drawNextPreview(); sfxDrop();
+}
+
+/* ---------------- 5. PHYSICS ----------------
+   Fixed-substep integration + iterative circle constraint solver.
+   Mass ~ r^2, low restitution, positional correction keeps stacks
+   heavy and stable — the "weighty squish" feel comes from here. */
+function physics(dt) {
+  const bs = S.blobs;
+  for (const b of bs) {
+    b.vy += GRAV * dt;
+    b.vx *= (1 - 0.15 * dt);                 // gentle air drag
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    b.rot += b.vx / b.r * dt * 0.55;
+    if (b.mergeCd > 0) b.mergeCd -= dt;
+    b.squash *= Math.exp(-9 * dt);
+    if (b.scale < 1) b.scale = Math.min(1, b.scale + dt * 4.5);
+    b.blink -= dt; if (b.blink < -0.13) b.blink = 1.5 + Math.random() * 3.5;
+  }
+
+  const merges = [];
+  for (let iter = 0; iter < 6; iter++) {
+    // blob-vs-blob
+    for (let i = 0; i < bs.length; i++) {
+      const a = bs[i]; if (a.dead) continue;
+      for (let j = i + 1; j < bs.length; j++) {
+        const b = bs[j]; if (b.dead) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const rr = a.r + b.r, d2 = dx * dx + dy * dy;
+        // same tier near-touching -> queue merge. The +2 epsilon matters:
+        // the solver separates resting neighbors to exactly rr apart, so a
+        // strict-overlap check would never merge side-by-side blobs.
+        if (iter === 0 && a.tier === b.tier && a.mergeCd <= 0 && b.mergeCd <= 0 &&
+            d2 < (rr + 2) * (rr + 2) && d2 > 0) {
+          merges.push([a, b]); a.dead = b.dead = true; continue;
+        }
+        if (d2 >= rr * rr || d2 === 0) continue;
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, pen = rr - d;
+        const ma = a.r * a.r, mb = b.r * b.r, tm = ma + mb;
+        a.x -= nx * pen * (mb / tm); a.y -= ny * pen * (mb / tm);
+        b.x += nx * pen * (ma / tm); b.y += ny * pen * (ma / tm);
+        const rvx = b.vx - a.vx, rvy = b.vy - a.vy, vn = rvx * nx + rvy * ny;
+        if (vn < 0) {
+          const imp = -(1 + 0.12) * vn / (1 / ma + 1 / mb);
+          a.vx -= imp * nx / ma; a.vy -= imp * ny / ma;
+          b.vx += imp * nx / mb; b.vy += imp * ny / mb;
+          if (vn < -220) { const q = Math.min(0.3, -vn / 1600); a.squash = Math.max(a.squash, q); b.squash = Math.max(b.squash, q); }
+          if (vn < -260 && iter === 0) sfxLand(-vn / 1400);
+          a.touched = b.touched = true;
+        }
+      }
+    }
+    // walls & floor
+    for (const b of bs) {
+      if (b.dead) continue;
+      if (b.x - b.r < CUP.left)  { b.x = CUP.left + b.r;  if (b.vx < 0) b.vx *= -0.3; b.touched = true; }
+      if (b.x + b.r > CUP.right) { b.x = CUP.right - b.r; if (b.vx > 0) b.vx *= -0.3; b.touched = true; }
+      if (b.y + b.r > CUP.bottom) {
+        b.y = CUP.bottom - b.r;
+        if (b.vy > 0) {
+          if (b.vy > 260) { b.squash = Math.max(b.squash, Math.min(0.32, b.vy / 1500)); if (iter === 0) sfxLand(b.vy / 1500); }
+          b.vy *= -0.22; b.vx *= 0.92;
+        }
+        b.touched = true;
+      }
+    }
+  }
+  for (const [a, b] of merges) doMerge(a, b);
+  S.blobs = S.blobs.filter(b => !b.dead);
+
+  // danger line: only settled blobs (that have touched something) count
+  let anyOver = false;
+  for (const b of S.blobs) {
+    if (b.touched && b.y - b.r < DANGER_Y) { b.overT += dt; anyOver = true; if (b.overT > 2) return gameOver(); }
+    else b.overT = 0;
+  }
+  S.warn = anyOver ? Math.min(1, S.warn + dt * 3) : Math.max(0, S.warn - dt * 2);
+
+  // chaos zombie bounces around and shoves blobs
+  if (S.zombie) {
+    const z = S.zombie;
+    z.vy += GRAV * dt; z.x += z.vx * dt; z.y += z.vy * dt; z.t += dt;
+    if (z.x - 16 < CUP.left)  { z.x = CUP.left + 16;  z.vx = Math.abs(z.vx) * 0.9; }
+    if (z.x + 16 > CUP.right) { z.x = CUP.right - 16; z.vx = -Math.abs(z.vx) * 0.9; }
+    if (z.y + 16 > CUP.bottom){ z.y = CUP.bottom - 16; z.vy = -Math.abs(z.vy) * 0.82; sfxLand(0.15); }
+    for (const b of S.blobs) {
+      const dx = b.x - z.x, dy = b.y - z.y, d = Math.hypot(dx, dy);
+      if (d < b.r + 16 && d > 0) { b.vx += dx / d * 260 * dt * 8; b.vy += dy / d * 200 * dt * 8; }
+    }
+    if (z.t > 4.5) { burst(z.x, z.y, ['#7fce4a', '#b400ff'], 24, 260); S.zombie = null; }
+  }
+}
+
+/* -------- merging, scoring, combos, specials -------- */
+function doMerge(a, b) {
+  const tier = a.tier;
+  const nx = (a.x + b.x) / 2, ny = (a.y + b.y) / 2;
+
+  // combo window: chained merges multiply score
+  S.combo = (S.comboT > 0) ? S.combo + 1 : 1;
+  S.comboT = 2.5;
+
+  if (tier === TIERS.length - 1) {          // Prismalox + Prismalox = singularity
+    const pts = 2000 * S.combo;
+    S.score += pts;
+    for (const o of S.blobs) if (!o.dead) { o.dead = true; burst(o.x, o.y, rainbow(), 10, 300); }
+    burst(nx, ny, rainbow(), 160, 620, true);
+    popup(nx, ny, '+' + pts, '#fff', 30);
+    announce('PRISMALOX SINGULARITY — THE CUP IS BORN ANEW');
+    S.shake = 26; sfxMerge(9); sfxPurge();
+    addCorruption(20); S.stats.merges++; S.stats.biggest = tier;
+    return;
+  }
+
+  const nt = tier + 1;
+  const nb = makeBlob(nx, ny, nt, false);
+  nb.vx = (a.vx + b.vx) / 2; nb.vy = (a.vy + b.vy) / 2 - 60;   // satisfying little hop
+  nb.scale = 0.55; nb.squash = 0.28; nb.touched = a.touched || b.touched;
+  S.blobs.push(nb);
+
+  let pts = TIERS[nt].pts * S.combo;
+  S.score += pts;
+  S.stats.merges++;
+  if (nt > S.stats.biggest) S.stats.biggest = nt;
+  addCorruption(1.2 + nt * 0.9);
+
+  // juice: particles scale with tier, shake on big merges
+  burst(nx, ny, [tierColor(nt), '#ffd84a', '#ff9be0'], 14 + nt * 6, 220 + nt * 45, nt >= 3);
+  popup(nx, ny - TIERS[nt].r, '+' + pts + (S.combo > 1 ? '  ×' + S.combo : ''), S.combo > 1 ? '#ffd84a' : '#fff', 15 + nt * 1.6);
+  if (nt >= 4) S.shake = Math.min(20, 3 + nt * 1.8);
+  sfxMerge(nt);
+
+  if (nt >= 6) announce(pick(BIG_MERGE_TEXT));
+  else if (Math.random() < 0.32) announce(pick(MERGE_TEXT));
+
+  // Golden Unicorn Poop: its merge purges nearby smaller blobs
+  if (a.golden || b.golden) {
+    let cleared = 0;
+    for (const o of S.blobs) {
+      if (o === nb || o.dead || o.tier >= nt) continue;
+      if (Math.hypot(o.x - nx, o.y - ny) < nb.r * 2.6) {
+        o.dead = true; cleared++;
+        S.score += (o.tier + 1) * 6;
+        burst(o.x, o.y, ['#ffd84a', '#fff2b0'], 14, 300, true);
+      }
+    }
+    if (cleared) { announce('GOLDEN UNICORN PURGE! ✨'); S.shake = Math.max(S.shake, 12); sfxPurge(); }
+  }
+  updateHUD();
+}
+
+/* ---------------- 6. CORRUPTION / JAX / EVENTS ---------------- */
+function addCorruption(v) {
+  S.corruption = clamp(S.corruption + v, 0, 100);
+  S.maxCorruption = Math.max(S.maxCorruption, S.corruption);
+}
+function corruptionTick(dt) {
+  // fill level slowly corrupts; an empty-ish cup slowly purifies
+  let top = CUP.bottom;
+  for (const b of S.blobs) top = Math.min(top, b.y - b.r);
+  const fill = clamp((CUP.bottom - top) / (CUP.bottom - DANGER_Y), 0, 1);
+  addCorruption((fill * 1.4 - 0.35) * dt);
+
+  // chaos event: at high corruption a zombie occasionally cannonballs in
+  S.zombieCd -= dt;
+  if (!S.zombie && S.corruption > 75 && S.zombieCd <= 0 && Math.random() < dt * 0.12) {
+    S.zombie = { x: CUP.left + 40 + Math.random() * (CUP.right - CUP.left - 80), y: DROP_Y, vx: (Math.random() - .5) * 500, vy: 120, t: 0 };
+    S.zombieCd = 18;
+    announce('A ZOMBIE CRASHED THE PARTY! He just wants to dance.');
+    sfxZombie();
+  }
+
+  // Prismalox Intervention: periodic gift blob from above
+  S.prismaT -= dt;
+  if (S.prismaT <= 0) {
+    S.prismaT = 75 + Math.random() * 45;
+    const t = 4 + Math.floor(Math.random() * 2);
+    const b = makeBlob(W / 2 + (Math.random() - .5) * 60, DROP_Y - 30, t, false);
+    b.mergeCd = 0.3;
+    S.blobs.push(b);
+    burst(b.x, b.y, rainbow(), 50, 380, true);
+    announce('✨ PRISMALOX INTERVENTION ✨');
+    S.shake = 8; sfxPurge();
+  }
+}
+
+/* ---------------- 7. PARTICLES / POPUPS / SHAKE ---------------- */
+function burst(x, y, colors, n, speed, sparkly) {
+  S.stats.glitter += n;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = speed * (0.3 + Math.random() * 0.9);
+    S.particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - speed * 0.25,
+      life: 0.5 + Math.random() * 0.7, age: 0,
+      c: colors[i % colors.length], sz: 2 + Math.random() * 4,
+      star: sparkly && Math.random() < 0.5, rot: Math.random() * 7,
+    });
+  }
+  if (S.particles.length > 900) S.particles.splice(0, S.particles.length - 900);
+}
+function rainbow() { return ['#ff3b3b', '#ff9e2c', '#ffd84a', '#4ade80', '#4aa8ff', '#b46bff', '#ff6bd6']; }
+function popup(x, y, txt, c, sz) { S.popups.push({ x, y, txt, c, sz, age: 0 }); }
+function particlesTick(dt) {
+  for (const p of S.particles) {
+    p.age += dt; p.vy += 900 * dt; p.vx *= (1 - 1.6 * dt);
+    p.x += p.vx * dt; p.y += p.vy * dt; p.rot += 6 * dt;
+  }
+  S.particles = S.particles.filter(p => p.age < p.life);
+  for (const p of S.popups) { p.age += dt; p.y -= 42 * dt; }
+  S.popups = S.popups.filter(p => p.age < 1.1);
+  S.shake *= Math.exp(-5 * dt);
+}
+
+/* ---------------- 8. RENDERING ---------------- */
+function tierColor(t) { const c = TIERS[t]; return `hsl(${c.hue},${c.sat}%,${c.lit}%)`; }
+function tierDark(t)  { const c = TIERS[t]; return `hsl(${c.hue},${c.sat}%,${Math.max(8, c.lit - 20)}%)`; }
+
+function draw() {
+  const w = cv.width, h = cv.height;
+  // background shifts brown-night -> hot pink/purple as corruption rises
+  const k = S.corruption / 100;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, `hsl(${290 - k * 30},${30 + k * 45}%,${8 + k * 10}%)`);
+  g.addColorStop(1, `hsl(${320 + k * 20},${35 + k * 45}%,${14 + k * 14}%)`);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+
+  // ambient sparkle field grows with corruption
+  if (k > 0.25) {
+    ctx.globalAlpha = (k - 0.25) * 0.8;
+    for (let i = 0; i < 26; i++) {
+      const sx = (Math.sin(i * 37.7 + S.time * (0.2 + i % 3 * 0.13)) * .5 + .5) * w;
+      const sy = (Math.sin(i * 91.3 + S.time * 0.31 + i) * .5 + .5) * h;
+      const tw = (Math.sin(S.time * 3 + i * 2.4) * .5 + .5);
+      ctx.fillStyle = i % 2 ? '#ff9be0' : '#ffd84a';
+      ctx.fillRect(sx, sy, 2 + tw * 2, 2 + tw * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // world transform + screen shake
+  const shx = (Math.random() - .5) * S.shake, shy = (Math.random() - .5) * S.shake;
+  ctx.setTransform(scaleF, 0, 0, scaleF, offX + shx * scaleF, offY + shy * scaleF);
+
+  drawJax();
+  drawCupBack();
+  for (const b of S.blobs) drawBlob(b);
+  if (S.zombie) drawZombie(S.zombie);
+  drawParticles();
+  drawCupFront();
+  drawHands();
+  drawDanger();
+  if (S.state === 'play') drawDropper();
+  drawPopups();
+
+  // red warning vignette when something sits above the line
+  if (S.warn > 0.02) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const vg = ctx.createRadialGradient(w / 2, h / 2, h * 0.3, w / 2, h / 2, h * 0.75);
+    vg.addColorStop(0, 'rgba(255,0,60,0)');
+    vg.addColorStop(1, `rgba(255,0,60,${0.35 * S.warn * (0.6 + 0.4 * Math.sin(S.time * 10))})`);
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
+  }
+}
+
+function drawCupBack() {
+  const cw = CUP.right - CUP.left;
+  // back of the glass + floor ellipse
+  ctx.fillStyle = 'rgba(160,220,255,0.06)';
+  ctx.fillRect(CUP.left, DANGER_Y - 60, cw, CUP.bottom - DANGER_Y + 60);
+  ctx.beginPath();
+  ctx.ellipse(CUP.left + cw / 2, CUP.bottom, cw / 2, 16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(160,220,255,0.10)'; ctx.fill();
+}
+function drawCupFront() {
+  const cw = CUP.right - CUP.left, cx = CUP.left + cw / 2;
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(200,235,255,0.5)';
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(CUP.left, DANGER_Y - 60); ctx.lineTo(CUP.left, CUP.bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CUP.right, DANGER_Y - 60); ctx.lineTo(CUP.right, CUP.bottom); ctx.stroke();
+  // front lip of the floor + top rim ellipse: sells the cylinder
+  ctx.beginPath(); ctx.ellipse(cx, CUP.bottom, cw / 2, 16, 0, 0, Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx, DANGER_Y - 60, cw / 2, 13, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(200,235,255,0.35)'; ctx.lineWidth = 3; ctx.stroke();
+  // glass shine streaks
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 9;
+  ctx.beginPath(); ctx.moveTo(CUP.left + 22, DANGER_Y - 20); ctx.lineTo(CUP.left + 22, CUP.bottom - 60); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CUP.right - 30, DANGER_Y + 40); ctx.lineTo(CUP.right - 30, CUP.bottom - 130); ctx.stroke();
+}
+function drawDanger() {
+  const pulse = 0.55 + 0.45 * Math.sin(S.time * (S.warn > 0 ? 12 : 3));
+  ctx.strokeStyle = `rgba(255,40,70,${0.5 + 0.5 * S.warn * pulse})`;
+  ctx.lineWidth = 3 + S.warn * 3;
+  ctx.setLineDash([14, 10]);
+  ctx.beginPath(); ctx.moveTo(CUP.left - 6, DANGER_Y); ctx.lineTo(CUP.right + 6, DANGER_Y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = `rgba(255,90,110,${0.7 + 0.3 * pulse})`;
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('DANGER', CUP.right + 12, DANGER_Y + 4);
+}
+function drawDropper() {
+  // dropper glides toward the pointer; held blob dangles under it
+  const t = S.current, r = TIERS[t.tier].r;
+  const x = clamp(S.dropX, CUP.left + r + 2, CUP.right - r - 2);
+  ctx.fillStyle = '#3a2a4a';
+  ctx.strokeStyle = '#ff9be0'; ctx.lineWidth = 3;
+  roundRect(x - 26, DROP_Y - r - 34, 52, 16, 8); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, DROP_Y - r - 18); ctx.lineTo(x, DROP_Y - r);
+  ctx.strokeStyle = 'rgba(255,155,224,0.8)'; ctx.stroke();
+  if (S.canDrop) {
+    // aim guide
+    ctx.setLineDash([4, 12]); ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, DROP_Y + r); ctx.lineTo(x, CUP.bottom - 8); ctx.stroke();
+    ctx.setLineDash([]);
+    drawBlobShape(x, DROP_Y, t.tier, 1, 0, 0, t.golden, 0);
+  }
+}
+function drawParticles() {
+  for (const p of S.particles) {
+    const a = 1 - p.age / p.life;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.c;
+    if (p.star) {
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      const s = p.sz * (0.6 + a);
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        ctx.lineTo(Math.cos(i * Math.PI / 2) * s * 1.8, Math.sin(i * Math.PI / 2) * s * 1.8);
+        ctx.lineTo(Math.cos(i * Math.PI / 2 + Math.PI / 4) * s * 0.55, Math.sin(i * Math.PI / 2 + Math.PI / 4) * s * 0.55);
+      }
+      ctx.closePath(); ctx.fill(); ctx.restore();
+    } else {
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.sz * a, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function drawPopups() {
+  ctx.textAlign = 'center';
+  for (const p of S.popups) {
+    const a = 1 - p.age / 1.1, pop = p.age < 0.15 ? p.age / 0.15 * 1.25 : 1 + 0.25 * (1 - Math.min(1, (p.age - .15) / .2));
+    ctx.globalAlpha = a;
+    ctx.font = `900 ${p.sz * pop}px sans-serif`;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 4;
+    ctx.strokeText(p.txt, p.x, p.y);
+    ctx.fillStyle = p.c; ctx.fillText(p.txt, p.x, p.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* -------- blob rendering: squishy body + face + per-tier flair -------- */
+function drawBlob(b) {
+  drawBlobShape(b.x, b.y, b.tier, b.scale, b.squash, b.rot, b.golden, b.seed, b.blink < 0);
+}
+function drawBlobShape(x, y, tier, scale, squash, rot, golden, seed, blinking) {
+  const T = TIERS[tier]; let r = T.r;
+  ctx.save();
+  ctx.translate(x, y);
+  const pulse = (T.deco === 'sequin' || T.deco === 'prisma') ? 1 + 0.02 * Math.sin(S.time * 6 + seed) : 1;
+  ctx.scale(scale * (1 + squash) * pulse, scale * (1 - squash) * pulse);
+
+  // body: radial-lit squishy ball
+  const body = ctx.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.1, 0, 0, r * 1.15);
+  body.addColorStop(0, `hsl(${T.hue},${T.sat}%,${Math.min(85, T.lit + 22)}%)`);
+  body.addColorStop(0.7, tierColor(tier));
+  body.addColorStop(1, tierDark(tier));
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+
+  // rainbow-layered body for Pride Parade Blob
+  if (T.deco === 'rainbow') {
+    const cols = rainbow();
+    for (let i = cols.length - 1; i >= 0; i--) {
+      ctx.fillStyle = cols[i]; ctx.globalAlpha = 0.85;
+      ctx.beginPath(); ctx.arc(0, 0, r * (i + 1) / cols.length, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    const sh = ctx.createRadialGradient(-r * .35, -r * .4, r * .1, 0, 0, r * 1.1);
+    sh.addColorStop(0, 'rgba(255,255,255,0.35)'); sh.addColorStop(.6, 'rgba(255,255,255,0)');
+    sh.addColorStop(1, 'rgba(0,0,0,0.3)');
+    ctx.fillStyle = sh; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  }
+  // Prismalox: black-hole core + rotating rainbow swirl
+  if (T.deco === 'prisma') {
+    const core = ctx.createRadialGradient(0, 0, 2, 0, 0, r);
+    core.addColorStop(0, '#000'); core.addColorStop(0.55, '#12031f'); core.addColorStop(1, '#3a0a5e');
+    ctx.fillStyle = core; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+    const cols = rainbow();
+    ctx.lineWidth = 5; ctx.lineCap = 'round';
+    for (let i = 0; i < 7; i++) {
+      const a0 = S.time * 1.6 + i * 0.9;
+      ctx.strokeStyle = cols[i]; ctx.globalAlpha = 0.8;
+      ctx.beginPath(); ctx.arc(0, 0, r * (0.35 + i * 0.09), a0, a0 + 1.7); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < 5; i++) {   // orbiting sparkles
+      const a = S.time * 2.2 + i * 1.26;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(Math.cos(a) * r * 1.02 - 2, Math.sin(a) * r * 1.02 - 2, 4, 4);
+    }
+  }
+
+  // classic poop swirl tip (smaller tiers read as piles)
+  if (tier <= 6) {
+    ctx.fillStyle = tierDark(tier);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.32, -r * 0.78);
+    ctx.quadraticCurveTo(0, -r * 1.45, r * 0.4, -r * 0.95);
+    ctx.quadraticCurveTo(r * 0.15, -r * 0.75, -r * 0.32, -r * 0.78);
+    ctx.fill();
+  }
+
+  // gloss highlight (extra wet for Seal Pile)
+  ctx.fillStyle = `rgba(255,255,255,${T.deco === 'wet' ? 0.5 : 0.28})`;
+  ctx.beginPath(); ctx.ellipse(-r * 0.38, -r * 0.42, r * 0.3, r * 0.17, -0.6, 0, Math.PI * 2); ctx.fill();
+  if (T.deco === 'wet') {   // drip
+    ctx.fillStyle = 'rgba(200,240,255,0.5)';
+    ctx.beginPath(); ctx.ellipse(r * 0.45, r * 0.3 + Math.sin(S.time * 2 + seed) * 2, r * 0.08, r * 0.16, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // sparkle / glitter / sequin decorations
+  if (T.deco === 'spark' || T.deco === 'glitter' || T.deco === 'sequin' || golden) {
+    const n = T.deco === 'glitter' ? 12 : T.deco === 'sequin' ? 16 : 5;
+    for (let i = 0; i < n; i++) {
+      const a = seed + i * 2.4, rr = r * (0.25 + ((i * 0.618) % 0.6));
+      const tw = 0.5 + 0.5 * Math.sin(S.time * (3 + i % 4) + i);
+      ctx.fillStyle = T.deco === 'sequin' ? `hsl(${(i * 47 + S.time * 120) % 360},90%,70%)` : (golden ? '#fff6c0' : '#ffffff');
+      ctx.globalAlpha = 0.5 + tw * 0.5;
+      ctx.fillRect(Math.cos(a) * rr - 1.6, Math.sin(a) * rr - 1.6, 3.2, 3.2);
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (golden) {   // golden sheen + tiny crown
+    ctx.fillStyle = 'rgba(255,216,74,0.4)';
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd84a';
+    ctx.beginPath();
+    ctx.moveTo(-r * .3, -r * .95); ctx.lineTo(-r * .3, -r * 1.25); ctx.lineTo(-r * .1, -r * 1.05);
+    ctx.lineTo(0, -r * 1.3); ctx.lineTo(r * .1, -r * 1.05); ctx.lineTo(r * .3, -r * 1.25); ctx.lineTo(r * .3, -r * .95);
+    ctx.closePath(); ctx.fill();
+  }
+  // Business Suit Filth: shiny sweep + necktie
+  if (T.deco === 'shiny') {
+    ctx.save(); ctx.rotate(((S.time * 0.7 + seed) % 3) - 1.5);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(-r, -r * 0.12, r * 2, r * 0.2); ctx.restore();
+    ctx.fillStyle = '#c33';
+    ctx.beginPath(); ctx.moveTo(0, r * .3); ctx.lineTo(-r * .12, r * .5); ctx.lineTo(0, r * .85); ctx.lineTo(r * .12, r * .5); ctx.closePath(); ctx.fill();
+  }
+  // Theater Kid Dump: beret + single dramatic tear
+  if (T.deco === 'drama') {
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.ellipse(-r * .35, -r * .82, r * .42, r * .16, -0.35, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(120,200,255,0.9)';
+    ctx.beginPath(); ctx.ellipse(-r * .3, r * .05 + (S.time * 30 % (r * .4)), r * .05, r * .1, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // Unicorn Horn Core: glowing golden horn
+  if (T.deco === 'horn') {
+    const glow = ctx.createRadialGradient(0, -r * 1.1, 2, 0, -r * 1.1, r * 0.7);
+    glow.addColorStop(0, 'rgba(255,240,150,0.9)'); glow.addColorStop(1, 'rgba(255,240,150,0)');
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, -r * 1.1, r * 0.7, 0, Math.PI * 2); ctx.fill();
+    const horn = ctx.createLinearGradient(0, -r * 0.8, 0, -r * 1.6);
+    horn.addColorStop(0, '#e8a23a'); horn.addColorStop(1, '#fff2b0');
+    ctx.fillStyle = horn;
+    ctx.beginPath(); ctx.moveTo(-r * .16, -r * .8); ctx.lineTo(0, -r * 1.6); ctx.lineTo(r * .16, -r * .8); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(140,80,20,0.6)'; ctx.lineWidth = 2;
+    for (let i = 1; i <= 3; i++) {
+      ctx.beginPath(); ctx.moveTo(-r * .16 * (1 - i / 4), -r * (0.8 + i * 0.2));
+      ctx.lineTo(r * .16 * (1 - i / 4), -r * (0.8 + i * 0.2)); ctx.stroke();
+    }
+  }
+
+  // face: eyes track a little, blink, mouth gets surprised when squished
+  const look = Math.sin(seed * 9 + S.time * 0.7) * r * 0.05;
+  const eo = r * 0.32, ey = -r * 0.12, er = Math.max(3, r * 0.14);
+  const inv = T.deco === 'prisma';
+  for (const sgn of [-1, 1]) {
+    if (blinking) {
+      ctx.strokeStyle = inv ? '#fff' : '#241206'; ctx.lineWidth = Math.max(2, r * 0.05);
+      ctx.beginPath(); ctx.moveTo(sgn * eo - er * .7, ey); ctx.lineTo(sgn * eo + er * .7, ey); ctx.stroke();
+    } else {
+      ctx.fillStyle = inv ? '#fff' : '#fff';
+      ctx.beginPath(); ctx.arc(sgn * eo, ey, er, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = inv ? '#b400ff' : '#241206';
+      ctx.beginPath(); ctx.arc(sgn * eo + look, ey + er * 0.15, er * 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.strokeStyle = inv ? '#fff' : '#241206'; ctx.lineWidth = Math.max(2, r * 0.05); ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (squash > 0.1) { ctx.arc(0, r * 0.28, Math.max(2.5, r * 0.12), 0, Math.PI * 2); ctx.stroke(); }  // "o" surprise
+  else { ctx.arc(0, r * 0.18, r * 0.28, 0.25, Math.PI - 0.25); ctx.stroke(); }                          // happy
+  ctx.restore();
+}
+
+/* -------- Jax: the little guy who is Definitely Fine -------- */
+function drawJax() {
+  const k = S.corruption / 100;
+  const x = 62, gy = CUP.bottom;
+  const sway = k > 0.5 ? Math.sin(S.time * 3.2) * (k - 0.5) * 10 : 0;      // hip sway kicks in mid-corruption
+  const vog = k > 0.5 ? (k - 0.5) * 2 : 0;                                  // vogue arm intensity
+  ctx.save();
+  ctx.translate(x + sway * 0.4, gy);
+
+  // horn glow scales with corruption
+  if (k > 0.05) {
+    const gl = ctx.createRadialGradient(0, -104, 2, 0, -104, 26 + k * 30);
+    gl.addColorStop(0, `rgba(255,240,150,${0.25 + k * 0.7})`); gl.addColorStop(1, 'rgba(255,240,150,0)');
+    ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, -104, 26 + k * 30, 0, Math.PI * 2); ctx.fill();
+  }
+  // boots + jeans
+  ctx.fillStyle = '#6b4226';
+  ctx.fillRect(-14, -12, 11, 12); ctx.fillRect(3, -12, 11, 12);
+  ctx.fillStyle = '#3a5a8a';
+  ctx.fillRect(-12, -42, 9, 32); ctx.fillRect(3, -42, 9, 32);
+  // navy work shirt torso (leans back as he vogues)
+  ctx.save(); ctx.rotate(-vog * 0.12);
+  ctx.fillStyle = '#22355c';
+  roundRect(-15, -74, 30, 34, 8); ctx.fill();
+  ctx.strokeStyle = '#c9d4e8'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, -74); ctx.lineTo(0, -42); ctx.stroke();     // zipper stripe
+  // arms: relaxed at low corruption, striking poses at high
+  ctx.strokeStyle = '#c98a5a'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+  const aA = -0.5 - vog * (1.6 + Math.sin(S.time * 3.2) * 0.5);
+  const aB =  0.5 + vog * (1.4 + Math.sin(S.time * 3.2 + 2) * 0.5);
+  ctx.beginPath(); ctx.moveTo(-13, -66); ctx.lineTo(-13 + Math.cos(Math.PI - aA) * 20, -66 + Math.sin(Math.PI - aA) * -20); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(13, -66); ctx.lineTo(13 + Math.cos(aB) * 20, -66 + Math.sin(aB) * -20); ctx.stroke();
+  // head
+  ctx.fillStyle = '#d99a66';
+  ctx.beginPath(); ctx.arc(0, -86, 13, 0, Math.PI * 2); ctx.fill();
+  // rainbow mohawk-mane
+  const cols = rainbow();
+  for (let i = 0; i < 7; i++) {
+    const a = -2.6 + i * 0.38;
+    ctx.fillStyle = cols[i % cols.length];
+    ctx.save(); ctx.translate(Math.cos(a) * 12, -86 + Math.sin(a) * 12);
+    ctx.rotate(a + Math.PI / 2 + (k > 0.5 ? Math.sin(S.time * 6 + i) * 0.1 : 0));
+    ctx.fillRect(-2.5, -(7 + (i === 3 ? 5 : 0)), 5, 7 + (i === 3 ? 5 : 0)); ctx.restore();
+  }
+  // white horn + gold band, brighter with corruption
+  ctx.fillStyle = `hsl(48,100%,${75 + k * 22}%)`;
+  ctx.beginPath(); ctx.moveTo(-3, -97); ctx.lineTo(0, -112 - k * 5); ctx.lineTo(3, -97); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#e8b23a'; ctx.fillRect(-3.5, -99, 7, 3);
+  // face: mild concern -> delighted panic
+  ctx.fillStyle = '#241206';
+  ctx.beginPath(); ctx.arc(-4, -87, 1.8 + k, 0, Math.PI * 2); ctx.arc(5, -87, 1.8 + k, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#241206'; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  if (k < 0.4) { ctx.moveTo(-3, -80); ctx.lineTo(4, -80); }
+  else ctx.arc(0.5, -82, 4, 0.15, Math.PI - 0.15);
+  ctx.stroke();
+  if (k > 0.6) { ctx.fillStyle = 'rgba(255,120,180,.5)';                     // blush
+    ctx.beginPath(); ctx.arc(-8, -83, 2.6, 0, 7); ctx.arc(9, -83, 2.6, 0, 7); ctx.fill(); }
+  ctx.restore();
+  // sparkles orbit him when he's far gone
+  if (k > 0.7) {
+    for (let i = 0; i < 4; i++) {
+      const a = S.time * 2 + i * 1.6, tw = .5 + .5 * Math.sin(S.time * 5 + i);
+      ctx.fillStyle = '#ffd84a'; ctx.globalAlpha = tw;
+      ctx.fillRect(Math.cos(a) * 34 - 2, -70 + Math.sin(a) * 44 - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+/* -------- corruption set dressing: hands on the glass, rim peeker -------- */
+const HAND_SLOTS = [
+  { side: -1, y: 520 }, { side: 1, y: 430 }, { side: -1, y: 660 }, { side: 1, y: 610 },
+];
+function drawHands() {
+  const k = S.corruption / 100;
+  if (k <= 0.6) return;
+  const a = Math.min(1, (k - 0.6) / 0.3);
+  ctx.globalAlpha = a;
+  HAND_SLOTS.forEach((h, i) => {
+    if (i >= Math.ceil(a * HAND_SLOTS.length)) return;
+    const x = h.side < 0 ? CUP.left : CUP.right;
+    const wig = Math.sin(S.time * 3 + i * 2) * 3;
+    ctx.save(); ctx.translate(x, h.y + wig); ctx.scale(-h.side, 1);
+    ctx.fillStyle = '#6e8f3c';
+    ctx.beginPath(); ctx.ellipse(0, 0, 9, 12, 0.3, 0, Math.PI * 2); ctx.fill();   // palm
+    for (let f = 0; f < 3; f++) {                                                  // grabby fingers
+      const fa = -0.9 + f * 0.55 + Math.sin(S.time * 5 + i + f) * 0.12;
+      ctx.save(); ctx.rotate(fa);
+      ctx.fillStyle = '#7fa346'; roundRect(6, -2.5, 13, 5, 2.5); ctx.fill(); ctx.restore();
+    }
+    ctx.restore();
+  });
+  // one swirl-headed zombie face peeks over the rim near max corruption
+  if (k > 0.85) {
+    const px = CUP.left + 60 + Math.sin(S.time * 0.6) * 40;
+    const py = DANGER_Y - 74 + Math.sin(S.time * 2.3) * 4;
+    ctx.fillStyle = '#7a5230';
+    ctx.beginPath(); ctx.arc(px, py, 14, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = '#5f3d1a';
+    ctx.beginPath(); ctx.moveTo(px - 5, py - 12); ctx.quadraticCurveTo(px, py - 24, px + 8, py - 14);
+    ctx.quadraticCurveTo(px + 2, py - 10, px - 5, py - 12); ctx.fill();
+    ctx.fillStyle = '#ffd84a';
+    ctx.beginPath(); ctx.arc(px + 2, py - 5, 4.5, 0, Math.PI * 2); ctx.fill();     // single glowing eye
+    ctx.fillStyle = '#241206';
+    ctx.beginPath(); ctx.arc(px + 2 + Math.sin(S.time) * 1.5, py - 5, 2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawZombie(z) {
+  ctx.save(); ctx.translate(z.x, z.y); ctx.rotate(Math.sin(z.t * 9) * 0.3);
+  ctx.fillStyle = '#7a5230';
+  ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#5f3d1a';
+  ctx.beginPath(); ctx.moveTo(-6, -12); ctx.quadraticCurveTo(0, -26, 9, -14);
+  ctx.quadraticCurveTo(2, -10, -6, -12); ctx.fill();
+  ctx.fillStyle = '#ffd84a'; ctx.beginPath(); ctx.arc(3, -3, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#241206'; ctx.beginPath(); ctx.arc(3, -3, 2.2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#241206'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-6, 6); ctx.lineTo(8, 8); ctx.stroke();
+  // party hat: he came to celebrate
+  ctx.fillStyle = '#ff4ecd';
+  ctx.beginPath(); ctx.moveTo(-14, -8); ctx.lineTo(-8, -26); ctx.lineTo(-2, -10); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if (Math.random() < 0.25) burst(z.x, z.y, rainbow(), 2, 120, true);
+}
+
+/* ---------------- 9. HUD / SCREENS ---------------- */
+const $ = id => document.getElementById(id);
+function updateHUD() {
+  $('score').textContent = S.score;
+  $('best').textContent = 'BEST ' + Math.max(S.best, S.score);
+  $('combo').textContent = (S.combo > 1 && S.comboT > 0) ? 'COMBO ×' + S.combo : '';
+  $('corrFill').style.width = S.corruption.toFixed(1) + '%';
+  const k = S.corruption;
+  $('corrTag').textContent =
+    k > 85 ? 'JAX IS TURNING…' : k > 70 ? 'the horn glows' : k > 50 ? 'he’s voguing' :
+    k > 30 ? 'jax feels weird' : '';
+}
+function drawNextPreview() {
+  const c = $('nextCv'), g2 = c.getContext('2d');
+  g2.clearRect(0, 0, 56, 56);
+  const t = S.next, r = Math.min(20, TIERS[t.tier].r);
+  g2.save(); g2.translate(28, 30);
+  const T = TIERS[t.tier];
+  const body = g2.createRadialGradient(-r * .3, -r * .35, 1, 0, 0, r * 1.1);
+  body.addColorStop(0, `hsl(${T.hue},${T.sat}%,${Math.min(85, T.lit + 22)}%)`);
+  body.addColorStop(1, `hsl(${T.hue},${T.sat}%,${Math.max(10, T.lit - 15)}%)`);
+  g2.fillStyle = t.golden ? '#ffd84a' : body;
+  g2.beginPath(); g2.arc(0, 0, r, 0, Math.PI * 2); g2.fill();
+  g2.fillStyle = 'rgba(0,0,0,0.35)';
+  g2.beginPath(); g2.moveTo(-r * .3, -r * .75); g2.quadraticCurveTo(0, -r * 1.4, r * .38, -r * .9);
+  g2.quadraticCurveTo(r * .12, -r * .7, -r * .3, -r * .75); g2.fill();
+  g2.fillStyle = '#fff'; g2.beginPath();
+  g2.arc(-r * .3, -r * .1, r * .16, 0, 7); g2.arc(r * .3, -r * .1, r * .16, 0, 7); g2.fill();
+  g2.fillStyle = '#241206'; g2.beginPath();
+  g2.arc(-r * .3, -r * .07, r * .08, 0, 7); g2.arc(r * .3, -r * .07, r * .08, 0, 7); g2.fill();
+  g2.restore();
+  $('nextName').textContent = (t.golden ? '★ GOLDEN ' : '') + TIERS[t.tier].name;
+}
+let annT = null;
+function announce(txt) {
+  const el = $('announce');
+  el.textContent = txt;
+  el.classList.remove('show');
+  void el.offsetWidth;            // restart the CSS animation
+  el.classList.add('show');
+  clearTimeout(annT); annT = setTimeout(() => el.classList.remove('show'), 2100);
+}
+
+function showScreen(mode) {
+  $('screen').classList.remove('hidden');
+  $('stats').style.display = 'none';
+  if (mode === 'menu') {
+    $('cardTitle').innerHTML = 'POOPOCALYPSE<br>FILTH CUP';
+    $('cardSub').textContent = 'a disgusting little merge game';
+    $('cardBody').style.display = '';
+    $('bigBtn').textContent = 'DROP IN';
+  } else if (mode === 'paused') {
+    $('cardTitle').textContent = 'PAUSED';
+    $('cardSub').textContent = 'the filth waits patiently';
+    $('cardBody').style.display = 'none';
+    $('bigBtn').textContent = 'RESUME';
+  } else if (mode === 'over') {
+    const corrupted = S.maxCorruption >= 85;
+    $('cardTitle').textContent = 'GAME OVER';
+    $('cardSub').textContent = corrupted ? pick(GAMEOVER_CORRUPT) : pick(GAMEOVER_TEXT);
+    $('cardBody').style.display = 'none';
+    $('stats').style.display = 'block';
+    $('stScore').textContent = S.score;
+    $('stBig').textContent = S.stats.biggest >= 0 ? TIERS[S.stats.biggest].name : '—';
+    $('stMerges').textContent = S.stats.merges;
+    $('stGlitter').textContent = S.stats.glitter + ' sparkles';
+    $('stCorr').textContent = Math.round(S.maxCorruption) + '%' + (corrupted ? ' 🌈' : '');
+    $('bigBtn').textContent = 'ONE MORE CUP';
+  }
+}
+$('bigBtn').addEventListener('click', () => {
+  ensureAudio();
+  if (S.state === 'paused') { S.state = 'play'; $('screen').classList.add('hidden'); return; }
+  resetState(); S.state = 'play';
+  $('screen').classList.add('hidden');
+});
+$('pauseBtn').addEventListener('click', togglePause);
+$('restartBtn').addEventListener('click', () => {
+  if (S.state === 'over' || S.state === 'menu') { resetState(); S.state = 'play'; $('screen').classList.add('hidden'); }
+  else { resetState(); S.state = 'play'; }
+});
+function togglePause() {
+  if (S.state === 'play') { S.state = 'paused'; showScreen('paused'); }
+  else if (S.state === 'paused') { S.state = 'play'; $('screen').classList.add('hidden'); }
+}
+function gameOver() {
+  if (S.state !== 'play') return;
+  S.state = 'over';
+  S.best = Math.max(S.best, S.score);
+  try { localStorage.setItem('poopocalypse.best', S.best); } catch (e) { /* private mode: score just isn't saved */ }
+  sfxOver();
+  S.shake = 14;
+  showScreen('over');
+}
+
+/* ---------------- helpers ---------------- */
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* ---------------- 10. MAIN LOOP ---------------- */
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(innerWidth * dpr);
+  cv.height = Math.round(innerHeight * dpr);
+  scaleF = Math.min(cv.width / W, cv.height / H);
+  offX = (cv.width - W * scaleF) / 2;
+  offY = (cv.height - H * scaleF) / 2;
+}
+window.addEventListener('resize', resize);
+
+let last = performance.now(), acc = 0;
+const STEP = 1 / 120;
+function loop(now) {
+  requestAnimationFrame(loop);
+  let dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  S.time += dt;
+
+  if (S.state === 'play') {
+    // dropper glides toward pointer
+    S.dropX += (S.dropTargetX - S.dropX) * Math.min(1, dt * 16);
+    if (!S.canDrop) { S.dropCd -= dt; if (S.dropCd <= 0) S.canDrop = true; }
+    if (S.comboT > 0) { S.comboT -= dt; if (S.comboT <= 0) { S.combo = 0; updateHUD(); } }
+    acc += dt;
+    while (acc >= STEP && S.state === 'play') { physics(STEP); acc -= STEP; }
+    corruptionTick(dt);
+    updateHUD();
+  }
+  particlesTick(dt);
+  draw();
+}
+
+resize();
+resetState();
+showScreen('menu');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
