@@ -362,3 +362,26 @@ placed too close reads as "moved closer"; and a fresh spray particle is already
 barrel" is proven by the muzzle *sprite* sitting exactly on `nozzleWorldPos()`
 (Δ≈0) plus the particle being nearer the nozzle than the chest — not by an
 absolute distance to the spawn point.
+
+## Rigid-body physics + articulation (iteration 26)
+
+~60-line custom physics (`physBodies` / `addPhysBody` / `updatePhysics`), no
+library: gravity integration, ground bounce with restitution, rolling
+friction, angular tumble, rail/bounds reflection, player kick-through, and
+optional `ttl` for self-cleaning debris. Three users: deck props (cones,
+buckets, crates — the jet applies real impulses inside `updateHose`, force
+scaled by `dt`/mass and distance along the aim axis), zombie death ragdolls
+(6 chunks incl. the eye, `ttl` ~1.5s with end-of-life shrink), and anything
+future levels toss around. Props run in the always-on tick section so they
+settle even during menus; `UJ.step` runs them too so tests see physics.
+
+Characters are articulated with pivot groups, not baked poses: zombie arms
+hang from shoulder joints and feet from ankle pivots, and a per-zombie
+`gaitT` phase (randomized so the horde never marches in sync) advances with
+state-dependent rate — feet alternate lift+toe-pitch, belly squash-stretches
+on footfalls, head bobbles with a lag, arms reach forward in chase and flail
+in windup, all eased with `1 - 0.001^dt` smoothing toward pose targets so
+state changes blend instead of snapping. Jax's whole head (face, ears, mane,
+horn) rides a neck joint that nods with aim pitch and rolls into strafes;
+mane spikes ripple back harder with speed; boots counter-rotate against hip
+swing for an ankle. Playtest checks all of it headlessly (13 checks).

@@ -136,6 +136,62 @@ ok('spraying a poop pile reduces its dirt', clean.skipped || clean.after < clean
 const xp = await page.evaluate(() => { const b = window.UJ.RPG?.xp ?? 0; window.UJ.gainXP(50); return { before: b, after: window.UJ.RPG?.xp ?? 0 }; });
 ok('gainXP increments RPG progression', xp.after > xp.before, `${xp.before} → ${xp.after}`);
 
+// 6b. PHYSICS — spraying a deck prop blasts it away (rigid-body impulse)
+const phys = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const prop = UJ.physBodies.filter(b => b.ttl == null)
+    .sort((a,b) => a.g.position.distanceTo(P.pos) - b.g.position.distanceTo(P.pos))[0];
+  if (!prop) return { skipped: true };
+  const p0 = prop.g.position.clone();
+  UJ.Input.spray = true;
+  for (let i=0;i<25;i++) { const q = prop.g.position; UJ.aimAt(q.x, q.y + 0.3, q.z); UJ.step(0.03); }
+  UJ.Input.spray = false;
+  for (let i=0;i<30;i++) UJ.step(0.03); // let it fly + settle
+  return { moved: prop.g.position.distanceTo(p0), count: UJ.physBodies.length };
+});
+ok('high-pressure jet sends a physics prop flying', phys.skipped || phys.moved > 0.5,
+   phys.skipped ? 'no props found' : `prop moved ${phys.moved.toFixed(2)}m · ${phys.count} bodies simulated`);
+
+// 6c. ARTICULATION — a chasing zombie's shoulder joints swing across steps
+const gait = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const z = UJ.spawnZombieAt(P.pos.x, P.pos.z - 8); // far enough to stay chasing
+  const samples = [];
+  for (let i=0;i<24;i++) { UJ.step(0.03); if (i % 4 === 0) samples.push(z.arms[0].rotation.x); }
+  const range = Math.max(...samples) - Math.min(...samples);
+  const feetMove = z.feet && z.feet[0].position.y !== z.feet[1].position.y;
+  return { range, feetMove, state: z.state };
+});
+ok('zombie limbs are articulated (arms swing, feet step)', gait.range > 0.05 && gait.feetMove,
+   `shoulder swing range ${gait.range.toFixed(2)} rad · feet independent=${gait.feetMove} · state=${gait.state}`);
+
+// 6d. RAGDOLL — killing a zombie bursts it into physics chunks
+const rag = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const before = UJ.physBodies.length;
+  const z = UJ.spawnZombieAt(UJ.Player.pos.x + 2, UJ.Player.pos.z - 3);
+  UJ.step(0.03);
+  z.clean(10000, z.group.position); // instant kill
+  const after = UJ.physBodies.length;
+  for (let i=0;i<80;i++) UJ.step(0.03); // chunks bounce, expire, get freed
+  return { before, after, settled: UJ.physBodies.length };
+});
+ok('dead zombie bursts into bouncing ragdoll chunks that expire', rag.after >= rag.before + 5 && rag.settled <= rag.before,
+   `bodies ${rag.before} → ${rag.after} on death → ${rag.settled} after cleanup`);
+
+// 6e. Jax's head is a live joint — it nods to follow aim pitch
+const headAim = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pitch = 0.6; for (let i=0;i<25;i++) UJ.step(0.03);
+  const up = P.headG.rotation.x;
+  P.pitch = -0.6; for (let i=0;i<25;i++) UJ.step(0.03);
+  const down = P.headG.rotation.x;
+  P.pitch = 0;
+  return { up, down };
+});
+ok("Jax's head nods with aim pitch (neck joint)", headAim.up < -0.15 && headAim.down > 0.15,
+   `look-up rot ${headAim.up.toFixed(2)} · look-down rot ${headAim.down.toFixed(2)}`);
+
 // 7. Talent panel opens/closes
 const panel = await page.evaluate(() => {
   const el = document.getElementById('skillOverlay');
