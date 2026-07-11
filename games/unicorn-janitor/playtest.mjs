@@ -136,6 +136,99 @@ ok('spraying a poop pile reduces its dirt', clean.skipped || clean.after < clean
 const xp = await page.evaluate(() => { const b = window.UJ.RPG?.xp ?? 0; window.UJ.gainXP(50); return { before: b, after: window.UJ.RPG?.xp ?? 0 }; });
 ok('gainXP increments RPG progression', xp.after > xp.before, `${xp.before} → ${xp.after}`);
 
+// 5b. JELLY — a sprayed pile quivers (wobble spring) and bursts into chunks
+const jelly = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const pile = UJ.piles.filter(p => p.alive)
+    .sort((a,b) => a.group.position.distanceTo(P.pos) - b.group.position.distanceTo(P.pos))[0];
+  if (!pile) return { skipped: true };
+  pile.dirt = UJ.CFG.pile.dirt; // the earlier check part-drained it — start full
+  const c = pile.group.position;
+  const bodiesBefore = UJ.physBodies.length;
+  let minRatio = 1, maxRatio = 1;
+  UJ.Input.spray = true;
+  for (let i=0;i<25 && pile.alive;i++) {
+    UJ.aimAt(c.x, c.y + 0.4, c.z); UJ.step(0.03);
+    const r = pile.group.scale.y / pile.baseScale;
+    minRatio = Math.min(minRatio, r); maxRatio = Math.max(maxRatio, r);
+  }
+  // finish it off to trigger the chunk burst
+  let guard = 0;
+  while (pile.alive && guard++ < 200) { UJ.aimAt(c.x, c.y + 0.4, c.z); UJ.step(0.03); }
+  UJ.Input.spray = false;
+  const burst = UJ.physBodies.length - bodiesBefore;
+  for (let i=0;i<90;i++) UJ.step(0.03); // let chunks expire
+  return { minRatio, maxRatio, burst };
+});
+ok('sprayed pile quivers like jelly and bursts into physics gobs',
+   jelly.skipped || (jelly.minRatio < 0.985 && jelly.burst >= 4),
+   jelly.skipped ? 'no pile' : `wobble ratio ${jelly.minRatio.toFixed(3)}–${jelly.maxRatio.toFixed(3)} · +${jelly.burst} chunks on pop`);
+
+// 5c. FLINCH — a hosed zombie shudders (squash + shiver). The spray→clean()
+// pathway is already proven end-to-end by the knockback check (sprayHit=true),
+// so this drives clean() directly at hose dps and verifies the flinch spring —
+// deterministic regardless of what the level puts between camera and target.
+const flinch = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.hp = 100;
+  const z = UJ.spawnZombieAt(P.pos.x + 3, P.pos.z - 20);
+  let minScale = 1;
+  for (let i=0;i<15;i++) {
+    z.clean(UJ.CFG.hose.dps * 0.03, z.group.position); // one hose-frame of damage
+    UJ.step(0.03);
+    minScale = Math.min(minScale, z.group.scale.y);
+  }
+  const fl = z.flinch;
+  // let it decay: stop hosing, flinch should spring back toward upright
+  for (let i=0;i<25;i++) UJ.step(0.03);
+  const recovered = z.group.scale.y;
+  z.alive = false; z.group.visible = false; // neutralize
+  return { minScale, fl, recovered };
+});
+ok('hosed zombie flinches (body squashes, then springs back)',
+   flinch.minScale < 0.95 && flinch.fl > 0.3 && flinch.recovered > 0.99,
+   `min scale ${flinch.minScale.toFixed(3)} · flinch ${flinch.fl.toFixed(2)} · recovers to ${flinch.recovered.toFixed(3)}`);
+
+// 5d. PROP WEAPON — a fast-flying prop staggers a zombie it hits
+const clobber = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const z = UJ.spawnZombieAt(P.pos.x + 4, P.pos.z - 20); // far: stays wandering
+  const prop = UJ.physBodies.filter(b => b.ttl == null)[0];
+  if (!prop) return { skipped: true };
+  // tee the prop up next to the zombie and fire it at him
+  prop.g.position.set(z.group.position.x - 2.5, 0.5, z.group.position.z);
+  prop.vel.set(9, 1, 0); prop.zHitCd = 0;
+  let stunned = false;
+  for (let i=0;i<25;i++) { UJ.step(0.03); if (z.state === 'stunned') { stunned = true; break; } }
+  const goo = z.goo;
+  z.alive = false; z.group.visible = false; // neutralize
+  return { stunned, goo };
+});
+ok('fast-flying prop staggers a zombie on impact (physics as a weapon)',
+   clobber.skipped || (clobber.stunned && clobber.goo < 100),
+   clobber.skipped ? 'no prop' : `stunned=${clobber.stunned} · goo ${clobber.goo}`);
+
+// 5e. CARS — the jet rocks an abandoned car on its suspension
+const carRock = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const car = UJ.cars[0];
+  if (!car) return { skipped: true };
+  P.pos.set(car.mesh.position.x - 4, 0, car.mesh.position.z);
+  for (let i=0;i<25;i++) UJ.step(0.03); // camera settles
+  let maxRock = 0;
+  UJ.Input.spray = true;
+  for (let i=0;i<25;i++) {
+    const cp = car.mesh.position; UJ.aimAt(cp.x, 1, cp.z); UJ.step(0.03);
+    maxRock = Math.max(maxRock, Math.abs(car.mesh.rotation.z));
+  }
+  UJ.Input.spray = false;
+  for (let i=0;i<60;i++) UJ.step(0.03); // spring settles
+  return { maxRock, settled: Math.abs(car.mesh.rotation.z) };
+});
+ok('water jet rocks an abandoned car on its suspension',
+   carRock.skipped || (carRock.maxRock > 0.005 && carRock.settled < carRock.maxRock),
+   carRock.skipped ? 'no cars' : `max roll ${carRock.maxRock.toFixed(3)} rad → settles to ${carRock.settled.toFixed(3)}`);
+
 // 6b. PHYSICS — spraying a deck prop blasts it away (rigid-body impulse)
 const phys = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
