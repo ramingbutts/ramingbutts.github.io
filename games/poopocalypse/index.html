@@ -21,13 +21,15 @@
   #combo { font-size:13px; font-weight:700; color:#ffd84a; height:16px; margin-top:2px;
            text-shadow:0 0 8px rgba(255,216,74,.8); }
 
-  #nextBox { position:absolute; top:max(10px, env(safe-area-inset-top)); right:10px; text-align:center; }
+  #nextBox { position:absolute; top:max(10px, env(safe-area-inset-top)); right:10px; text-align:center;
+             width:80px; }
   #nextBox .lbl { font-size:10px; letter-spacing:2px; opacity:.7; }
   #nextCv { display:block; margin:2px auto 0; }
-  #nextName { font-size:10px; opacity:.85; max-width:86px; }
+  #nextName { font-size:10px; opacity:.85; max-width:80px; white-space:nowrap;
+              overflow:hidden; text-overflow:ellipsis; }
 
   #corrBox { position:absolute; top:max(10px, env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
-             width:min(46vw,230px); text-align:center; }
+             width:clamp(116px, 38vw, 216px); text-align:center; }
   #corrBox .lbl { font-size:10px; letter-spacing:3px; opacity:.85; }
   #corrBar { height:12px; border-radius:8px; background:rgba(0,0,0,.5); margin-top:4px; overflow:hidden;
              border:1px solid rgba(255,255,255,.2); }
@@ -579,13 +581,34 @@ function draw() {
 }
 
 function drawCupBack() {
-  const cw = CUP.right - CUP.left;
+  const cw = CUP.right - CUP.left, cx = CUP.left + cw / 2, k = S.corruption / 100;
   // back of the glass + floor ellipse
   ctx.fillStyle = 'rgba(160,220,255,0.06)';
   ctx.fillRect(CUP.left, DANGER_Y - 60, cw, CUP.bottom - DANGER_Y + 60);
   ctx.beginPath();
-  ctx.ellipse(CUP.left + cw / 2, CUP.bottom, cw / 2, 16, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, CUP.bottom, cw / 2, 16, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(160,220,255,0.10)'; ctx.fill();
+
+  // ambient life so an empty cup never feels dead: a shallow slime pool
+  // at the floor + lazy bubbles rising through it. Both tint pinker with
+  // corruption. Purely decorative — drawn behind the blobs.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(CUP.left, DANGER_Y - 60, cw, CUP.bottom - DANGER_Y + 76); ctx.clip();
+  const poolH = 22 + k * 10;
+  const pool = ctx.createLinearGradient(0, CUP.bottom - poolH, 0, CUP.bottom);
+  pool.addColorStop(0, `hsla(${300 - k * 40},70%,45%,0)`);
+  pool.addColorStop(1, `hsla(${300 - k * 40},70%,${30 + k * 12}%,${0.18 + k * 0.22})`);
+  ctx.fillStyle = pool; ctx.fillRect(CUP.left, CUP.bottom - poolH, cw, poolH);
+  for (let i = 0; i < 9; i++) {                       // rising bubbles
+    const life = (S.time * (0.12 + (i % 4) * 0.05) + i * 0.618) % 1;
+    const bx = CUP.left + 18 + ((i * 71) % (cw - 36)) + Math.sin(S.time + i) * 6;
+    const by = CUP.bottom - 8 - life * (CUP.bottom - DANGER_Y - 30);
+    const br = (1.5 + (i % 3)) * (1 - life * 0.4);
+    ctx.globalAlpha = (0.10 + k * 0.22) * Math.sin(life * Math.PI);
+    ctx.fillStyle = i % 2 ? '#ff9be0' : '#c8f0ff';
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
 }
 function drawCupFront() {
   const cw = CUP.right - CUP.left, cx = CUP.left + cw / 2;
@@ -623,10 +646,16 @@ function drawDropper() {
   ctx.beginPath(); ctx.moveTo(x, DROP_Y - r - 18); ctx.lineTo(x, DROP_Y - r);
   ctx.strokeStyle = 'rgba(255,155,224,0.8)'; ctx.stroke();
   if (S.canDrop) {
-    // aim guide
-    ctx.setLineDash([4, 12]); ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(x, DROP_Y + r); ctx.lineTo(x, CUP.bottom - 8); ctx.stroke();
+    // aim guide: a brighter animated dashed beam + a landing footprint ring,
+    // so the drop point reads at a glance on a busy/bright background
+    ctx.save();
+    ctx.setLineDash([6, 10]); ctx.lineDashOffset = -(S.time * 40 % 16);
+    ctx.strokeStyle = 'rgba(255,220,120,0.55)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(x, DROP_Y + r); ctx.lineTo(x, CUP.bottom - 10); ctx.stroke();
     ctx.setLineDash([]);
+    ctx.strokeStyle = `rgba(255,220,120,${0.4 + 0.25 * Math.sin(S.time * 5)})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(x, CUP.bottom - 10, r * 0.85, r * 0.28, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
     drawBlobShape(x, DROP_Y, t.tier, 1, 0, 0, t.golden, 0);
   }
 }
