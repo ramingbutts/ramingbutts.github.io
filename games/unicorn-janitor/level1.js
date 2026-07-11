@@ -11,14 +11,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
    ===================================================================== */
 const CFG = {
   bridge: { width: 18, zStart: 15, zEnd: -205, playZEnd: -132 }, // playable section ends before second tower
-  fogDensity: 0.030,
-  fogColor: 0x9db3c6,
+  fogDensity: 0.032,
+  fogColor: 0x74879c, // deeper, cooler fog — moody dawn instead of milky washout
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
   hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34 }, // dense high-pressure jet
   beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
   zombie: { count: 9, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 2.9,
             lungeSpeed: 11, lungeTime: 0.35, windup: 0.55, recover: 0.9,
-            hitRange: 1.5, damage: 12, goo: 100 },
+            hitRange: 1.5, damage: 12, goo: 100, knockback: 3.6 }, // high-pressure shove
   pile:   { dirt: 100 },
 };
 
@@ -428,7 +428,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping; // filmic response, cinematic highlights
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 0.98; // pulled back from 1.15 to recover highlight detail
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -453,7 +453,7 @@ scene.add(sun.target); // sun follows the player so the shadow window stays tigh
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight,
   { samples: 4, type: THREE.HalfFloatType }));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.5, 0.55, 0.75);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.42, 0.6, 0.82); // higher threshold: only real light sources bloom, not the whole sky
 composer.addPass(bloom);
 const vignette = new ShaderPass({
   name: 'VignetteShader',
@@ -657,7 +657,7 @@ function buildBridge() {
   const skyGeo = new THREE.SphereGeometry(260, 24, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide, fog: false, depthWrite: false,
-    uniforms: { top: { value: new THREE.Color(0x8fa7c4) }, bot: { value: new THREE.Color(0xd9c9b0) } },
+    uniforms: { top: { value: new THREE.Color(0x556a86) }, bot: { value: new THREE.Color(0xa38f77) } },
     vertexShader: 'varying float vh; void main(){ vh = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: 'varying float vh; uniform vec3 top; uniform vec3 bot; void main(){ gl_FragColor = vec4(mix(bot, top, smoothstep(-0.1, 0.55, vh)), 1.0); }',
   });
@@ -848,6 +848,132 @@ function updateGlitter(dt) {
 }
 
 /* =====================================================================
+   7.5 RIGID-BODY PHYSICS — a lightweight simulation for every loose
+   object on the deck: velocity + gravity integration, ground bounce with
+   restitution, rolling friction, angular tumble, rail/deck bounds, and
+   player kick-through. The high-pressure jet applies real impulses, so
+   cones and buckets go flying; dead zombies burst into ragdoll chunks
+   that bounce and settle. No library — ~60 lines cover everything a
+   deck-cleaning brawl needs.
+   ===================================================================== */
+const physBodies = [];
+const _pv = new THREE.Vector3();
+function addPhysBody(g, r, restY, opts = {}) {
+  const b = { g, r, restY, vel: new THREE.Vector3(), angVel: new THREE.Vector3(),
+    rest: opts.rest ?? 0.38, ttl: opts.ttl ?? null, mass: opts.mass ?? 1 };
+  physBodies.push(b);
+  return b;
+}
+function updatePhysics(dt) {
+  for (let i = physBodies.length - 1; i >= 0; i--) {
+    const b = physBodies[i], p = b.g.position;
+    // ragdoll chunks expire: shrink out, then free the mesh
+    if (b.ttl != null) {
+      b.ttl -= dt;
+      if (b.ttl <= 0) {
+        scene.remove(b.g);
+        b.g.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+        physBodies.splice(i, 1); continue;
+      }
+      if (b.ttl < 0.5) b.g.scale.multiplyScalar(Math.max(0.01, 1 - dt * 2.2));
+    }
+    // integrate
+    b.vel.y -= 22 * dt;
+    p.addScaledVector(b.vel, dt);
+    b.g.rotation.x += b.angVel.x * dt;
+    b.g.rotation.y += b.angVel.y * dt;
+    b.g.rotation.z += b.angVel.z * dt;
+    // deck contact: bounce if falling fast, else rest + roll friction
+    if (p.y <= b.restY) {
+      p.y = b.restY;
+      if (b.vel.y < -1.4) {
+        b.vel.y *= -b.rest;
+        b.angVel.set((Math.random() - 0.5) * 4, b.angVel.y, (Math.random() - 0.5) * 4);
+        if (b.vel.y > 0.8 && Math.random() < 0.5) SFX.step(panFor(p)); // clatter
+      } else b.vel.y = 0;
+      const fr = Math.max(0, 1 - 5 * dt);
+      b.vel.x *= fr; b.vel.z *= fr;
+      b.angVel.multiplyScalar(Math.max(0, 1 - 6 * dt));
+      // settle upright-ish tumble to a stop
+      if (b.vel.lengthSq() < 0.01 && b.angVel.lengthSq() < 0.01) { b.vel.set(0, 0, 0); b.angVel.set(0, 0, 0); }
+    }
+    // rails + level bounds reflect
+    if (Math.abs(p.x) > 7.4) { p.x = Math.sign(p.x) * 7.4; b.vel.x *= -0.45; }
+    if (p.z > CFG.bridge.zStart - 1) { p.z = CFG.bridge.zStart - 1; b.vel.z *= -0.45; }
+    if (p.z < CFG.bridge.playZEnd) { p.z = CFG.bridge.playZEnd; b.vel.z *= -0.45; }
+    // walking through a prop boots it aside — the deck feels solid
+    _pv.subVectors(p, Player.pos); _pv.y = 0;
+    const d = _pv.length();
+    if (d < b.r + 0.55 && d > 1e-4) {
+      _pv.normalize();
+      b.vel.addScaledVector(_pv, 2.6 / b.mass);
+      b.vel.y = Math.max(b.vel.y, 1.2 / b.mass);
+      b.angVel.x += (Math.random() - 0.5) * 3;
+    }
+  }
+}
+
+// deck props: traffic cones, buckets and crates from the janitor job site
+function buildProps() {
+  const coneMat = new THREE.MeshStandardMaterial({ color: 0xd95f18, roughness: 0.6 });
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.4 });
+  const bucketMat = new THREE.MeshStandardMaterial({ color: 0x3a6ea5, roughness: 0.45, metalness: 0.3 });
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x7a5a33, roughness: 0.8 });
+  const coneGeo = new THREE.ConeGeometry(0.22, 0.62, 10);
+  const baseGeo = new THREE.BoxGeometry(0.42, 0.05, 0.42);
+  const bandGeo = new THREE.CylinderGeometry(0.145, 0.175, 0.1, 10);
+  const bucketGeo = new THREE.CylinderGeometry(0.2, 0.16, 0.34, 12, 1, true);
+  const crateGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  const spots = [ // [kind, x, z]
+    ['cone', -2.5, -6], ['cone', -2.1, -7.1], ['cone', 3.2, -14], ['cone', -4.5, -30],
+    ['cone', 5.1, -46], ['cone', -1.8, -62], ['cone', 2.6, -84], ['cone', -5.4, -102],
+    ['bucket', 1.4, -10], ['bucket', -3.6, -40], ['bucket', 4.4, -70], ['bucket', 0.8, -112],
+    ['crate', -5.8, -20], ['crate', 6, -55], ['crate', -6.1, -92],
+  ];
+  for (const [kind, x, z] of spots) {
+    const g = new THREE.Group();
+    if (kind === 'cone') {
+      const c = new THREE.Mesh(coneGeo, coneMat); c.position.y = 0.31; g.add(c);
+      const band = new THREE.Mesh(bandGeo, bandMat); band.position.y = 0.34; g.add(band);
+      const base = new THREE.Mesh(baseGeo, coneMat); base.position.y = 0.025; g.add(base);
+      g.position.set(x, 0, z);
+      addPhysBody(g, 0.3, 0, { mass: 0.7, rest: 0.3 });
+    } else if (kind === 'bucket') {
+      const bk = new THREE.Mesh(bucketGeo, bucketMat); bk.position.y = 0.17; g.add(bk);
+      g.position.set(x, 0, z);
+      addPhysBody(g, 0.26, 0, { mass: 0.6, rest: 0.45 });
+    } else {
+      const cr = new THREE.Mesh(crateGeo, crateMat); cr.position.y = 0.25; g.add(cr);
+      g.position.set(x, 0, z);
+      addPhysBody(g, 0.4, 0, { mass: 1.6, rest: 0.25 });
+    }
+    g.rotation.y = Math.random() * Math.PI * 2;
+    g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    scene.add(g);
+  }
+}
+
+// ragdoll: a dead zombie bursts into bouncing poop scoops (+ the eye)
+function spawnRagdoll(center) {
+  const scoopMat = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
+  for (let i = 0; i < 6; i++) {
+    const isEye = i === 5;
+    const r = isEye ? 0.12 : 0.14 + Math.random() * 0.16;
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), isEye ? eyeMat : scoopMat);
+    const g = new THREE.Group(); g.add(m);
+    g.position.copy(center);
+    g.position.y += 0.6 + Math.random() * 0.8;
+    const b = addPhysBody(g, r, r, { ttl: 1.3 + Math.random() * 0.7, rest: 0.5, mass: 0.5 });
+    const a = Math.random() * Math.PI * 2;
+    b.vel.set(Math.cos(a) * (2 + Math.random() * 3), 3.5 + Math.random() * 3, Math.sin(a) * (2 + Math.random() * 3));
+    b.angVel.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
+    m.castShadow = true;
+    scene.add(g);
+  }
+}
+
+/* =====================================================================
    8. CLEANABLES — poop piles + the raycast cleaning interface.
       Anything with mesh.userData.entity = {clean(amount, point)} can
       be hosed. Piles and zombies both implement it.
@@ -943,7 +1069,7 @@ function removeCleanTargets(group) {
       FSM: wander -> chase -> windup -> lunge -> recover
    ===================================================================== */
 const zombies = [];
-const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.Vector3();
 
 class Zombie {
   constructor(x, z) {
@@ -972,6 +1098,8 @@ class Zombie {
     belly.position.y = 0.85; belly.scale.set(1, 1.1, 0.9);
     belly.userData.entity = this;
     g.add(belly); cleanTargets.push(belly);
+    this.belly = belly;
+    this.gaitT = Math.random() * 10; // per-zombie gait phase so the horde doesn't march in sync
 
     // poop-swirl head: three shrinking scoops + a flicked tip
     const headG = new THREE.Group();
@@ -1005,15 +1133,20 @@ class Zombie {
       headG.add(t);
     }
     g.add(headG);
+    this.headG = headG;
 
-    // dangling claw arms
+    // dangling claw arms — each wrapped in a shoulder pivot so it can swing
+    // with the gait (real moving parts, not a welded pose)
     const armGeo = new THREE.CapsuleGeometry(0.11, 0.5, 3, 6);
     this.arms = [];
     for (const s of [-1, 1]) {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(s * 0.6, 1.25, 0.05); // pivot at the shoulder joint
+      shoulder.rotation.z = s * 0.5;              // baseline splay
       const arm = new THREE.Mesh(armGeo, this.bodyMat);
-      arm.position.set(s * 0.6, 0.95, 0.05);
-      arm.rotation.z = s * 0.5;
-      g.add(arm); this.arms.push(arm);
+      arm.position.y = -0.3; // hang below the joint
+      shoulder.add(arm);
+      g.add(shoulder); this.arms.push(shoulder);
       for (let c = 0; c < 3; c++) {
         const claw = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.12, 5), clawMat);
         claw.position.set((c - 1) * 0.055, -0.42, 0.03);
@@ -1022,18 +1155,21 @@ class Zombie {
       }
     }
 
-    // clawed feet
+    // clawed feet — each in an ankle pivot so the waddle actually steps
     const footGeo = new THREE.BoxGeometry(0.26, 0.14, 0.42);
+    this.feet = [];
     for (const s of [-1, 1]) {
+      const ankle = new THREE.Group();
+      ankle.position.set(s * 0.24, 0.07, 0.08);
       const foot = new THREE.Mesh(footGeo, poopDark);
-      foot.position.set(s * 0.24, 0.07, 0.08);
-      g.add(foot);
+      ankle.add(foot);
       for (let c = 0; c < 2; c++) {
         const claw = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 5), clawMat);
-        claw.position.set(s * 0.24 + (c - 0.5) * 0.11, 0.06, 0.34);
+        claw.position.set((c - 0.5) * 0.11, -0.01, 0.26);
         claw.rotation.x = Math.PI / 2;
-        g.add(claw);
+        ankle.add(claw);
       }
+      g.add(ankle); this.feet.push(ankle);
     }
 
     // rainbow slime drips — these shrink away as the player hoses him
@@ -1108,6 +1244,7 @@ class Zombie {
     this.alive = false;
     const c = this.group.position.clone(); c.y += 1.3;
     spawnGlitter(c, 130, 7);
+    spawnRagdoll(this.group.position); // physics chunks bounce off the deck
     SFX.pop(panFor(this.group.position), 1);
     registerCombo(this.group.position);
     removeCleanTargets(this.group);
@@ -1125,6 +1262,21 @@ class Zombie {
   }
 
   setState(s) { this.state = s; this.stateT = 0; }
+
+  // shoved backward by the high-pressure jet — the hose's crowd control. A
+  // mid-lunge zombie resists (it has committed momentum); otherwise it slides
+  // away and leans back, clamped to the deck.
+  push(dt) {
+    if (!this.alive || this.state === 'lunge') return;
+    _knockV.subVectors(this.group.position, Player.pos); _knockV.y = 0;
+    if (_knockV.lengthSq() < 1e-4) return;
+    _knockV.normalize();
+    const p = this.group.position;
+    p.addScaledVector(_knockV, CFG.zombie.knockback * dt);
+    p.x = THREE.MathUtils.clamp(p.x, -7.5, 7.5);
+    p.z = THREE.MathUtils.clamp(p.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
+    this.group.rotation.x = -0.18; // brief lean-back from the blast
+  }
 
   update(dt, t) {
     if (!this.alive) return;
@@ -1202,15 +1354,70 @@ class Zombie {
     pos.x = THREE.MathUtils.clamp(pos.x, -7.5, 7.5);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
 
-    // waddling idle animation: body sway + paddling claw arms
-    const sway = Math.sin(t * 5 + pos.x * 7);
-    this.group.rotation.z = sway * 0.07;
-    if (this.state === 'wander' || this.state === 'chase') { // waddle-rock while walking
-      this.group.rotation.x = Math.sin(t * 7 + pos.z) * 0.06;
+    // ---- articulated gait: every part moves, driven by how fast he's walking.
+    // gait phase advances with locomotion so steps match ground speed.
+    const gaitRate = this.state === 'chase' ? 9 : this.state === 'wander' ? 5.5 : 0;
+    this.gaitT += dt * gaitRate;
+    const gp = this.gaitT;
+    const walking = gaitRate > 0;
+    const k = 1 - Math.pow(0.001, dt); // smoothing toward pose targets
+
+    // waddle roll + pitch rock, scaled by stride
+    this.group.rotation.z += ((walking ? Math.sin(gp) * 0.09 : 0) - this.group.rotation.z) * k;
+    if (this.state !== 'windup' && this.state !== 'lunge') {
+      this.group.rotation.x += ((walking ? Math.sin(gp * 2) * 0.05 : 0) - this.group.rotation.x) * k;
     }
-    this.arms[0].rotation.z = -0.5 + Math.sin(t * 4) * 0.25;
-    this.arms[1].rotation.z = 0.5 - Math.sin(t * 4 + 1) * 0.25;
+    // stepping feet: alternate lift + toe pitch, planted when idle
+    for (let i = 0; i < 2; i++) {
+      const ph = gp + i * Math.PI;
+      const lift = walking ? Math.max(0, Math.sin(ph)) : 0;
+      this.feet[i].position.y = 0.07 + lift * 0.12;
+      this.feet[i].rotation.x += ((walking ? -lift * 0.5 : 0) - this.feet[i].rotation.x) * k;
+    }
+    // belly squash-and-stretch keyed to footfalls; head bobbles with a lag
+    const squash = walking ? Math.abs(Math.sin(gp)) * 0.05 : Math.sin(t * 1.7) * 0.015;
+    this.belly.scale.y = 1.1 - squash;
+    this.belly.scale.x = 1 + squash * 0.6;
+    this.headG.rotation.z += ((walking ? Math.sin(gp - 0.6) * 0.1 : 0) - this.headG.rotation.z) * k;
+    this.headG.rotation.x += ((this.state === 'stunned' ? Math.sin(t * 9) * 0.15
+      : walking ? Math.sin(gp * 2 - 0.8) * 0.05 : 0) - this.headG.rotation.x) * k;
+
+    // arms: reach forward when hunting, flail high in windup, swing with gait
+    const reach = this.state === 'chase' ? -0.9 : this.state === 'windup' ? -2.2 : 0;
+    for (let i = 0; i < 2; i++) {
+      const s = i === 0 ? -1 : 1;
+      const swing = walking ? Math.sin(gp + i * Math.PI) * (this.state === 'chase' ? 0.35 : 0.55) : 0;
+      this.arms[i].rotation.x += ((reach + swing) - this.arms[i].rotation.x) * k;
+      this.arms[i].rotation.z += ((s * (this.state === 'windup' ? 1.1 : 0.5)
+        + (walking ? Math.sin(gp * 2 + i) * 0.1 : Math.sin(t * 2 + i) * 0.06)) - this.arms[i].rotation.z) * k;
+    }
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
+
+    // ---- GLB locomotion: the textured model is one baked mesh, so its life
+    // comes from whole-body animation — a gait-synced waddle-hop, squash-and-
+    // stretch on each footfall, a hungry lean in chase, a stretched lunge,
+    // banking into turns, and a dizzy sway while stunned. Without this the
+    // AAA mesh slides around like a chess piece.
+    if (this.glb) {
+      const gl = this.glb;
+      gl.position.y = walking ? Math.abs(Math.sin(gp)) * 0.09 : 0;
+      const sq = walking ? Math.max(0, -Math.sin(gp * 2)) * 0.06
+        : this.state === 'stunned' ? 0 : Math.max(0, Math.sin(t * 1.7)) * 0.02; // idle breathing
+      let sy = 1 - sq, sxz = 1 + sq * 0.7, szExtra = 1;
+      if (this.state === 'lunge') { szExtra = 1.14; sy *= 0.92; } // stretch through the dive
+      gl.scale.set(sxz, sy, sxz * szExtra);
+      const leanT = this.state === 'chase' ? 0.14 : this.state === 'lunge' ? 0.3
+        : this.state === 'windup' ? -0.25 : 0; // group already leans; this adds body english
+      gl.rotation.x += (leanT - gl.rotation.x) * k;
+      // bank into turns (yaw delta, wrapped)
+      const yaw = this.group.rotation.y;
+      let dyaw = yaw - (this._prevYaw ?? yaw);
+      if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      this._prevYaw = yaw;
+      const bank = THREE.MathUtils.clamp(-dyaw * 6, -0.25, 0.25)
+        + (this.state === 'stunned' ? Math.sin(t * 6) * 0.12 : 0);
+      gl.rotation.z += (bank - gl.rotation.z) * k;
+    }
     // the eye burns brighter when he's hunting you
     this.eyeMat.emissiveIntensity = this.state === 'chase' || this.state === 'windup' || this.state === 'lunge'
       ? 1.6 + 0.5 * Math.sin(t * 12)
@@ -1224,10 +1431,16 @@ class Zombie {
    runtime; if the fetch fails the primitive rigs simply stay visible,
    and either way the primitives remain as invisible collision proxies.
    ===================================================================== */
+// Each model is tried LOCAL-first, then the CDN, then it silently leaves the
+// primitive rig on. Dropping a vendored copy at `local` (e.g. models/jax.glb)
+// makes the AAA mesh load offline and on GitHub Pages with zero code change —
+// which is the whole project's "no CDN dependency, works offline" principle.
 const MODELS = {
-  jax: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
+  jax: { local: 'models/jax.glb',
+    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
     height: 2.05, rotY: 0 }, // gun-toting Jax with red pressure tank + power-washer
-  zombie: { url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
+  zombie: { local: 'models/zombie.glb',
+    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
     height: 1.95, rotY: 0 },
 };
 let zombieProto = null, modelsLoadStarted = false;
@@ -1273,21 +1486,33 @@ function computeGunNozzle(wrap) {
   NOZZLE_GUN.up = THREE.MathUtils.clamp(b.min.y + (b.max.y - b.min.y) * 0.6, 1.0, 1.7);
 }
 
+// try the vendored local file first, fall back to the CDN, then give up quietly
+// (the improved primitive rig stays on). onLoad only fires on success.
+function loadModelWithFallback(spec, label, onLoad) {
+  gltfLoader.load(spec.local,
+    gltf => { console.info(`${label}: loaded vendored ${spec.local}`); onLoad(gltf); },
+    undefined,
+    () => gltfLoader.load(spec.url,
+      gltf => { console.info(`${label}: loaded from CDN (no local copy)`); onLoad(gltf); },
+      undefined,
+      () => console.info(`${label}: no local or CDN model — primitive rig stays on`)));
+}
+
 function loadCharacterModels() {
   if (modelsLoadStarted || MODELS.jax.url.startsWith('MODEL_URL')) return;
   modelsLoadStarted = true;
-  gltfLoader.load(MODELS.jax.url, gltf => {
+  loadModelWithFallback(MODELS.jax, 'Jax', gltf => {
     Player.glbVisual = normalizeModel(gltf.scene, MODELS.jax);
     Player.group.add(Player.glbVisual);
     computeGunNozzle(Player.glbVisual); // place the muzzle at the measured barrel tip
     if (Player.hasHorn) { Player.horn.visible = false; Player.hornRing.visible = false; }
     applyModelSetting();
-  }, undefined, () => console.info('Jax model unavailable — primitive rig stays on'));
-  gltfLoader.load(MODELS.zombie.url, gltf => {
+  });
+  loadModelWithFallback(MODELS.zombie, 'Zombie', gltf => {
     zombieProto = { scene: gltf.scene, spec: MODELS.zombie };
     for (const z of zombies) if (z.alive) z.applyModel();
     applyModelSetting();
-  }, undefined, () => console.info('Zombie model unavailable — primitive rigs stay on'));
+  });
 }
 
 // generated GLBs are the heaviest asset in the scene, so they only show when
@@ -1646,36 +1871,48 @@ function buildPlayer() {
   g.add(buckle);
 
   // muscular bare arms — pivoted at the shoulder for the run swing
+  // muscular bare arms, brought inward so both hands can grip the gun out front;
+  // the run cycle keeps them in the forward hold (see updatePlayer) rather than
+  // swinging them like an empty-handed run.
   Player.armsM = [];
-  const armGeo = new THREE.CapsuleGeometry(0.13, 0.5, 3, 6);
+  const glove = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.7 });
+  const armGeo = new THREE.CapsuleGeometry(0.12, 0.5, 3, 6);
   armGeo.translate(0, -0.28, 0); // pivot at the shoulder
   for (const s of [-1, 1]) {
     const arm = new THREE.Mesh(armGeo, skin);
-    arm.position.set(s * 0.56, 1.58, 0.05);
-    arm.rotation.z = s * 0.25;
+    arm.position.set(s * 0.33, 1.6, 0.08);
+    arm.rotation.z = s * 0.12;
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), glove);
+    hand.position.set(0, -0.82, 0); // at the forearm tip, follows the reach
+    arm.add(hand);
     g.add(arm);
     Player.armsM.push(arm);
   }
 
+  // the whole head rides a neck joint so Jax visibly looks where he aims —
+  // pitch nods the head, and the mane sways with his motion (moving parts)
+  const headG = Player.headG = new THREE.Group();
+  headG.position.y = 1.72; // neck pivot
+  g.add(headG);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), skin);
-  head.position.y = 1.85;
-  g.add(head);
+  head.position.y = 0.13;
+  headG.add(head);
 
   // shaved silver sides + the permanent scowl (heavy brows, hard eyes)
   const silver = new THREE.MeshStandardMaterial({ color: 0xcfd2d6, roughness: 0.45 });
   for (const s of [-1, 1]) {
     const side = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 8), silver);
     side.scale.set(0.42, 0.72, 0.8);
-    side.position.set(s * 0.17, 1.94, -0.04);
-    g.add(side);
+    side.position.set(s * 0.17, 0.22, -0.04);
+    headG.add(side);
     const brow = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.035, 0.04), black);
-    brow.position.set(s * 0.1, 1.93, 0.245);
+    brow.position.set(s * 0.1, 0.21, 0.245);
     brow.rotation.z = s * -0.28; // angled inward: he is not happy about the poop
     brow.rotation.y = s * 0.35;
-    g.add(brow);
+    headG.add(brow);
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 5), black);
-    eye.position.set(s * 0.1, 1.885, 0.255);
-    g.add(eye);
+    eye.position.set(s * 0.1, 0.165, 0.255);
+    headG.add(eye);
   }
 
   // white unicorn ears
@@ -1683,13 +1920,15 @@ function buildPlayer() {
   const earMat = new THREE.MeshStandardMaterial({ color: 0xf4f0ec, roughness: 0.5 });
   for (const s of [-1, 1]) {
     const ear = new THREE.Mesh(earGeo, earMat);
-    ear.position.set(s * 0.19, 2.1, -0.02);
+    ear.position.set(s * 0.19, 0.38, -0.02);
     ear.rotation.z = s * -0.3;
-    g.add(ear);
+    headG.add(ear);
   }
 
-  // rainbow mohawk-mane: taller, denser, swept back like the art
+  // rainbow mohawk-mane: taller, denser, swept back like the art.
+  // Spikes are stored so they can ripple as he runs.
   const maneGeo = new THREE.BoxGeometry(0.14, 0.34, 0.16);
+  Player.mane = [];
   for (let i = 0; i < 9; i++) {
     const th = -0.4 + (i / 8) * 2.3;            // arc angle: forehead -> nape
     const hue = (i / 8) * 0.8;                  // red front -> purple back, no wrap
@@ -1697,29 +1936,55 @@ function buildPlayer() {
     const spike = new THREE.Mesh(maneGeo, new THREE.MeshStandardMaterial({
       color: new THREE.Color().setHSL(hue, 0.95, 0.5), roughness: 0.5,
       emissive: new THREE.Color().setHSL(hue, 0.95, 0.35), emissiveIntensity: 0.45 }));
-    spike.position.set(0, 1.85, 0).addScaledVector(dir, 0.37);
+    spike.position.set(0, 0.13, 0).addScaledVector(dir, 0.37);
     spike.rotation.x = -th - 0.28;              // swept backward
+    spike.userData.baseRotX = spike.rotation.x; // sway returns to this
     spike.scale.y = 0.9 + 0.85 * Math.sin(((i + 1) / 10) * Math.PI); // tall crest
-    g.add(spike);
+    headG.add(spike);
+    Player.mane.push(spike);
   }
 
-  // pressure rig: chunky steel nozzle, blue tip, red hose looping to the belt
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, 0.55, 8), steel);
-  nozzle.rotation.x = Math.PI / 2;
-  nozzle.position.set(0.3, 1.2, 0.5);
-  g.add(nozzle);
-  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.1, 8),
+  // chrome power-washer gun, held two-handed out front. Built as its own group
+  // so it can recoil, and positioned so the barrel TIP lands on the primitive
+  // muzzle point (local 0,1.5,0.6 = NOZZLE_PRIMITIVE) — water leaves the barrel,
+  // not the chest. Player faces local +Z, so the barrel points +Z.
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xd7dde6, metalness: 0.85, roughness: 0.22 });
+  const gun = Player.gun = new THREE.Group();
+  gun.position.set(0, 1.5, 0);
+  // pistol grip (rear, angled down so the hand wraps it)
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 0.12), black);
+  grip.position.set(0, -0.16, 0.26); grip.rotation.x = 0.5;
+  gun.add(grip);
+  // pump housing / body — the chunky chrome block
+  const gbody = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.2, 0.36), chrome);
+  gbody.position.set(0, 0, 0.36);
+  gun.add(gbody);
+  // trigger guard
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.017, 6, 10), steel);
+  guard.position.set(0, -0.08, 0.28); guard.rotation.x = Math.PI / 2;
+  gun.add(guard);
+  // long chrome barrel down the middle, tip at local z≈0.6 (the muzzle)
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.42, 10), chrome);
+  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.01, 0.42);
+  gun.add(barrel);
+  // blue nozzle collar + emissive tip ring right at the muzzle
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.07, 10),
     new THREE.MeshStandardMaterial({ color: 0x3f8fdf, metalness: 0.5, roughness: 0.3 }));
-  tip.rotation.x = Math.PI / 2;
-  tip.position.set(0.3, 1.2, 0.79);
-  g.add(tip);
+  collar.rotation.x = Math.PI / 2; collar.position.set(0, 0.01, 0.585);
+  gun.add(collar);
+  const muzzleRing = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.012, 6, 12),
+    new THREE.MeshStandardMaterial({ color: 0x8fe0ff, emissive: 0x4fb8ff, emissiveIntensity: 1.4, roughness: 0.3 }));
+  muzzleRing.position.set(0, 0.01, 0.62);
+  gun.add(muzzleRing);
+  g.add(gun);
+  // red high-pressure hose from the grip base looping down to the tool belt
   const hoseCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.3, 1.2, 0.24),
-    new THREE.Vector3(0.44, 0.95, 0.08),
-    new THREE.Vector3(0.3, 0.78, -0.26),
+    new THREE.Vector3(0, 1.3, 0.28),
+    new THREE.Vector3(0.28, 1.02, 0.06),
+    new THREE.Vector3(0.34, 0.82, -0.24),
     new THREE.Vector3(0, 0.86, -0.34),
   ]);
-  const hose = new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 16, 0.045, 6),
+  const hose = new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 18, 0.045, 6),
     new THREE.MeshStandardMaterial({ color: 0xa32c22, roughness: 0.55 }));
   g.add(hose);
 
@@ -1738,17 +2003,19 @@ function buildPlayer() {
     seg.position.y = -HORN_H / 2 + (i + 0.5) * (HORN_H / SEGS);
     Player.horn.add(seg);
   }
-  Player.horn.position.set(0, 2.45, 0.15);
+  // horn + ring live on the head joint so they nod with the aim (their
+  // visibility is still managed directly by the pickup/model toggles)
+  Player.horn.position.set(0, 0.73, 0.15);
   Player.horn.rotation.x = -0.35;
   Player.horn.visible = false;
-  g.add(Player.horn);
+  headG.add(Player.horn);
   // gold band at the horn base, per the concept art
   Player.hornRing = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.028, 6, 12),
     new THREE.MeshStandardMaterial({ color: 0xd9a940, metalness: 0.8, roughness: 0.3 }));
-  Player.hornRing.position.set(0, 2.16, 0.05);
+  Player.hornRing.position.set(0, 0.44, 0.05);
   Player.hornRing.rotation.x = Math.PI / 2 - 0.35; // perpendicular to the horn axis
   Player.hornRing.visible = false;
-  g.add(Player.hornRing);
+  headG.add(Player.hornRing);
   Player.hornGlow = glowSprite(0xffb0ea, 1.1, 0.6);
   Player.hornGlow.position.set(0, 2.7, 0.32);
   Player.hornGlow.visible = false;
@@ -1836,7 +2103,11 @@ function updatePlayer(dt, t) {
   Input.jumpPressed = false;
   Player.vel.y -= CFG.player.gravity * dt;
   Player.pos.y += Player.vel.y * dt;
-  if (Player.pos.y <= 0) { Player.pos.y = 0; Player.vel.y = 0; Player.onGround = true; }
+  if (Player.pos.y <= 0) {
+    // touchdown: bank the impact speed as a squash-and-recover on the body
+    if (!Player.onGround && Player.vel.y < -3) Player._landSq = Math.min(0.16, -Player.vel.y * 0.016);
+    Player.pos.y = 0; Player.vel.y = 0; Player.onGround = true;
+  }
 
   // stay on the playable deck
   Player.pos.x = THREE.MathUtils.clamp(Player.pos.x, -7.6, 7.6);
@@ -1848,13 +2119,51 @@ function updatePlayer(dt, t) {
   const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
   Player.group.position.y = Player.pos.y + bob;
 
+  // landing squash-and-recover: the whole body (rig or GLB, gun included)
+  // compresses on touchdown proportional to impact speed, then springs back
+  Player._landSq = Math.max(0, (Player._landSq || 0) - dt * 0.9);
+  const lsq = Player._landSq;
+  Player.group.scale.set(1 + lsq * 0.6, 1 - lsq, 1 + lsq * 0.6);
+
   // run cycle: legs and arms counter-swing while moving, relax when idle
   const swing = (moving && Player.onGround) ? Math.sin(t * 10) : 0;
   const ease = 1 - Math.pow(0.001, dt);
   Player.legs[0].rotation.x += (swing * 0.55 - Player.legs[0].rotation.x) * ease;
   Player.legs[1].rotation.x += (-swing * 0.55 - Player.legs[1].rotation.x) * ease;
-  Player.armsM[0].rotation.x += (-swing * 0.45 - Player.armsM[0].rotation.x) * ease;
-  Player.armsM[1].rotation.x += (swing * 0.45 - Player.armsM[1].rotation.x) * ease;
+  // arms stay in the two-handed forward hold (reach ≈ -1.2 rad) with only a small
+  // sway while running — so the power-washer stays gripped in both hands
+  const HOLD = -1.2;
+  Player.armsM[0].rotation.x += ((HOLD - swing * 0.08) - Player.armsM[0].rotation.x) * ease;
+  Player.armsM[1].rotation.x += ((HOLD + swing * 0.08) - Player.armsM[1].rotation.x) * ease;
+
+  // ankle articulation: boots counter-rotate against the hip swing so the
+  // feet stay planted-looking through the stride instead of dragging stiffly
+  for (const leg of Player.legs) {
+    const boot = leg.children[0];
+    if (boot) boot.rotation.x += ((-leg.rotation.x * 0.6) - boot.rotation.x) * ease;
+  }
+
+  // the head is a real joint: it nods with aim pitch and rolls slightly into
+  // strafes, and the mane ripples back harder the faster he moves
+  if (Player.headG) {
+    Player.headG.rotation.x += ((-Player.pitch * 0.55) - Player.headG.rotation.x) * ease;
+    Player.headG.rotation.z += ((moving ? -s * 0.07 : 0) - Player.headG.rotation.z) * ease;
+    const speed = moving ? (sprinting ? 1 : 0.55) : 0;
+    for (let i = 0; i < Player.mane.length; i++) {
+      const sp = Player.mane[i];
+      const wave = Math.sin(t * (6 + speed * 4) + i * 0.7) * (0.04 + speed * 0.1);
+      sp.rotation.x = sp.userData.baseRotX - speed * 0.22 + wave; // streams back at a run
+    }
+  }
+
+  // primitive-rig recoil: kick the gun back + up a touch while firing
+  if (Player.gun) {
+    Player._gunRecoil = Math.max(0, (Player._gunRecoil || 0) - dt * 5);
+    if (Player.firing) Player._gunRecoil = Math.min(0.1, Player._gunRecoil + dt * 3.5);
+    const gk = 1 - Math.pow(0.02, dt);
+    Player.gun.position.z += ((-Player._gunRecoil) - Player.gun.position.z) * gk;
+    Player.gun.rotation.x += ((-Player._gunRecoil * 1.4) - Player.gun.rotation.x) * gk;
+  }
 
   // procedural life for the GLB body (a static mesh, so it needs motion here):
   // a walk sway + lean while moving, gentle idle breathing when still, and a
@@ -1863,13 +2172,19 @@ function updatePlayer(dt, t) {
     const g = Player.glbVisual;
     const walk = (moving && Player.onGround) ? 1 : 0;
     const sway = Math.sin(t * 8) * 0.06 * walk;              // hip roll
-    const lean = walk * 0.05;                                // lean into the run
+    const lean = walk * (sprinting ? 0.11 : 0.05);           // lean harder at a sprint
     const breathe = Math.sin(t * 1.8) * 0.012 * (1 - walk);  // idle chest rise
     Player._recoil = Math.max(0, (Player._recoil || 0) - dt * 4);
     if (Player.firing) Player._recoil = Math.min(0.12, Player._recoil + dt * 3);
     const k = 1 - Math.pow(0.02, dt);
-    g.rotation.z += (sway - g.rotation.z) * k;
-    g.rotation.x += ((lean + breathe - Player._recoil) - g.rotation.x) * k;
+    // bank into camera turns so fast swings read as weight shift, not a swivel
+    let dyaw = Player.yaw - (Player._prevYaw ?? Player.yaw);
+    if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    Player._prevYaw = Player.yaw;
+    const bank = THREE.MathUtils.clamp(-dyaw * 2.5, -0.12, 0.12);
+    const airTuck = Player.onGround ? 0 : 0.09; // brace slightly while airborne
+    g.rotation.z += ((sway + bank) - g.rotation.z) * k;
+    g.rotation.x += ((lean + breathe + airTuck - Player._recoil) - g.rotation.x) * k;
   }
 
   // --- camera: third-person follow, slightly damped ---
@@ -2064,6 +2379,7 @@ function updateHose(dt) {
       const e = hits[0].object.userData.entity;
       if (e) {
         e.clean(CFG.hose.dps * RPG.hoseMul() * dt, hits[0].point);
+        if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
         if (Math.random() < dt * 14) spawnSplash(hits[0].point);
@@ -2075,6 +2391,22 @@ function updateHose(dt) {
       if (tGround < CFG.hose.range + 6 && Math.random() < dt * 10) {
         spawnSplash(_v2.copy(camera.position).addScaledVector(Player.aim, tGround));
       }
+    }
+
+    // the jet is a real force: any physics prop in the stream gets blasted
+    for (const b of physBodies) {
+      _v2.subVectors(b.g.position, nozzle);
+      _v2.y += b.restY + 0.15; // aim at the prop's middle, not its base
+      const along = _v2.dot(Player.aim);
+      if (along < 0.5 || along > CFG.hose.range) continue;
+      const off2 = _v2.lengthSq() - along * along; // squared distance off the jet axis
+      if (off2 > 0.55) continue;
+      const kick = 30 * (1 - along / CFG.hose.range) * dt / b.mass;
+      b.vel.addScaledVector(Player.aim, kick);
+      b.vel.y += kick * 0.45; // pressure lifts as it shoves
+      b.angVel.x += (Math.random() - 0.5) * kick * 6;
+      b.angVel.z += (Math.random() - 0.5) * kick * 6;
+      if (Math.random() < dt * 10) spawnSplash(b.g.position);
     }
   } else if (HoseFX.muzzle) {
     HoseFX.muzzle.material.opacity = 0; // no jet, no muzzle glow
@@ -2755,6 +3087,7 @@ function buildLevel() {
   buildShard();
   buildStreetlights();
   buildGraffiti();
+  buildProps();
 
   // two infected civilians on the path — save them or fight what they become
   civilians.push(new Civilian(-3, -52), new Civilian(4, -98));
@@ -2851,11 +3184,42 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   getShard: () => shard,
   skipIntro: () => { introSkip = true; },
   getCombo: () => comboCount,
-  getDying: () => dyingZombies.length };
+  getDying: () => dyingZombies.length,
+  // muzzle/spray introspection — lets a headless playtest confirm water leaves
+  // the barrel tip rather than the chest without needing to see the render
+  HoseFX,
+  nozzleWorldPos: (out) => nozzleWorldPos(out || new THREE.Vector3()),
+  spawnZombieAt: (x, z) => { const z2 = new Zombie(x, z); z2.setState('chase'); zombies.push(z2); Game.totalZombies++; return z2; },
+  getZombies: () => zombies,
+  getFrames: () => _frameCount,
+  camera,
+  aimAt: (tx, ty, tz) => { // point the player's aim from the camera toward a world point
+    const d = new THREE.Vector3(tx, ty, tz).sub(camera.position).normalize();
+    Player.yaw = Math.atan2(d.x, d.z); Player.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
+  },
+  // deterministic single-frame advance for headless testing, where the browser
+  // throttles requestAnimationFrame. Runs the same updates as the 'playing' tick.
+  // Advances its own time accumulator so `t`-driven animation (sway, breathe,
+  // glow pulse) evolves across steps instead of freezing at clock.elapsedTime.
+  step: (dt = 0.03) => {
+    dt = Math.min(dt, 0.05);
+    _stepTime += dt;
+    const t = clock.elapsedTime + _stepTime;
+    if (Game.state !== 'playing') return;
+    updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
+    for (const z of zombies) z.update(dt, t);
+    for (const c of civilians) c.update(dt, t);
+    updateShard(dt, t); updateDying(dt); updatePhysics(dt);
+  },
+  physBodies,
+  renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
+let _frameCount = 0;
+let _stepTime = 0; // headless UJ.step() time accumulator (see the step hook above)
 function tick() {
   requestAnimationFrame(tick);
+  _frameCount++;
   const rawDt = clock.getDelta();
   let dt = Math.min(rawDt, 0.05);
   const t = clock.elapsedTime;
@@ -2873,6 +3237,7 @@ function tick() {
   updateGulls(t);
   updateGlitter(dt);
   updateSplashes(dt);
+  updatePhysics(dt); // props + ragdoll chunks keep settling even in menus
 
   // optional FPS readout (settings toggle) — helps real-device playtesting
   if (Settings.showFps) {

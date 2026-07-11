@@ -38,6 +38,11 @@ App.registerPage('finance', {
     const goals = f.goals || [];
     const rules = Storage.get('finance_rules') || [];
 
+    // reconciliation: the headline figures are entered by hand while the real
+    // numbers live in accounts + transactions, so they drift. Derive the truth
+    // and surface the gap.
+    const rec = this._reconcileData(f, accounts, transactions);
+
     el.innerHTML = `
       <div class="section">
         <div class="grid-4">
@@ -57,6 +62,35 @@ App.registerPage('finance', {
             <div class="card-title">Savings Rate</div>
             <div class="card-value" style="margin-top:8px;color:var(--purple)">${f.savingsRate || 0}%</div>
           </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card" style="border-left:3px solid ${rec.anyDrift ? 'var(--amber)' : 'var(--green)'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:16px">${rec.anyDrift ? '&#9888;' : '&#10003;'}</span>
+              <span class="card-title" style="margin:0">Reconciliation</span>
+            </div>
+            ${rec.anyDrift
+              ? `<button class="btn btn-primary btn-sm" id="fin-reconcile">Sync headline figures</button>`
+              : `<span style="font-size:12px;color:var(--green)">Headline figures match your accounts &amp; transactions</span>`}
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th style="text-align:right">Recorded</th><th style="text-align:right">Derived</th><th style="text-align:right">Drift</th></tr></thead>
+              <tbody>
+                ${rec.rows.map(r => `
+                  <tr>
+                    <td>${r.label}<div style="font-size:11px;color:var(--text-muted)">${r.source}</div></td>
+                    <td style="text-align:right;font-family:'JetBrains Mono',monospace">${r.fmt(r.recorded)}</td>
+                    <td style="text-align:right;font-family:'JetBrains Mono',monospace">${r.fmt(r.derived)}</td>
+                    <td style="text-align:right;font-family:'JetBrains Mono',monospace;color:${r.drift ? 'var(--amber)' : 'var(--text-muted)'}">${r.drift ? r.fmt(r.derived - r.recorded) : '—'}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:8px">Derived from ${accounts.length} account${accounts.length !== 1 ? 's' : ''} and this month&rsquo;s transactions. Add transactions and account balances to keep these honest.</div>
         </div>
       </div>
 
@@ -165,6 +199,8 @@ App.registerPage('finance', {
       </div>
     `;
 
+    const reconcileBtn = document.getElementById('fin-reconcile');
+    if (reconcileBtn) reconcileBtn.addEventListener('click', () => this._applyReconcile(rec));
     document.getElementById('add-account').addEventListener('click', () => this._editAccount());
     document.getElementById('add-goal').addEventListener('click', () => this._editGoal());
     document.getElementById('add-transaction').addEventListener('click', () => this._addTransaction());
@@ -180,6 +216,38 @@ App.registerPage('finance', {
       Storage.set('finance', fin);
       App.toast('Overview saved', 'success');
     });
+  },
+
+  // derive the "true" headline figures from source data and compare to the
+  // hand-entered ones. A drift over a small tolerance is flagged.
+  _reconcileData(f, accounts, transactions) {
+    const money = App.formatCurrency.bind(App);
+    const pct = v => (Math.round(v * 10) / 10) + '%';
+    const accountsSum = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const monthTx = transactions.filter(t => (t.date || '').startsWith(ym));
+    const income = monthTx.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+    const expenses = monthTx.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
+    const savings = income > 0 ? (income - expenses) / income * 100 : 0;
+
+    const drift = (a, b, tol) => Math.abs((Number(a) || 0) - b) > tol;
+    const rows = [
+      { key: 'netWorth', label: 'Net worth', source: 'sum of account balances', recorded: Number(f.netWorth) || 0, derived: accountsSum, fmt: money, drift: accounts.length > 0 && drift(f.netWorth, accountsSum, 1) },
+      { key: 'monthlyIncome', label: 'Income this month', source: 'positive transactions', recorded: Number(f.monthlyIncome) || 0, derived: income, fmt: money, drift: monthTx.length > 0 && drift(f.monthlyIncome, income, 1) },
+      { key: 'monthlyExpenses', label: 'Expenses this month', source: 'negative transactions', recorded: Number(f.monthlyExpenses) || 0, derived: expenses, fmt: money, drift: monthTx.length > 0 && drift(f.monthlyExpenses, expenses, 1) },
+      { key: 'savingsRate', label: 'Savings rate', source: '(income − expenses) / income', recorded: Number(f.savingsRate) || 0, derived: Math.round(savings * 10) / 10, fmt: pct, drift: income > 0 && drift(f.savingsRate, savings, 0.5) },
+    ];
+    return { rows, anyDrift: rows.some(r => r.drift) };
+  },
+
+  _applyReconcile(rec) {
+    const f = Storage.get('finance') || {};
+    rec.rows.forEach(r => { if (r.drift) f[r.key] = r.derived; });
+    if (Storage.set('finance', f) !== false) {
+      App.toast('Headline figures synced to your data', 'success');
+      this.render(document.getElementById('page-content'));
+    }
   },
 
   // ─── FINANCIAL PROFILE ───

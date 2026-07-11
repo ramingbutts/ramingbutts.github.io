@@ -44,7 +44,7 @@ App.registerPage('tasks', {
                 <div class="kanban-card-title">${this._esc(t.title)}</div>
                 <div class="kanban-card-meta">
                   <span class="badge badge-${t.priority === 'high' ? 'red' : t.priority === 'medium' ? 'amber' : 'green'}">${t.priority}</span>
-                  <span>${t.dueDate ? App.formatDate(t.dueDate) : ''}</span>
+                  <span>${t.recurrence && t.recurrence !== 'none' ? '🔁 ' : ''}${t.dueDate ? App.formatDate(t.dueDate) : ''}</span>
                 </div>
                 ${t.blockers && t.blockers.length ? `<div style="margin-top:6px;font-size:10px;color:var(--red)">&#9888; ${t.blockers.length} blocker(s)</div>` : ''}
               </div>
@@ -129,10 +129,13 @@ App.registerPage('tasks', {
         const tasks = Storage.get('tasks') || [];
         const task = tasks.find(t => t.id === id);
         if (task) {
+          const wasDone = task.status === 'done';
           task.status = newStatus;
+          // completing a recurring task spawns its next occurrence
+          const spawned = (newStatus === 'done' && !wasDone) ? this._maybeRecur(task, tasks) : false;
           Storage.set('tasks', tasks);
           this.render(document.getElementById('page-content'));
-          App.toast(`Task moved to ${newStatus}`, 'success');
+          App.toast(spawned ? `Done — next ${task.recurrence} occurrence scheduled` : `Task moved to ${newStatus}`, 'success');
         }
       });
     });
@@ -181,6 +184,12 @@ App.registerPage('tasks', {
         </div>
       </div>
       <div class="form-group">
+        <label>Repeat</label>
+        <select id="f-recurrence">
+          ${[['none', 'Does not repeat'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month']].map(([r, label]) => `<option value="${r}" ${(task?.recurrence || 'none') === r ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
         <label>Blockers (one per line)</label>
         <textarea id="f-blockers" placeholder="What's blocking this task?"></textarea>
       </div>
@@ -208,22 +217,63 @@ App.registerPage('tasks', {
         status: document.getElementById('f-status').value,
         category: document.getElementById('f-category').value.trim(),
         dueDate: document.getElementById('f-due').value,
+        recurrence: document.getElementById('f-recurrence').value,
         blockers: document.getElementById('f-blockers').value.split('\n').map(s => s.trim()).filter(Boolean),
         createdAt: task?.createdAt || new Date().toISOString()
       };
 
       const all = Storage.get('tasks') || [];
+      let spawned = false;
       if (isEdit) {
         const idx = all.findIndex(t => t.id === id);
+        // completing a recurring task via the form also spawns the next one
+        if (idx >= 0 && data.status === 'done' && all[idx].status !== 'done') spawned = this._maybeRecur(data, all);
         if (idx >= 0) all[idx] = data;
       } else {
+        if (data.status === 'done') spawned = this._maybeRecur(data, all);
         all.push(data);
       }
       Storage.set('tasks', all);
       App.closeModal();
       this.render(document.getElementById('page-content'));
-      App.toast(isEdit ? 'Task updated' : 'Task created', 'success');
+      App.toast(spawned ? `Saved — next ${data.recurrence} occurrence scheduled` : (isEdit ? 'Task updated' : 'Task created'), 'success');
     };
+  },
+
+  // when a recurring task is completed, push a fresh 'todo' copy with its due
+  // date rolled forward by the interval. Returns true if one was spawned.
+  _maybeRecur(task, list) {
+    if (!task.recurrence || task.recurrence === 'none') return false;
+    list.push({
+      id: App.uid(),
+      title: task.title,
+      description: task.description || '',
+      priority: task.priority || 'medium',
+      status: 'todo',
+      category: task.category || '',
+      dueDate: this._rollDate(task.dueDate, task.recurrence),
+      recurrence: task.recurrence,
+      blockers: [],
+      createdAt: new Date().toISOString(),
+    });
+    return true;
+  },
+
+  _rollDate(dateStr, recurrence) {
+    // anchor to the task's due date if it has one, else today
+    const base = dateStr ? new Date(dateStr + 'T00:00:00') : new Date();
+    if (recurrence === 'daily') base.setDate(base.getDate() + 1);
+    else if (recurrence === 'weekly') base.setDate(base.getDate() + 7);
+    else if (recurrence === 'monthly') base.setMonth(base.getMonth() + 1);
+    // roll past today so the next occurrence is always in the future
+    const today = new Date(App.getToday() + 'T00:00:00');
+    let guard = 0;
+    while (base <= today && guard++ < 400) {
+      if (recurrence === 'daily') base.setDate(base.getDate() + 1);
+      else if (recurrence === 'weekly') base.setDate(base.getDate() + 7);
+      else base.setMonth(base.getMonth() + 1);
+    }
+    return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
   },
 
   _delete(id) {

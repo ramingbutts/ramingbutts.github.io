@@ -312,6 +312,16 @@ gives fwd 1.35 facing forward, 0.35 flipped 180°, 0.4 at 90°). The manual
 correct for any future character model. No-ops safely on the primitive path
 (no localBox).
 
+## High-pressure knockback (iteration 21)
+
+The hose now shoves zombies: while a zombie is being sprayed, `Zombie.push(dt)`
+slides it directly away from the player at `CFG.zombie.knockback` (3.6 m/s) —
+faster than its 2.9 m/s chase, so a hosed zombie nets backward — with a brief
+lean-back, clamped to the deck. A committed lunge resists (early-return on
+`state === 'lunge'`) so the shove is crowd-control, not an i-win button. This
+is the "cleaning as combat" payoff of the high-pressure fantasy and is
+model-independent (works on GLB and primitive Jax alike).
+
 ## Performance defaults
 
 Pixel ratio clamped to 1.75, no shadows (fog hides them anyway), shared
@@ -331,3 +341,61 @@ ray-dependent assertions, and DOM read-backs of per-frame HUD writes race the
 frame — assert on game state (e.g. `Tutorial.fired.firstBeam`), not on style
 strings. Touch is testable by dispatching synthetic `TouchEvent`s; handlers
 must not require `isTrusted`.
+
+### Deterministic stepping beats wall-clock frames
+
+Headless Chromium throttles `requestAnimationFrame` to ~2 fps (the compositor
+treats the page as hidden regardless of `document.visibilityState`), so a test
+that waits real seconds barely advances the game. `UJ.step(dt)` runs the same
+updates as the `playing` branch of `tick()` for one frame, so the harness drives
+frames itself and the run is deterministic and fast. Companion hooks: `UJ.aimAt(x,y,z)`
+points the aim from the *camera* (the hose ray originates there, ~5.4 m behind
+the player — aiming from the player's own position misses), `UJ.spawnZombieAt`,
+`UJ.getFrames`, `UJ.HoseFX`, `UJ.nozzleWorldPos`. `games/unicorn-janitor/playtest.mjs`
+is the committed harness (9 checks, all green).
+
+Gotchas that bit real assertions: the hose needs `Player.hasHorn = true` (it's a
+tutorial pickup, false at spawn); a chaser must spawn **beyond 3.2 m** or it
+enters windup→lunge, which is deliberately knockback-immune, so a knockback test
+placed too close reads as "moved closer"; and a fresh spray particle is already
+~1 frame (≈1 m at `jetSpeed 34`) downstream of the muzzle, so "water from the
+barrel" is proven by the muzzle *sprite* sitting exactly on `nozzleWorldPos()`
+(Δ≈0) plus the particle being nearer the nozzle than the chest — not by an
+absolute distance to the spawn point.
+
+## Rigid-body physics + articulation (iteration 26)
+
+~60-line custom physics (`physBodies` / `addPhysBody` / `updatePhysics`), no
+library: gravity integration, ground bounce with restitution, rolling
+friction, angular tumble, rail/bounds reflection, player kick-through, and
+optional `ttl` for self-cleaning debris. Three users: deck props (cones,
+buckets, crates — the jet applies real impulses inside `updateHose`, force
+scaled by `dt`/mass and distance along the aim axis), zombie death ragdolls
+(6 chunks incl. the eye, `ttl` ~1.5s with end-of-life shrink), and anything
+future levels toss around. Props run in the always-on tick section so they
+settle even during menus; `UJ.step` runs them too so tests see physics.
+
+Characters are articulated with pivot groups, not baked poses: zombie arms
+hang from shoulder joints and feet from ankle pivots, and a per-zombie
+`gaitT` phase (randomized so the horde never marches in sync) advances with
+state-dependent rate — feet alternate lift+toe-pitch, belly squash-stretches
+on footfalls, head bobbles with a lag, arms reach forward in chase and flail
+in windup, all eased with `1 - 0.001^dt` smoothing toward pose targets so
+state changes blend instead of snapping. Jax's whole head (face, ears, mane,
+horn) rides a neck joint that nods with aim pitch and rolls into strafes;
+mane spikes ripple back harder with speed; boots counter-rotate against hip
+swing for an ankle. Playtest checks all of it headlessly (13 checks).
+
+## GLB whole-body locomotion (iteration 27)
+
+The textured image→3D meshes are single baked wraps — no bones — so their
+life is whole-body animation layered on the wrap (never touch `rotation.y`,
+which belongs to the facing/Shift+R system): gait-synced waddle-hop
+(`|sin(gaitT)|`), footfall squash-and-stretch, state leans (chase forward,
+windup back, lunge stretched +z / squashed y), yaw-delta turn banking
+(wrap dyaw to ±π first), stunned dizzy sway. Jax's wrap adds sprint-scaled
+lean, camera-turn banking, an airborne tuck, and a whole-`Player.group`
+landing squash proportional to impact speed (bank it at the ground clamp:
+`_landSq = min(0.16, -vel.y * 0.016)`, decay ~0.9/s, scale y down / xz up).
+Testable without the real model: inject `new THREE.Group()` as `z.glb` —
+the animation layer only checks existence.

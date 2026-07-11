@@ -18,6 +18,8 @@ App.registerPage('habits', {
     const pct = habits.length ? Math.round((completed / habits.length) * 100) : 0;
     const totalStreak = habits.reduce((s, h) => s + (h.streak || 0), 0);
 
+    const stats = this._analytics(habits, todayStr);
+
     container.innerHTML = `
       <div class="section">
         <div class="grid-3">
@@ -33,12 +35,47 @@ App.registerPage('habits', {
             <div class="card-subtitle">combined streak days</div>
           </div>
           <div class="card">
-            <div class="card-title">Active Habits</div>
-            <div class="card-value" style="margin-top:8px">${habits.length}</div>
-            <div class="card-subtitle">tracking daily</div>
+            <div class="card-title">30-Day Consistency</div>
+            <div class="card-value" style="margin-top:8px;color:var(--accent)">${stats.rate30}%</div>
+            <div class="card-subtitle">${stats.perfectDays} perfect day${stats.perfectDays !== 1 ? 's' : ''} this month</div>
           </div>
         </div>
       </div>
+
+      ${habits.length ? `
+      <div class="section">
+        <div class="section-title" style="margin-bottom:10px">Habit Insights</div>
+        <div class="grid-2">
+          <div class="card" style="border-left:3px solid ${stats.atRisk.length ? 'var(--red)' : 'var(--green)'}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span style="font-size:16px">${stats.atRisk.length ? '🔥' : '✅'}</span>
+              <span class="card-title" style="margin:0">Don't break the chain</span>
+            </div>
+            ${stats.atRisk.length ? `
+              <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">${stats.atRisk.length} streak${stats.atRisk.length !== 1 ? 's' : ''} at risk — not done yet today:</div>
+              ${stats.atRisk.map(h => `
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+                  <span>${this._esc(h.icon || '★')}</span>
+                  <span style="flex:1;font-size:13px">${this._esc(h.name)}</span>
+                  <button class="btn btn-primary btn-sm habit-quick" data-hid="${App.escAttr(h.id)}">${h.streak}🔥 keep it</button>
+                </div>`).join('')}`
+            : '<div style="font-size:13px;color:var(--text-secondary)">Every active streak is safe — all done for today. Nice.</div>'}
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px">This month, by habit</div>
+            ${stats.perHabit.map(p => `
+              <div style="padding:7px 0;border-bottom:1px solid var(--border)">
+                <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                  <span>${this._esc(p.h.icon || '★')} ${this._esc(p.h.name)}</span>
+                  <span style="color:var(--text-muted);font-family:'JetBrains Mono',monospace">${p.rate}%</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill ${p.rate >= 70 ? 'green' : p.rate >= 40 ? 'amber' : 'pink'}" style="width:${p.rate}%"></div></div>
+              </div>`).join('')}
+            ${stats.strongest && stats.weakest && stats.strongest !== stats.weakest ? `
+              <div style="font-size:11px;color:var(--text-muted);margin-top:8px">Strongest: <b style="color:var(--green)">${this._esc(stats.strongest.name)}</b> · needs love: <b style="color:var(--pink)">${this._esc(stats.weakest.name)}</b></div>` : ''}
+          </div>
+        </div>
+      </div>` : ''}
 
       <div class="section">
         <div class="section-header">
@@ -91,12 +128,42 @@ App.registerPage('habits', {
     container.querySelectorAll('.habit-toggle').forEach(el => {
       el.addEventListener('click', () => this._toggle(el.dataset.hid, el.dataset.date));
     });
+    container.querySelectorAll('.habit-quick').forEach(btn => {
+      btn.addEventListener('click', () => this._toggle(btn.dataset.hid, App.getToday()));
+    });
     container.querySelectorAll('.habit-edit-btn').forEach(btn => {
       btn.addEventListener('click', () => this._edit(btn.dataset.hid));
     });
     container.querySelectorAll('.habit-del-btn').forEach(btn => {
       btn.addEventListener('click', () => this._delete(btn.dataset.hid));
     });
+  },
+
+  // 30-day habit analytics: overall consistency, per-habit rates, and the
+  // "don't break the chain" at-risk list (streak ≥ 3 but not done today)
+  _analytics(habits, todayStr) {
+    const dates = [];
+    const today = new Date();
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(today); d.setDate(d.getDate() - i);
+      dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    }
+    let done = 0;
+    const perHabit = habits.map(h => {
+      const c = dates.filter(d => h.completed && h.completed[d]).length;
+      done += c;
+      return { h, rate: Math.round(c / dates.length * 100) };
+    });
+    const poss = habits.length * dates.length;
+    const rate30 = poss ? Math.round(done / poss * 100) : 0;
+    const perfectDays = habits.length ? dates.filter(d => habits.every(h => h.completed && h.completed[d])).length : 0;
+    const atRisk = habits.filter(h => (h.streak || 0) >= 3 && !(h.completed && h.completed[todayStr]));
+    const sorted = [...perHabit].sort((a, b) => b.rate - a.rate);
+    return {
+      rate30, perfectDays, atRisk, perHabit,
+      strongest: sorted.length ? sorted[0].h : null,
+      weakest: sorted.length ? sorted[sorted.length - 1].h : null,
+    };
   },
 
   _categoryStats(habits, cat, label, color) {
