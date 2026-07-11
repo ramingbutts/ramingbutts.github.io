@@ -179,6 +179,52 @@ const rag = await page.evaluate(() => {
 ok('dead zombie bursts into bouncing ragdoll chunks that expire', rag.after >= rag.before + 5 && rag.settled <= rag.before,
    `bodies ${rag.before} → ${rag.after} on death → ${rag.settled} after cleanup`);
 
+// 6d2. GLB LOCOMOTION — the textured zombie mesh hops, squashes and leans.
+// The real GLB can't download here (CDN blocked), so inject a stand-in wrap:
+// the animation code only cares that this.glb exists.
+const glb = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const z = UJ.spawnZombieAt(P.pos.x, P.pos.z - 9);
+  const GroupClass = P.group.constructor; // THREE.Group via an existing instance
+  z.glb = new GroupClass();
+  let hops = 0, squashed = false, leaned = false, lastY = 0;
+  for (let i = 0; i < 40; i++) {
+    UJ.step(0.03);
+    if (z.glb.position.y > 0.02 && lastY <= 0.02) hops++;
+    lastY = z.glb.position.y;
+    if (z.glb.scale.y < 0.98) squashed = true;
+    if (z.glb.rotation.x > 0.05) leaned = true;
+  }
+  const st = z.state;
+  z.glb = null;
+  return { hops, squashed, leaned, state: st };
+});
+ok('GLB zombie hops, squashes and leans while hunting', glb.hops >= 2 && glb.squashed && glb.leaned,
+   `hops=${glb.hops} squash=${glb.squashed} chaseLean=${glb.leaned} state=${glb.state}`);
+
+// the tests above spawned live chasers — neutralize them and heal Jax so the
+// remaining checks don't fail because he got lunge-hugged to death mid-suite
+await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
+  UJ.Player.hp = 100;
+});
+
+// 6d3. Landing squash — jumping and landing compresses the whole body briefly
+const land = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.jumpPressed = true;
+  let minScale = 1, airborne = false;
+  for (let i = 0; i < 60; i++) {
+    UJ.step(0.03);
+    if (!P.onGround) airborne = true;
+    if (airborne && P.onGround) minScale = Math.min(minScale, P.group.scale.y);
+  }
+  return { minScale, airborne };
+});
+ok('landing from a jump squashes the body (impact weight)', land.airborne && land.minScale < 0.95,
+   `min body scale ${land.minScale.toFixed(3)} after touchdown`);
+
 // 6e. Jax's head is a live joint — it nods to follow aim pitch
 const headAim = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;

@@ -385,3 +385,17 @@ state changes blend instead of snapping. Jax's whole head (face, ears, mane,
 horn) rides a neck joint that nods with aim pitch and rolls into strafes;
 mane spikes ripple back harder with speed; boots counter-rotate against hip
 swing for an ankle. Playtest checks all of it headlessly (13 checks).
+
+## GLB whole-body locomotion (iteration 27)
+
+The textured image→3D meshes are single baked wraps — no bones — so their
+life is whole-body animation layered on the wrap (never touch `rotation.y`,
+which belongs to the facing/Shift+R system): gait-synced waddle-hop
+(`|sin(gaitT)|`), footfall squash-and-stretch, state leans (chase forward,
+windup back, lunge stretched +z / squashed y), yaw-delta turn banking
+(wrap dyaw to ±π first), stunned dizzy sway. Jax's wrap adds sprint-scaled
+lean, camera-turn banking, an airborne tuck, and a whole-`Player.group`
+landing squash proportional to impact speed (bank it at the ground clamp:
+`_landSq = min(0.16, -vel.y * 0.016)`, decay ~0.9/s, scale y down / xz up).
+Testable without the real model: inject `new THREE.Group()` as `z.glb` —
+the animation layer only checks existence.

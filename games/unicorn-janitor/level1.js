@@ -1392,6 +1392,32 @@ class Zombie {
         + (walking ? Math.sin(gp * 2 + i) * 0.1 : Math.sin(t * 2 + i) * 0.06)) - this.arms[i].rotation.z) * k;
     }
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
+
+    // ---- GLB locomotion: the textured model is one baked mesh, so its life
+    // comes from whole-body animation — a gait-synced waddle-hop, squash-and-
+    // stretch on each footfall, a hungry lean in chase, a stretched lunge,
+    // banking into turns, and a dizzy sway while stunned. Without this the
+    // AAA mesh slides around like a chess piece.
+    if (this.glb) {
+      const gl = this.glb;
+      gl.position.y = walking ? Math.abs(Math.sin(gp)) * 0.09 : 0;
+      const sq = walking ? Math.max(0, -Math.sin(gp * 2)) * 0.06
+        : this.state === 'stunned' ? 0 : Math.max(0, Math.sin(t * 1.7)) * 0.02; // idle breathing
+      let sy = 1 - sq, sxz = 1 + sq * 0.7, szExtra = 1;
+      if (this.state === 'lunge') { szExtra = 1.14; sy *= 0.92; } // stretch through the dive
+      gl.scale.set(sxz, sy, sxz * szExtra);
+      const leanT = this.state === 'chase' ? 0.14 : this.state === 'lunge' ? 0.3
+        : this.state === 'windup' ? -0.25 : 0; // group already leans; this adds body english
+      gl.rotation.x += (leanT - gl.rotation.x) * k;
+      // bank into turns (yaw delta, wrapped)
+      const yaw = this.group.rotation.y;
+      let dyaw = yaw - (this._prevYaw ?? yaw);
+      if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      this._prevYaw = yaw;
+      const bank = THREE.MathUtils.clamp(-dyaw * 6, -0.25, 0.25)
+        + (this.state === 'stunned' ? Math.sin(t * 6) * 0.12 : 0);
+      gl.rotation.z += (bank - gl.rotation.z) * k;
+    }
     // the eye burns brighter when he's hunting you
     this.eyeMat.emissiveIntensity = this.state === 'chase' || this.state === 'windup' || this.state === 'lunge'
       ? 1.6 + 0.5 * Math.sin(t * 12)
@@ -2077,7 +2103,11 @@ function updatePlayer(dt, t) {
   Input.jumpPressed = false;
   Player.vel.y -= CFG.player.gravity * dt;
   Player.pos.y += Player.vel.y * dt;
-  if (Player.pos.y <= 0) { Player.pos.y = 0; Player.vel.y = 0; Player.onGround = true; }
+  if (Player.pos.y <= 0) {
+    // touchdown: bank the impact speed as a squash-and-recover on the body
+    if (!Player.onGround && Player.vel.y < -3) Player._landSq = Math.min(0.16, -Player.vel.y * 0.016);
+    Player.pos.y = 0; Player.vel.y = 0; Player.onGround = true;
+  }
 
   // stay on the playable deck
   Player.pos.x = THREE.MathUtils.clamp(Player.pos.x, -7.6, 7.6);
@@ -2088,6 +2118,12 @@ function updatePlayer(dt, t) {
   // running bob, or a slow idle-breathing rise when standing still
   const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
   Player.group.position.y = Player.pos.y + bob;
+
+  // landing squash-and-recover: the whole body (rig or GLB, gun included)
+  // compresses on touchdown proportional to impact speed, then springs back
+  Player._landSq = Math.max(0, (Player._landSq || 0) - dt * 0.9);
+  const lsq = Player._landSq;
+  Player.group.scale.set(1 + lsq * 0.6, 1 - lsq, 1 + lsq * 0.6);
 
   // run cycle: legs and arms counter-swing while moving, relax when idle
   const swing = (moving && Player.onGround) ? Math.sin(t * 10) : 0;
@@ -2136,13 +2172,19 @@ function updatePlayer(dt, t) {
     const g = Player.glbVisual;
     const walk = (moving && Player.onGround) ? 1 : 0;
     const sway = Math.sin(t * 8) * 0.06 * walk;              // hip roll
-    const lean = walk * 0.05;                                // lean into the run
+    const lean = walk * (sprinting ? 0.11 : 0.05);           // lean harder at a sprint
     const breathe = Math.sin(t * 1.8) * 0.012 * (1 - walk);  // idle chest rise
     Player._recoil = Math.max(0, (Player._recoil || 0) - dt * 4);
     if (Player.firing) Player._recoil = Math.min(0.12, Player._recoil + dt * 3);
     const k = 1 - Math.pow(0.02, dt);
-    g.rotation.z += (sway - g.rotation.z) * k;
-    g.rotation.x += ((lean + breathe - Player._recoil) - g.rotation.x) * k;
+    // bank into camera turns so fast swings read as weight shift, not a swivel
+    let dyaw = Player.yaw - (Player._prevYaw ?? Player.yaw);
+    if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    Player._prevYaw = Player.yaw;
+    const bank = THREE.MathUtils.clamp(-dyaw * 2.5, -0.12, 0.12);
+    const airTuck = Player.onGround ? 0 : 0.09; // brace slightly while airborne
+    g.rotation.z += ((sway + bank) - g.rotation.z) * k;
+    g.rotation.x += ((lean + breathe + airTuck - Player._recoil) - g.rotation.x) * k;
   }
 
   // --- camera: third-person follow, slightly damped ---
