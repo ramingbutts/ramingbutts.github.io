@@ -269,6 +269,8 @@ App.registerPage('pulse', {
     if (s == null) return '';
     const d = document.createElement('div');
     d.textContent = String(s);
-    return d.innerHTML;
+    // also escape quotes: _esc output is interpolated into value="..." attributes,
+    // where an unescaped quote truncates the field and silently corrupts data
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   },
 });

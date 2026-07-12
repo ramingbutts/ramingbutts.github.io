@@ -399,3 +399,22 @@ landing squash proportional to impact speed (bank it at the ground clamp:
 `_landSq = min(0.16, -vel.y * 0.016)`, decay ~0.9/s, scale y down / xz up).
 Testable without the real model: inject `new THREE.Group()` as `z.glb` —
 the animation layer only checks existence.
+
+## Physics everywhere + hit-feel (iteration 28)
+
+Every object class now reacts: piles are jelly (damped spring `wob`/`wobV`
+excited by each clean() hit, integrated in `updatePileJelly` — shared by tick
+AND UJ.step, or headless runs never see it), and they pop into physics gobs
+tinted by their own material (`spawnChunkBurst`, the generalized ragdoll).
+Zombies flinch under the jet (whole-group squash + facing shiver; gain must
+beat per-frame decay under continuous spray — 0.04 was mathematically
+invisible, 0.12 reaches ~0.9 equilibrium). Cars rock on suspension springs
+(jet cone + walk-by excitation, roll clamped ±0.09). And physics is a weapon:
+any body flying >3.5 m/s staggers a zombie it touches (stun 0.8s + 10 goo,
+prop caroms off) — blast a traffic cone at one.
+
+Test gotchas: hiding a leftover zombie does NOT stop it eating rays
+(Mesh.raycast checks material visibility, not group visibility) — either
+call removeCleanTargets or design the check to not depend on ray geometry;
+and a suite that reuses "the nearest pile" inherits the previous check's
+drain state — reset `dirt` explicitly.

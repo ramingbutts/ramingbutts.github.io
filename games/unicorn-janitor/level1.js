@@ -631,7 +631,8 @@ function buildBridge() {
     grp.add(new THREE.LineSegments(hg, hangerMat));
   }
 
-  // abandoned cars for atmosphere
+  // abandoned cars — they sit on their suspension, so the jet and body
+  // bumps rock them (see updateCars: a damped roll spring per car)
   const carBody = new THREE.BoxGeometry(2, 0.9, 4.2);
   const carTop = new THREE.BoxGeometry(1.7, 0.7, 2.2);
   [[5.5, -30, 0xa04a56], [-5.8, -66, 0x4a6a8a], [6, -95, 0x777d5a], [-5.2, -120, 0x8a8a92]].forEach(([x, z, col]) => {
@@ -640,6 +641,7 @@ function buildBridge() {
     const t = new THREE.Mesh(carTop, m); t.position.set(0, 0.8, -0.3); b.add(t);
     b.castShadow = true; t.castShadow = true;
     grp.add(b);
+    cars.push({ mesh: b, rock: 0, rockV: 0 });
   });
 
   // ocean far below (mostly hidden by fog, sells the height) — a low-poly
@@ -858,6 +860,21 @@ function updateGlitter(dt) {
    ===================================================================== */
 const physBodies = [];
 const _pv = new THREE.Vector3();
+
+// abandoned cars rock on their suspension: a damped roll spring per car,
+// excited by the water jet and by walking into them
+const cars = [];
+function updateCars(dt) {
+  for (const c of cars) {
+    // player shoulder-check: shove the suspension as you brush past
+    _pv.subVectors(c.mesh.position, Player.pos); _pv.y = 0;
+    if (_pv.lengthSq() < 4.6 && Math.abs(c.rockV) < 0.3) c.rockV += 0.5;
+    c.rockV += (-c.rock * 60 - c.rockV * 5.5) * dt;
+    c.rock = THREE.MathUtils.clamp(c.rock + c.rockV * dt, -0.09, 0.09);
+    c.mesh.rotation.z = c.rock;
+    c.mesh.position.y = 0.45 + Math.abs(c.rock) * 0.12; // lifts slightly as it rolls
+  }
+}
 function addPhysBody(g, r, restY, opts = {}) {
   const b = { g, r, restY, vel: new THREE.Vector3(), angVel: new THREE.Vector3(),
     rest: opts.rest ?? 0.38, ttl: opts.ttl ?? null, mass: opts.mass ?? 1 };
@@ -910,6 +927,25 @@ function updatePhysics(dt) {
       b.vel.y = Math.max(b.vel.y, 1.2 / b.mass);
       b.angVel.x += (Math.random() - 0.5) * 3;
     }
+
+    // physics as a weapon: anything flying fast enough clobbers a zombie —
+    // blast a traffic cone at one and it staggers, dazed, taking chip damage
+    b.zHitCd = Math.max(0, (b.zHitCd || 0) - dt);
+    if (b.zHitCd <= 0 && b.vel.lengthSq() > 12) {
+      for (const z of zombies) {
+        if (!z.alive) continue;
+        if (p.distanceTo(z.group.position) < b.r + 0.75) {
+          z.stun(0.8);
+          z.clean(10, p);
+          b.vel.multiplyScalar(-0.35); // the prop caroms off
+          b.vel.y = Math.max(b.vel.y, 2);
+          b.zHitCd = 0.6;
+          SFX.splat(panFor(p), 0.6);
+          spawnGlitter(p.clone(), 12, 3);
+          break;
+        }
+      }
+    }
   }
 }
 
@@ -953,24 +989,32 @@ function buildProps() {
   }
 }
 
-// ragdoll: a dead zombie bursts into bouncing poop scoops (+ the eye)
-function spawnRagdoll(center) {
-  const scoopMat = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
-  for (let i = 0; i < 6; i++) {
-    const isEye = i === 5;
-    const r = isEye ? 0.12 : 0.14 + Math.random() * 0.16;
+// generic chunk burst: anything that dies wetly explodes into bouncing
+// physics debris. Zombies add their trademark eye; piles pass their own
+// material so the debris glows the pile's color.
+function spawnChunkBurst(center, { count = 6, mat = null, eyeMat = null, rMin = 0.14, rMax = 0.3, power = 1 } = {}) {
+  const scoopMat = mat || new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
+  for (let i = 0; i < count; i++) {
+    const isEye = eyeMat && i === count - 1;
+    const r = isEye ? 0.12 : rMin + Math.random() * (rMax - rMin);
     const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), isEye ? eyeMat : scoopMat);
     const g = new THREE.Group(); g.add(m);
     g.position.copy(center);
     g.position.y += 0.6 + Math.random() * 0.8;
     const b = addPhysBody(g, r, r, { ttl: 1.3 + Math.random() * 0.7, rest: 0.5, mass: 0.5 });
     const a = Math.random() * Math.PI * 2;
-    b.vel.set(Math.cos(a) * (2 + Math.random() * 3), 3.5 + Math.random() * 3, Math.sin(a) * (2 + Math.random() * 3));
+    b.vel.set(Math.cos(a) * (2 + Math.random() * 3) * power, (3.5 + Math.random() * 3) * power,
+      Math.sin(a) * (2 + Math.random() * 3) * power);
     b.angVel.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
     m.castShadow = true;
     scene.add(g);
   }
+}
+
+// ragdoll: a dead zombie bursts into bouncing poop scoops (+ the eye)
+function spawnRagdoll(center) {
+  spawnChunkBurst(center, { count: 6,
+    eyeMat: new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 }) });
 }
 
 /* =====================================================================
@@ -986,6 +1030,8 @@ class PoopPile {
     this.dirt = CFG.pile.dirt;
     this.alive = true;
     this.size = size;
+    this.baseScale = 1;              // shrink level from cleaning
+    this.wob = 0; this.wobV = 0;     // jelly-wobble spring, excited by the jet
     this.group = new THREE.Group();
     this.group.position.set(x, 0, z);
 
@@ -1015,7 +1061,8 @@ class PoopPile {
     if (!this.alive) return;
     this.dirt -= amount;
     const f = Math.max(this.dirt, 0) / CFG.pile.dirt;
-    this.group.scale.setScalar(0.35 + 0.65 * f);
+    this.baseScale = 0.35 + 0.65 * f;
+    this.wobV += amount * 0.35; // the pressure blast sets the jelly quivering
     this.glow.material.opacity = 0.1 + 0.25 * f;
     if (Math.random() < 0.15) spawnGlitter(point || this.group.position, 6, 2); // scrub sparks
     if (this.dirt <= 0) this.die();
@@ -1025,6 +1072,8 @@ class PoopPile {
     this.alive = false;
     const c = this.group.position.clone(); c.y += 1;
     spawnGlitter(c, 90, 6);
+    // the pile bursts into physical gobs in its own glowing color
+    spawnChunkBurst(this.group.position, { count: 5, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 0.9 });
     SFX.pop(panFor(this.group.position), 0.9);
     registerCombo(this.group.position);
     removeCleanTargets(this.group);
@@ -1053,6 +1102,22 @@ function maybeTriggerClimax() {
     narrate('The horde has your scent. Clear the bridge, janitor!', 0.6);
     SFX.setMusicMood('hero');
     Player.shake = Math.max(Player.shake, 0.25);
+  }
+}
+
+// living emissives + jelly physics: glow breathes with remaining dirt, and a
+// damped spring makes the whole pile quiver under the pressure washer.
+// Shared by the main tick and the headless UJ.step driver.
+function updatePileJelly(dt, t) {
+  for (let i = 0; i < piles.length; i++) {
+    const p = piles[i];
+    if (!p.alive) continue;
+    const f = Math.max(p.dirt, 0) / CFG.pile.dirt;
+    p.glow.material.opacity = 0.1 + 0.25 * f + 0.06 * Math.sin(t * 3 + i * 2.1);
+    p.wobV += (-p.wob * 90 - p.wobV * 7) * dt;      // stiff, under-damped jelly
+    p.wob = THREE.MathUtils.clamp(p.wob + p.wobV * dt, -0.3, 0.3);
+    const b = p.baseScale;
+    p.group.scale.set(b * (1 + p.wob * 0.7), b * (1 - p.wob), b * (1 + p.wob * 0.7));
   }
 }
 
@@ -1231,6 +1296,7 @@ class Zombie {
   clean(amount, point) {
     if (!this.alive) return;
     this.goo -= amount;
+    this.flinch = Math.min(1, (this.flinch || 0) + amount * 0.12); // impact shudder (gain must beat the per-frame decay under continuous spray)
     const f = Math.max(this.goo, 0) / CFG.zombie.goo;
     this.bodyMat.emissiveIntensity = 0.05 * f;
     for (const b of this.gooBlobs) b.scale.setScalar(Math.max(0.01, f));
@@ -1392,6 +1458,13 @@ class Zombie {
         + (walking ? Math.sin(gp * 2 + i) * 0.1 : Math.sin(t * 2 + i) * 0.06)) - this.arms[i].rotation.z) * k;
     }
     this.sparkle.material.opacity = 0.25 + 0.15 * Math.sin(t * 8);
+
+    // hit-flinch: getting blasted squashes the whole body and shivers the
+    // facing for a beat — the jet visibly lands (applies to rig AND GLB)
+    this.flinch = Math.max(0, (this.flinch || 0) - dt * 3.5);
+    const fl = this.flinch;
+    this.group.scale.set(1 + fl * 0.06, 1 - fl * 0.09, 1 + fl * 0.06);
+    if (fl > 0.01) this.group.rotation.y += Math.sin(t * 45) * fl * 0.05;
 
     // ---- GLB locomotion: the textured model is one baked mesh, so its life
     // comes from whole-body animation — a gait-synced waddle-hop, squash-and-
@@ -2408,6 +2481,15 @@ function updateHose(dt) {
       b.angVel.z += (Math.random() - 0.5) * kick * 6;
       if (Math.random() < dt * 10) spawnSplash(b.g.position);
     }
+    // too heavy to launch, but the jet rocks the abandoned cars on their springs
+    for (const c of cars) {
+      _v2.subVectors(c.mesh.position, nozzle);
+      const along = _v2.dot(Player.aim);
+      if (along < 0.5 || along > CFG.hose.range) continue;
+      if (_v2.lengthSq() - along * along > 2.6) continue;
+      c.rockV += 4.5 * dt * Math.sign(Math.random() - 0.3);
+      if (Math.random() < dt * 8) spawnSplash(c.mesh.position.clone().setY(1));
+    }
   } else if (HoseFX.muzzle) {
     HoseFX.muzzle.material.opacity = 0; // no jet, no muzzle glow
     HoseFX.light.intensity = 0;
@@ -3209,9 +3291,9 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
     for (const z of zombies) z.update(dt, t);
     for (const c of civilians) c.update(dt, t);
-    updateShard(dt, t); updateDying(dt); updatePhysics(dt);
+    updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
   },
-  physBodies,
+  physBodies, cars,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -3237,7 +3319,7 @@ function tick() {
   updateGulls(t);
   updateGlitter(dt);
   updateSplashes(dt);
-  updatePhysics(dt); // props + ragdoll chunks keep settling even in menus
+  updatePhysics(dt); updateCars(dt); // physics keeps settling even in menus
 
   // optional FPS readout (settings toggle) — helps real-device playtesting
   if (Settings.showFps) {
@@ -3247,13 +3329,7 @@ function tick() {
       fpsAccum = 0; fpsCount = 0;
     }
   }
-  // living emissives: pile glow breathes with its remaining dirt
-  for (let i = 0; i < piles.length; i++) {
-    const p = piles[i];
-    if (!p.alive) continue;
-    const f = Math.max(p.dirt, 0) / CFG.pile.dirt;
-    p.glow.material.opacity = 0.1 + 0.25 * f + 0.06 * Math.sin(t * 3 + i * 2.1);
-  }
+  updatePileJelly(dt, t);
 
   // toast fade (level-ups, unlocks)
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }
