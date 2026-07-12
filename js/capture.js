@@ -28,7 +28,9 @@ const Capture = {
     if (s == null) return '';
     const d = document.createElement('div');
     d.textContent = String(s);
-    return d.innerHTML;
+    // also escape quotes: _esc output is interpolated into value="..." attributes,
+    // where an unescaped quote truncates the field and silently corrupts data
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   },
 
   _injectDom() {
@@ -120,6 +122,8 @@ const Capture = {
       { label: 'Go to Calendar', meta: 'page', hash: '#/calendar' },
       { label: 'Go to Second Brain', meta: 'page', hash: '#/brain' },
       { label: 'Go to Journal', meta: 'page', hash: '#/journal' },
+      { label: 'Go to Knowledge Graph', meta: 'page', hash: '#/graph' },
+      { label: 'Go to Weekly Pulse', meta: 'page', hash: '#/pulse' },
     ];
     return [
       ['Tasks', '☐', tasks], ['Calendar', '🕒', events], ['Habits', '🔁', habits],

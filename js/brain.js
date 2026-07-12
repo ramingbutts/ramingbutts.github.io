@@ -155,6 +155,10 @@ App.registerPage('brain', {
         this._renderCategory(document.getElementById('page-content'), catId);
       }, 300);
     });
+    // the debounced re-render rebuilds this input — restore focus and caret so
+    // typing isn't interrupted mid-word (mirrors _renderCategories)
+    searchInput.focus();
+    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
   },
 
   _renderNotesInto(container, notes) {
@@ -319,7 +323,8 @@ App.registerPage('brain', {
         : `<span class="badge" style="opacity:.55" title="No note named &quot;${App.escAttr(l)}&quot;">${this._esc(l)} &#9888;</span>`;
     }).join('');
 
-    App.openModal(this._esc(n.title), `
+    // openModal sets the title via textContent — pass it RAW or "&" renders as "&amp;"
+    App.openModal(n.title, `
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;font-family:'JetBrains Mono',monospace">
         Created: ${n.createdAt ? new Date(n.createdAt).toLocaleString() : 'N/A'}
         &middot; Updated: ${n.updatedAt ? new Date(n.updatedAt).toLocaleString() : 'N/A'}
@@ -491,6 +496,8 @@ App.registerPage('brain', {
     if (!s) return '';
     const d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    // also escape quotes: _esc output is interpolated into value="..." attributes,
+    // where an unescaped quote truncates the field and silently corrupts data
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 });
