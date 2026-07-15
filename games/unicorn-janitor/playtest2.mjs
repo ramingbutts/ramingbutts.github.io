@@ -404,6 +404,129 @@ ok('wide-nozzle fan scrubs a zombie the ray misses; stock nozzle does not',
    wide.stockGoo >= wide.G - 1 && wide.wideGoo < wide.G - 8,
    `goo after off-aim spray: stock ${wide.stockGoo.toFixed(1)}/${wide.G} vs wide ${wide.wideGoo.toFixed(1)}/${wide.G}`);
 
+await page.evaluate(() => window.__QA_CLEAN());
+// L2d. BUILD 2 — washable grime fades as it's hosed and scrubs out for XP
+const grime = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const g = UJ.grimes.find(g => !g.resolved);
+  const op0 = g.mesh.material.opacity;
+  g.clean(10, g.mesh.position);
+  const opMid = g.mesh.material.opacity;
+  const xp0 = UJ.RPG.xp;
+  g.clean(1000, g.mesh.position);
+  return { op0, opMid, resolved: g.resolved, xpGain: UJ.RPG.xp - xp0,
+           stillTarget: UJ.cleanTargets.includes(g.mesh) };
+});
+ok('washable grime fades under the hose and scrubs out for bonus XP',
+   grime.opMid < grime.op0 && grime.resolved && grime.xpGain >= 10 && !grime.stillTarget,
+   `opacity ${grime.op0.toFixed(2)} → ${grime.opMid.toFixed(2)} → scrubbed · +${grime.xpGain} XP`);
+
+// L2e. BUILD 2 — a burst suds barrel foam-blasts nearby filth and staggers zombies
+const suds = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const b = UJ.barrels.find(b => !b.resolved);
+  const bp = b.group.position;
+  const z = UJ.spawnZombieAt(bp.x - 2, bp.z);
+  const g0 = z.goo;
+  b.clean(1000, bp);
+  const out = { burst: b.resolved, g0, g1: z.goo, stunned: z.state === 'stunned', wet: UJ.wetPatches.length > 0 };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('suds barrel bursts into a foam nova: nearby zombie scrubbed + staggered',
+   suds.burst && suds.g1 <= suds.g0 - 79 && suds.stunned && suds.wet,
+   `goo ${suds.g0} → ${suds.g1} · stunned=${suds.stunned} · leaves wet deck=${suds.wet}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// L2f. BUILD 2 — the jet launches a beach ball (feather-light physics toy)
+const ball = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const b = UJ.beachBalls[0];
+  b.g.position.set(0, 0.45, -30); b.vel.set(0, 0, 0);
+  P.pos.set(0, 0, -25);
+  for (let i = 0; i < 70; i++) UJ.step(0.03); // camera settles behind the new spot
+  const start = b.g.position.clone();
+  UJ.Input.spray = true;
+  for (let i = 0; i < 20; i++) { UJ.aimAt(b.g.position.x, b.g.position.y, b.g.position.z); UJ.step(0.03); }
+  UJ.Input.spray = false;
+  const moved = b.g.position.distanceTo(start);
+  const v = b.g.position.clone().sub(UJ.nozzleWorldPos());
+  v.y += b.aimY;
+  const along = v.dot(P.aim);
+  return { moved, speed: b.vel.length(), dbg: {
+    state: UJ.Game.state, horn: P.hasHorn, pressure: +UJ.Meters.pressure.toFixed(1),
+    along: +along.toFixed(2), off2: +(v.lengthSq() - along * along).toFixed(2),
+    ballAt: b.g.position.toArray().map(n => +n.toFixed(1)),
+    playerAt: P.pos.toArray().map(n => +n.toFixed(1)),
+    aim: P.aim.toArray().map(n => +n.toFixed(2)),
+  } };
+});
+ok('water jet launches a beach ball across the deck', ball.moved > 1.5,
+   `ball flew ${ball.moved.toFixed(2)}m (vel ${ball.speed.toFixed(1)} m/s)${ball.moved > 1.5 ? '' : ' · dbg=' + JSON.stringify(ball.dbg)}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// L2g. BUILD 2 — ringing the harbor bell lures zombies away from the player
+const lure = await page.evaluate(() => {
+  const UJ = window.UJ, bell = UJ.getBell();
+  const z = UJ.spawnZombieAt(0, -52);
+  const distTo = () => Math.hypot(z.group.position.x - bell.pos.x, z.group.position.z - bell.pos.z);
+  const before = distTo();
+  bell.cd = 0; bell.ring();
+  const luredNow = z.lureT > 0;
+  for (let i = 0; i < 50; i++) UJ.step(0.03);
+  const after = distTo();
+  const out = { before, after, luredNow };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('harbor bell DING lures a zombie toward the bell', lure.luredNow && lure.after < lure.before - 1.5,
+   `dist to bell ${lure.before.toFixed(1)}m → ${lure.after.toFixed(1)}m · lured=${lure.luredNow}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// L2h. BUILD 2 — a chasing zombie slips on a wet plank patch and eats deck
+const slip = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -40);
+  UJ.spawnWetPatch({ x: 0, z: -45.5 });
+  const z = UJ.spawnZombieAt(0, -48); // chases the player straight across the patch
+  let slipped = false;
+  for (let i = 0; i < 80 && !slipped; i++) { UJ.step(0.03); if (z.state === 'stunned') slipped = true; }
+  const out = { slipped, z: z.group.position.z.toFixed(1) };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('chasing zombie slips on a wet plank and is briefly stunned', slip.slipped,
+   `slipped=${slip.slipped} (stopped at z=${slip.z})`);
+
+// L2i. BUILD 2 — gull bombing run: splat falls, lands, and cleans for bonus XP
+const splat = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const s = UJ.spawnGullSplat(2, -20);
+  const fell = s.falling;
+  for (let i = 0; i < 40 && s.falling; i++) UJ.step(0.03);
+  const landed = !s.falling && UJ.cleanTargets.includes(s.mesh);
+  const xp0 = UJ.RPG.xp;
+  s.clean(1000, s.mesh.position);
+  return { fell, landed, resolved: s.resolved, xpGain: UJ.RPG.xp - xp0 };
+});
+ok('gull splat falls, lands as a cleanable, and pays bonus XP',
+   splat.fell && splat.landed && splat.resolved && splat.xpGain >= 5,
+   `fell=${splat.fell} landed=${splat.landed} · +${splat.xpGain} XP`);
+
+// L2j. BUILD 2 — spraying an ambient sea lion makes it bark and hop (throttled)
+const bark = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const s = UJ.ambientSeaLions.find(s => s.ent);
+  UJ.Meters.rainbow = 50;
+  s.ent.clean(10);
+  const hop = s.hop, rb1 = UJ.Meters.rainbow;
+  s.ent.clean(10); // inside the 2.5s throttle — must be a no-op
+  return { hop, rb1, rb2: UJ.Meters.rainbow };
+});
+ok('ambient sea lion barks + hops when sprayed (and the bark is throttled)',
+   bark.hop === 1 && bark.rb1 === 52 && bark.rb2 === 52,
+   `hop=${bark.hop} · rainbow 50 → ${bark.rb1} (throttled repeat: ${bark.rb2})`);
+
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
 ok('no JS runtime errors (CDN/network excluded)', jsErrors.length === 0, jsErrors.slice(0,3).join(' | ') || 'clean');

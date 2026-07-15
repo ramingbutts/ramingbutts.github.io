@@ -457,3 +457,45 @@ each section; (2) assert against `UJ.CFG` values (goo 110, count 8), never
 level-1 literals; (3) piles are ~1.5 m-wide blobs, so a "miss" for the
 wide-nozzle control must aim beside a *slim* target (a zombie) and the
 check must be an on/off comparison, not an absolute.
+
+## Wharf toys — the interactivity layer (level 2 BUILD 2)
+
+BUILD 2 answered "make it more fun, more interactive" with a toy layer
+(section 8.5 of `level2.js`) that never gates the win — everything is
+optional delight or tactics, discovered through one-time toasts:
+
+- **Washable grime** (8 deck stains): flat canvas-blotch decals whose
+  opacity IS their dirt. The purest power-washer fantasy — wash a stain,
+  watch it fade. +10 XP each, +50 for the full set.
+- **Suds barrels** (3): burst one with the hose and it foam-novas — 80
+  clean to every pile/zombie/sea lion within 7 m, plus a 1.2 s stagger.
+  A barrel next to an infected sea lion is an instant rescue.
+- **Beach balls** (2): feather-light physics bodies (mass 0.3, rest 0.8)
+  the jet launches; the existing flying-prop stagger rule makes them
+  bowling balls for zombies.
+- **Harbor bell**: a `clean()`-interface entity whose charge decays 12/s,
+  so only a sustained blast rings it (charge > 20, 8 s cd). The ring lures
+  every zombie within 26 m (`lureT = 6`) — the lure branch bypasses the
+  FSM switch entirely, stuns pause it (they resume the pilgrimage after),
+  and committed windup/lunge states are immune.
+- **Wet planks**: ground-spray, burst piles, scrubbed grime and barrel
+  novas leave slick decals (merged within 1.1 m, cap 14, ttl 7 s); a
+  hustling zombie (chase/lunge/lured) crossing one slips — stun 0.8 s
+  with a 3 s per-zombie cooldown. Hose-the-floor becomes trap-laying.
+- **Gull bombing runs**: every 13–22 s a splat falls near the player
+  (cap 6 live). Cleanable for +5 XP, but only registered in
+  `cleanTargets` once landed — a mid-air blob must not eat rays.
+- **Sea lion barks**: the ambient dock sea lions have a throttled
+  `clean()` that barks, hops and pays +2 rainbow — spraying wildlife is
+  rewarded, gently.
+
+XP thresholds rose to `[120,300,550,850,1250]` so the ~200 bonus XP
+doesn't cap the talent tree (scarcity is the point).
+
+Engine fix that fell out of testing: `addPhysBody` gained `aimY` — the
+jet-impulse loop offsets each body to `restY + 0.15` assuming its origin
+sits at deck level (cones, crates), but a center-origin body (beach ball)
+gets overshot by its own height and the cone check misses at steep aim
+pitches. Center-origin bodies pass `aimY: 0`. Symptom to remember: the
+kick works in a fresh scene but fails after camera-pitch feedback settles
+differently — geometry bugs hide behind "it worked in my probe".
