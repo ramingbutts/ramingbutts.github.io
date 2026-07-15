@@ -1,8 +1,8 @@
-# Unicorn Janitor — reusable patterns from Level 1
+# Unicorn Janitor — reusable patterns
 
-Working notes for future levels. Everything below lives in `level1.html` and is
-written so it can be lifted into a shared module once level 2 starts (per the
-project's design-for-evolution rule: extract on the second use, not before).
+Working notes for future levels. Everything below lives in `level1.js` (and,
+since the fork, `level2.js`); the shared-engine extraction is scheduled for
+level 3 — see the Level 2 section at the bottom for the fork decision.
 
 ## Content note (applies to all levels)
 
@@ -418,3 +418,42 @@ Test gotchas: hiding a leftover zombie does NOT stop it eating rays
 call removeCleanTargets or design the check to not depend on ray geometry;
 and a suite that reuses "the nearest pile" inherits the previous check's
 drain state — reset `dirt` explicitly.
+
+## Level 2: Fisherman's Wharf (fork, BUILD 1)
+
+Level 2 is a **copy-and-reshape fork** of `level1.js`, not a shared-engine
+extraction. Reasoning: the engine surface that levels vary on turned out to be
+small and legible — the `CFG` block, one environment builder
+(`buildBridge` → `buildWharf`), the Civilian skin, layout spot arrays in
+`buildLevel`, tutorial/HUD strings, and the per-level record keys
+(`uj_l2_best`/`uj_l2_rank`). Everything else (physics, articulation, hose,
+RPG, audio, settings) was untouched. Fork cost measured: ~2 days of diff
+noise risk for ~300 changed lines out of 3400. **Extract the shared engine
+when level 3 starts** — with two live copies the seams are now proven, and a
+third copy would make every engine bugfix a triple edit.
+
+What actually changed: dusk palette (`fogColor 0x6d5570`, sky gradient
+`0x2e2440 → 0xc76a7e`, low sun sprite), plank-texture boardwalk with
+pilings + post-and-rope rails, 5 shop shacks (awning + emissive sign +
+glow sprite), 3 floating docks with ambient tide-bobbing sea lions, fish
+carts reusing the `cars[]` suspension system, and civilians reskinned as
+**infected sea lions** (capsule body pitched horizontal, flippers/snout/tail,
+rot drips along the spine — same `clean()` interface, so every hose/beam
+path just works). Zombies are meaner via CFG only (8 count, dmg 13,
+goo 110). 12 piles / 8 zombies / 3 sea lions.
+
+Win reward: **Wide Spray Nozzle** — persisted as
+`localStorage('uj_wide_nozzle')`, read at boot into a `WIDE_NOZZLE` flag.
+Implementation is an off-axis fan pass in `updateHose` after the direct-ray
+hit: for every pile/zombie/civilian, project its offset onto the aim axis;
+if it's within range and < ~1.8 m off-axis (`off² ≤ 3.2`), apply
+`dps × 0.55 × dt`. The direct-hit target is excluded so the fan never
+double-dips. `UJ.setWideNozzle(v)` exists so tests toggle it live.
+
+Playtest fork lessons (`playtest2.mjs`, 22 checks): (1) meaner zombies
+killed Jax mid-suite, silently turning `UJ.step` into a no-op — a
+`__QA_CLEAN()` helper (despawn live zombies, refill HP) now runs before
+each section; (2) assert against `UJ.CFG` values (goo 110, count 8), never
+level-1 literals; (3) piles are ~1.5 m-wide blobs, so a "miss" for the
+wide-nozzle control must aim beside a *slim* target (a zombie) and the
+check must be an on/off comparison, not an absolute.
