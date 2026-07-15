@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <link rel="icon" href="data:,">
-<title>Unicorn Janitor: Poopocalypse — Level 1: Golden Gate Bridge</title>
+<title>Unicorn Janitor: Poopocalypse — Level 2: Fisherman’s Wharf</title>
 <style>
   /* ---------------------------------------------------------------
      Unicorn Janitor: Poopocalypse — Level 1 (tutorial)
@@ -167,7 +167,7 @@
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
     <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
-    <div>🧍 Civilians saved: <span class="n" id="civCount">0/2</span></div>
+    <div>🦭 Sea lions saved: <span class="n" id="civCount">0/3</span></div>
   </div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
@@ -195,7 +195,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 1 · GOLDEN GATE BRIDGE · TUTORIAL · BUILD 28</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 1</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -206,12 +206,13 @@
 </div>
 
 <div id="winOverlay" class="overlay hidden">
-  <h1>FIRST POOPOCALYPSE VICTORY!</h1>
+  <h1>THE WHARF SPARKLES!</h1>
   <div id="winRank" style="font-size:clamp(30px,7vw,58px); font-weight:800; letter-spacing:3px; margin:2px 0 8px; text-shadow:0 0 22px currentColor;"></div>
-  <h2>The bridge sparkles again. Hose &amp; Magic Beam fully unlocked!</h2>
+  <h2>Sea lions safe, pier gleaming — the fog rolls back to sea.</h2>
   <div class="stats" id="winStats"></div>
   <div class="stats" id="winObjectives" style="text-align:left; line-height:2; margin-top:10px;"></div>
-  <a href="level2.html" class="chip" style="margin-top:16px; display:inline-block; text-decoration:none; cursor:pointer;">NEXT: LEVEL 2 · FISHERMAN’S WHARF →</a>
+  <div class="chip" style="margin-top:16px;">💦 REWARD: WIDE SPRAY NOZZLE UNLOCKED</div>
+  <div style="margin-top:10px;"><a href="level1.html" style="color:#9fdcff;">&larr; back to the Golden Gate</a></div>
   <br>
   <button id="againBtn">PLAY AGAIN</button>
 </div>
@@ -247,7 +248,7 @@
 </script>
 
 <link rel="modulepreload" href="./lib/three.module.min.js">
-<link rel="modulepreload" href="./level1.js">
+<link rel="modulepreload" href="./level2.js">
 <script>
 // Boot the engine only after the shell has painted and the page has "loaded".
 // The page itself is just HTML+CSS, so load fires in milliseconds; Three.js
@@ -257,7 +258,7 @@
   const boot = () => {
     const s = document.createElement('script');
     s.type = 'module';
-    s.src = './level1.js';
+    s.src = './level2.js';
     document.body.appendChild(s);
   };
   if (document.readyState === 'complete') boot();
