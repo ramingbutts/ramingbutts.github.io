@@ -101,7 +101,10 @@
                        transform:translate(-50%,-50%); border-radius:50%; background:#fff;
                        box-shadow:0 0 6px rgba(255,255,255,.9); }
   #crosshair::after { content:""; position:absolute; inset:0; border:1.5px solid rgba(255,255,255,.55);
-                      border-radius:50%; }
+                      border-radius:50%; transition:border-color .12s, box-shadow .12s; }
+  /* target sense: gold ring when the jet would land on something cleanable */
+  #crosshair.onTarget::before { background:#ffd94f; box-shadow:0 0 8px rgba(255,217,79,.95); }
+  #crosshair.onTarget::after { border-color:#ffd94f; box-shadow:0 0 10px rgba(255,217,79,.7); }
   #beamCd { position:absolute; left:50%; top:calc(50% + 24px); transform:translateX(-50%);
             width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
   #beamCdFill { height:100%; width:100%; background:linear-gradient(90deg,#c58fff,#5fc8ff); }
@@ -167,7 +170,7 @@
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
     <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
-    <div>🦭 Sea lions saved: <span class="n" id="civCount">0/3</span></div>
+    <div>🦭 Sea lions saved: <span class="n" id="civCount">0/5</span></div>
   </div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
@@ -195,7 +198,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 2</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 4</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -227,6 +230,7 @@
 <div id="pauseOverlay" class="overlay hidden">
   <h1 style="font-size:clamp(24px,4vw,40px);">PAUSED</h1>
   <div class="setRow"><span>VOLUME</span><input id="setVol" type="range" min="0" max="100" value="85"></div>
+  <div class="setRow"><span>LOOK SPEED <span id="setSensVal">1.0×</span></span><input id="setSens" type="range" min="0.5" max="2" step="0.1" value="1"></div>
   <div class="setRow"><span>MUSIC</span><button class="tog" id="setMusic">ON</button></div>
   <div class="setRow"><span>NARRATION</span><button class="tog" id="setVoice">ON</button></div>
   <div class="setRow"><span>QUALITY</span><button class="tog" id="setQuality">AUTO</button></div>

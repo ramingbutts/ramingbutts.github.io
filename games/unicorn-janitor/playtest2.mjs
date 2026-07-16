@@ -50,6 +50,13 @@ await page.evaluate(() => {
   window.__QA_CLEAN = () => {
     const UJ = window.UJ;
     UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
+    // invisible corpses still eat raycasts (Mesh.raycast checks material
+    // visibility, not group visibility) — purge them from cleanTargets so
+    // later ray-based checks aren't intercepted by test leftovers
+    for (let i = UJ.cleanTargets.length - 1; i >= 0; i--) {
+      const e = UJ.cleanTargets[i].userData.entity;
+      if (e && e.alive === false) UJ.cleanTargets.splice(i, 1);
+    }
     UJ.Player.hp = 100;
   };
 });
@@ -355,14 +362,18 @@ const panel = await page.evaluate(() => {
 ok('talents/allocation panel opens and closes', panel.found && panel.opened && panel.closed, `open=${panel.opened} close=${panel.closed}`);
 
 await page.evaluate(() => window.__QA_CLEAN());
-// L2a. WHARF — three infected sea lions on the pier, ambient ones on the docks
+// L2a. WHARF — the 3x pier: 5 sea lions, 20 piles, 14 zombies, 2 bells
 const wharf = await page.evaluate(() => ({
   civs: window.UJ.civilians.length,
   piles: window.UJ.piles.length,
   zombies: window.UJ.CFG.zombie.count,
+  bells: window.UJ.bells.length,
+  playLen: window.UJ.CFG.bridge.zStart - window.UJ.CFG.bridge.playZEnd,
+  width: window.UJ.CFG.bridge.width,
 }));
-ok('wharf layout: 3 sea lions, 12 piles, 8 zombies', wharf.civs === 3 && wharf.piles === 12 && wharf.zombies === 8,
-   `civs=${wharf.civs} piles=${wharf.piles} zombies=${wharf.zombies}`);
+ok('3x wharf layout: 5 sea lions, 20 piles, 14 zombies, 2 bells, 221m pier',
+   wharf.civs === 5 && wharf.piles === 20 && wharf.zombies === 14 && wharf.bells === 2 && wharf.playLen === 221 && wharf.width === 26,
+   `civs=${wharf.civs} piles=${wharf.piles} zombies=${wharf.zombies} bells=${wharf.bells} · ${wharf.width}x${wharf.playLen}m`);
 
 // L2b. Cleansing an infected sea lion saves it
 const rescue = await page.evaluate(() => {
@@ -526,6 +537,199 @@ const bark = await page.evaluate(() => {
 ok('ambient sea lion barks + hops when sprayed (and the bark is throttled)',
    bark.hop === 1 && bark.rb1 === 52 && bark.rb2 === 52,
    `hop=${bark.hop} · rainbow 50 → ${bark.rb1} (throttled repeat: ${bark.rb2})`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B3a. AIM ASSIST — a near-miss (≤ ~0.7m off-axis) still scrubs; a wide miss doesn't
+const assist = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -25);
+  for (let i = 0; i < 70; i++) UJ.step(0.03); // camera settles
+  const trial = (offset) => {
+    const s = UJ.spawnGullSplat(0, -31);
+    while (s.falling) UJ.step(0.03);
+    const d0 = s.dirt;
+    UJ.Input.spray = true;
+    for (let i = 0; i < 15; i++) { UJ.aimAt(offset, 0.16, -31); UJ.step(0.03); }
+    UJ.Input.spray = false;
+    const gone = d0 - s.dirt;
+    if (!s.resolved) s.clean(1000, s.mesh.position); // tidy up
+    return gone;
+  };
+  return { near: trial(0.55), far: trial(1.3) };
+});
+ok('soft aim assist: near-miss scrubs at reduced power, wide miss does not',
+   assist.near > 2 && assist.far < 0.5,
+   `dirt removed — 0.55m off: ${assist.near.toFixed(1)} · 1.3m off: ${assist.far.toFixed(1)}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B3b. BEAM GRAZE — the big shot bends into a target ~1m off the beam line
+const graze = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  // quiet corner: the pier start has no piles/patches near the beam line, so
+  // the graze can't be stolen by a closer target or a wet-plank slip
+  P.pos.set(0, 0, 6);
+  for (let i = 0; i < 70; i++) UJ.step(0.03); // camera settles
+  const z = UJ.spawnZombieAt(0, -2);
+  UJ.step(0.03);
+  const g0 = z.goo;
+  UJ.Meters.rainbow = 100;
+  UJ.aimAt(z.group.position.x + 0.9, 0.9, z.group.position.z);
+  UJ.Input.beamPressed = true;
+  UJ.step(0.03);
+  const out = { g0, g1: z.goo, stunned: z.state === 'stunned' };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('beam graze: an off-aim beam bends into the nearby zombie and stuns it',
+   graze.g1 <= graze.g0 - 40 && graze.stunned,
+   `goo ${graze.g0} → ${graze.g1} · stunned=${graze.stunned}`);
+
+// B3c. RUNNERS — layout ships 2 red-eyed runners; a runner outpaces a normal zombie
+const runners = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const layoutRunners = UJ.getZombies().filter(z => z.runner);
+  const zN = UJ.spawnZombieAt(P.pos.x - 2, P.pos.z - 12);
+  const zR = UJ.spawnZombieAt(P.pos.x + 2, P.pos.z - 12, { runner: true });
+  const n0 = zN.group.position.clone(), r0 = zR.group.position.clone();
+  for (let i = 0; i < 30; i++) UJ.step(0.03);
+  const out = {
+    count: layoutRunners.length, cfg: UJ.CFG.zombie.runners,
+    goo: zR.gooMax, cfgGoo: UJ.CFG.zombie.runnerGoo,
+    nDist: zN.group.position.distanceTo(n0), rDist: zR.group.position.distanceTo(r0),
+  };
+  zN.alive = false; zN.group.visible = false;
+  zR.alive = false; zR.group.visible = false;
+  return out;
+});
+ok('runner variant: 2 in the layout, less goo, visibly faster in the chase',
+   runners.count === runners.cfg && runners.goo === runners.cfgGoo && runners.rDist > runners.nDist * 1.25,
+   `runners=${runners.count}/${runners.cfg} · goo ${runners.goo} · chase ${runners.nDist.toFixed(2)}m vs ${runners.rDist.toFixed(2)}m over 0.9s`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B3d. PILE REGEN — abandoned half-cleaned piles re-fester after a few seconds
+const regen = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const p = UJ.piles.find(p => p.alive);
+  p.dirt = UJ.CFG.pile.dirt; // known starting point
+  p.clean(40, p.group.position);
+  const after = p.dirt;
+  for (let i = 0; i < 220; i++) UJ.step(0.03); // 6.6s idle > 4s delay
+  return { after, regrown: p.dirt, cap: UJ.CFG.pile.dirt };
+});
+ok('half-cleaned pile slowly regrows once abandoned', regen.regrown > regen.after + 4 && regen.regrown <= regen.cap,
+   `dirt ${regen.after.toFixed(1)} → ${regen.regrown.toFixed(1)} after 6.6s idle (cap ${regen.cap})`);
+
+// B3e. CLIMAX — at 80% piles the horde wakes AND two runner reinforcements storm in
+const climax = await page.evaluate(() => {
+  const UJ = window.UJ, G = UJ.Game;
+  const saved = G.pilesCleaned;
+  const before = G.totalZombies;
+  G.pilesCleaned = Math.ceil(G.totalPiles * 0.8);
+  UJ.maybeTriggerClimax();
+  G.pilesCleaned = saved;
+  const fresh = UJ.getZombies().slice(-2);
+  const out = { before, after: G.totalZombies,
+    bothRunners: fresh.every(z => z.runner && z.alive && z.state === 'chase') };
+  fresh.forEach(z => { z.alive = false; z.group.visible = false; });
+  return out;
+});
+ok('climax spawns two chasing runner reinforcements', climax.after === climax.before + 2 && climax.bothRunners,
+   `totalZombies ${climax.before} → ${climax.after} · reinforcements are runners=${climax.bothRunners}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B3f. LOOK SENSITIVITY — the settings slider scales look speed linearly
+const sens = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Settings.sens = 1;
+  UJ.Input.lookDX = 200; const y0 = P.yaw; UJ.step(0.03);
+  const d1 = Math.abs(P.yaw - y0);
+  UJ.Settings.sens = 2;
+  UJ.Input.lookDX = 200; const y1 = P.yaw; UJ.step(0.03);
+  const d2 = Math.abs(P.yaw - y1);
+  UJ.Settings.sens = 1;
+  return { d1, d2 };
+});
+ok('look-sensitivity setting scales turn speed (2× ≈ double)',
+   sens.d1 > 0 && Math.abs(sens.d2 - 2 * sens.d1) < sens.d1 * 0.1,
+   `yaw delta ${sens.d1.toFixed(4)} → ${sens.d2.toFixed(4)} at 2×`);
+
+// a sea lion may have transformed into a live zombie during the long idle
+// stretches above — clear the field or it kills Jax mid-check (step no-ops)
+await page.evaluate(() => window.__QA_CLEAN());
+// B3g. TARGET SENSE — the crosshair lights up gold on a cleanable, dims on sky
+const senseUI = await page.evaluate(() => {
+  const UJ = window.UJ, el = document.getElementById('crosshair');
+  const p = UJ.piles.find(p => p.alive);
+  UJ.Player.pos.set(p.group.position.x, 0, p.group.position.z + 8); // within hose range
+  // re-aim every step: the third-person camera swings for ~2s after a big
+  // aim change, and aimAt computes from the camera's current position
+  for (let i = 0; i < 70; i++) { UJ.aimAt(p.group.position.x, 1, p.group.position.z); UJ.step(0.03); }
+  const onTarget = el.classList.contains('onTarget');
+  for (let i = 0; i < 70; i++) { UJ.aimAt(UJ.Player.pos.x, 60, UJ.Player.pos.z - 2); UJ.step(0.03); } // at the sky
+  const offTarget = el.classList.contains('onTarget');
+  return { onTarget, offTarget };
+});
+ok('crosshair target-sense: gold on a cleanable, off against the sky',
+   senseUI.onTarget && !senseUI.offTarget, `on=${senseUI.onTarget} off=${senseUI.offTarget}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B4a. PLAYER MOMENTUM — velocity ramps up under input and coasts to a stop
+const momentum = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.hvel.set(0, 0, 0);
+  UJ.Input.keys.KeyW = true;
+  for (let i = 0; i < 2; i++) UJ.step(0.03);
+  const early = P.hvel.length();
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const cruise = P.hvel.length();
+  UJ.Input.keys.KeyW = false;
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const stopped = P.hvel.length();
+  return { early, cruise, stopped };
+});
+ok('player momentum: speed ramps up, cruises, and coasts to a stop',
+   momentum.early > 0.5 && momentum.cruise > momentum.early * 1.5 && momentum.stopped < 0.3,
+   `speed ${momentum.early.toFixed(1)} → ${momentum.cruise.toFixed(1)} m/s → ${momentum.stopped.toFixed(2)} after release`);
+
+// B4b. ZOMBIE STEERING — heading turns at a capped rate (arcs, not snap pivots)
+const steer = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const z = UJ.spawnZombieAt(P.pos.x, P.pos.z - 10);
+  z.heading += Math.PI; // force him to face dead away from his prey
+  const cap = UJ.CFG.zombie.turnRate * (z.runner ? 1.4 : 1) * 0.03 + 1e-6;
+  let maxStep = 0, prev = z.heading;
+  for (let i = 0; i < 60; i++) {
+    UJ.step(0.03);
+    let d = z.heading - prev;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    maxStep = Math.max(maxStep, Math.abs(d));
+    prev = z.heading;
+  }
+  // after ~2s he should have carved around to face the player again
+  const want = Math.atan2(P.pos.x - z.group.position.x, P.pos.z - z.group.position.z);
+  let err = want - z.heading;
+  err = Math.atan2(Math.sin(err), Math.cos(err));
+  const out = { maxStep, cap, aligned: Math.abs(err) };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('zombie steering: turn rate is capped per-frame and converges on the target',
+   steer.maxStep <= steer.cap * 1.05 && steer.aligned < 0.5,
+   `max per-frame turn ${steer.maxStep.toFixed(3)} rad (cap ${steer.cap.toFixed(3)}) · final aim error ${steer.aligned.toFixed(2)} rad`);
+
+// B4c. CROWD SEPARATION — two zombies dropped on the same spot shoulder apart
+const sep = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const a = UJ.spawnZombieAt(P.pos.x + 1, P.pos.z - 8);
+  const b = UJ.spawnZombieAt(P.pos.x + 1, P.pos.z - 8);
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const d = a.group.position.distanceTo(b.group.position);
+  a.alive = false; a.group.visible = false;
+  b.alive = false; b.group.visible = false;
+  return { d };
+});
+ok('crowd separation: stacked zombies shoulder each other apart', sep.d > 0.6,
+   `spawned overlapping → ${sep.d.toFixed(2)}m apart after 0.6s`);
 
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));

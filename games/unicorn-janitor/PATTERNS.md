@@ -499,3 +499,85 @@ gets overshot by its own height and the cone check misses at steep aim
 pitches. Center-origin bodies pass `aimY: 0`. Symptom to remember: the
 kick works in a fresh scene but fails after camera-pitch feedback settles
 differently — geometry bugs hide behind "it worked in my probe".
+
+## Aim feel + difficulty curve (level 2 BUILD 3)
+
+Aim, layered from cheap to smart (all CFG-tunable):
+- **Target sense**: the crosshair turns gold whenever the cleaning ray
+  WOULD land on a cleanable — one raycast at ~12 Hz, toggling an
+  `onTarget` CSS class. Pre-fire confirmation, so players stop wasting
+  pressure on fog.
+- **Soft aim assist**: when the ray misses everything, the single nearest
+  target within `assistOff2` (~0.7 m) of the jet axis still gets scrubbed
+  at 35% power and half rainbow-fill. Tuned to stay strictly inside the
+  earned wide-nozzle fan (1.8 m / 55%) so the reward keeps its meaning.
+- **Beam graze**: if the beam ray whiffs, it bends into the nearest
+  target within ~1 m of the beam line — the drawn beam visibly kinks to
+  it, which doubles as feedback. A whiffed 35-rainbow shot felt terrible.
+- **Look sensitivity**: `Settings.sens` (0.5–2×) multiplies the one
+  constant in `updatePlayer`; mouse, touch-drag and gamepad all funnel
+  through `Input.consumeLook`, so one line covers every input rig.
+- Entities carry `aimY` (like phys bodies): the off-axis loops aim at
+  torso height (0.9) by default, but flat targets (grime 0, splats 0.05,
+  barrels 0.55) must override or the uniform offset pushes them outside
+  their own assist cone.
+
+Difficulty, as threat variety rather than stat inflation:
+- **Runner zombies** (`opts.runner`): 1.5× speed, 70 goo, lean 0.86/1.08
+  silhouette with a red eye. The flinch code owns `group.scale`, so the
+  variant's base scale must live in `sclX/sclY` and be re-applied there —
+  never bake a scale into a group something else writes every frame.
+  `gooMax` per zombie replaces `CFG.zombie.goo` in the health fraction.
+- **Climax reinforcements**: the 80%-piles climax now also spawns two
+  chasing runners at the far fog line (`totalZombies` grows, HUD pops).
+- **Pile regen**: piles regrow `regen`/s after `regenDelay`s untouched
+  (in `updatePileJelly`, so tick and UJ.step both apply it). Punishes
+  spray-and-run; trivial while actively scrubbing (65 dps vs 3.5/s).
+- **Tighter rescues**: `CFG.civilian.timer` 26 → 22.
+- XP thresholds already raised in BUILD 2 absorb the extra kills.
+
+Test-harness lessons this build: a **transformed sea lion** becomes a
+live zombie that hunts Jax through later checks — `__QA_CLEAN` before
+every section is not optional hygiene, it's what keeps `step()` from
+silently no-op'ing after a mid-suite death; `__QA_CLEAN` now also purges
+dead zombies' meshes from `cleanTargets` (invisible corpses eat rays —
+the L1 gotcha, now handled centrally); and any check that raycasts after
+teleporting must re-aim every step for ~2 s (`aimAt` computes from the
+still-lerping camera) and stand within `hose.range` of its target.
+
+## Steering locomotion + the 3x pier (level 2 BUILD 4)
+
+Movement realism, both sides of the chase:
+- **Jax has momentum**: `Player.hvel` chases the wish velocity with real
+  acceleration (34/s² grounded, 10/s² airborne) instead of teleport-snap
+  input; his body yaw eases after the camera (`1 - 0.0005^dt`) so flicks
+  read as the camera leading and the body catching up.
+- **Zombies steer**: `Zombie.moveToward()` is the single locomotion
+  path for wander/chase/lure — heading turns at a capped rate
+  (`CFG.zombie.turnRate`, runners 1.4×) so they carve arcs; speed ramps
+  with accel/decel and is scaled by heading error, so they bank and slow
+  through corners; **stride frequency comes from actual ground speed**
+  (`gaitT += speed * 2.9 * dt`), which keeps footsteps planted through
+  acceleration and knockback for free. Wander gets random "sniff" stops
+  with a head sweep (`headG.rotation.y`, previously unused). Crowd
+  separation (O(n²) pairwise push under 0.9 m) stops the horde stacking
+  into one super-zombie. `spawnZombieAt` seeds heading toward the player
+  and half chase speed — spawned chasers face their prey, and playtests
+  don't flake on the random initial heading.
+
+The 3x map (26×221 m vs 18×101 m play area) is mostly data: spot lists
+for piles (20), zombies (14, 4 runners), sea lions (5), shops (10),
+docks (6), lamps (12), grime (14), barrels (5), bells (2), props, and
+`CFG.bridge.playHalfW` replacing every hardcoded ±7.4/7.5 clamp
+(physics walls, zombie/player clamps, gull-splat spawns). Rank speed
+thresholds scale with the map (8/12 min). Two rendering gotchas at this
+scale, both invisible on the small map:
+- The sky sphere grew past `camera.far` (300) — everything beyond the
+  far plane clips to the background color, which reads as a giant
+  fog-colored dome dead ahead. far → 520, and diagnose "crisp-edged
+  dome/arc in the sky" as far-plane clipping first.
+- An origin-centered sky sphere's gradient distorts once the camera
+  travels 100 m+ off-center — the sky now follows the player in xz
+  (set in `updatePlayer`, so headless `step()` renders match too), and
+  the sea plane must extend past the sky radius or its edge silhouettes
+  at the horizon.
