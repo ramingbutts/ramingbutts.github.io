@@ -668,7 +668,23 @@ function buildWharf() {
       sl.position.set((i - (n - 1) / 2) * 1.7, 0.25, (Math.random() - 0.5) * 2);
       sl.rotation.y = (Math.random() - 0.5) * 1.2;
       dock.add(sl);
-      ambientSeaLions.push({ g: sl, phase: Math.random() * 10 });
+      const entry = { g: sl, phase: Math.random() * 10, hop: 0 };
+      // spray a dozing sea lion and it barks and does a happy hop — pure
+      // delight, plus a trickle of rainbow charge for the showmanship
+      entry.ent = { barkCd: 0,
+        clean() {
+          if (this.barkCd > 0) return;
+          this.barkCd = 2.5;
+          entry.hop = 1;
+          const wp = sl.getWorldPosition(new THREE.Vector3());
+          SFX.groan(panFor(wp), 0.4);
+          spawnFloatText(wp.add(new THREE.Vector3(0, 1.5, 0)), 'ARF!', '#9fdcff');
+          Meters.rainbow = Math.min(100, Meters.rainbow + 2);
+        } };
+      body.userData.entity = entry.ent;
+      head.userData.entity = entry.ent;
+      cleanTargets.push(body, head);
+      ambientSeaLions.push(entry);
     }
     dock.position.set(B.width / 2 + 4.5, -1.5, dz);
     grp.add(dock);
@@ -722,12 +738,22 @@ function buildWharf() {
   scene.add(grp);
 }
 
-// tide bob for the docks and a lazy head-sway for the dozing sea lions
-function updateSeaLions(t) {
-  if (Settings.reduceMotion) return;
+// tide bob for the docks, a lazy head-sway for the dozing sea lions, and
+// the happy hop a sea lion does when the player sprays it (see buildWharf)
+function updateSeaLions(t, dt = 0.016) {
   for (const s of ambientSeaLions) {
-    if (s.isDock) s.g.position.y = -1.5 + Math.sin(t * 0.9 + s.phase) * 0.18;
-    else s.g.rotation.z = Math.sin(t * 1.4 + s.phase) * 0.06;
+    if (s.ent) s.ent.barkCd = Math.max(0, s.ent.barkCd - dt);
+    if (Settings.reduceMotion) continue;
+    if (s.isDock) {
+      s.g.position.y = -1.5 + Math.sin(t * 0.9 + s.phase) * 0.18;
+    } else {
+      s.g.rotation.z = Math.sin(t * 1.4 + s.phase) * 0.06;
+      if (s.hop > 0) {
+        s.hop = Math.max(0, s.hop - dt * 1.4);
+        s.g.position.y = 0.25 + Math.sin(s.hop * 9) * 0.22 * s.hop;
+        s.g.rotation.z += Math.sin(s.hop * 18) * 0.15 * s.hop;
+      }
+    }
   }
 }
 
@@ -933,8 +959,12 @@ function updateCars(dt) {
   }
 }
 function addPhysBody(g, r, restY, opts = {}) {
+  // aimY: where the water jet "grabs" the body relative to its origin. Props
+  // built with their origin at the deck (cones, crates) default to mid-height;
+  // center-origin bodies (beach balls) pass 0 or the jet axis overshoots them.
   const b = { g, r, restY, vel: new THREE.Vector3(), angVel: new THREE.Vector3(),
-    rest: opts.rest ?? 0.38, ttl: opts.ttl ?? null, mass: opts.mass ?? 1 };
+    rest: opts.rest ?? 0.38, ttl: opts.ttl ?? null, mass: opts.mass ?? 1,
+    aimY: opts.aimY ?? restY + 0.15 };
   physBodies.push(b);
   return b;
 }
@@ -1131,6 +1161,7 @@ class PoopPile {
     spawnGlitter(c, 90, 6);
     // the pile bursts into physical gobs in its own glowing color
     spawnChunkBurst(this.group.position, { count: 5, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 0.9 });
+    spawnWetPatch(this.group.position); // a burst pile leaves the planks slick
     SFX.pop(panFor(this.group.position), 0.9);
     registerCombo(this.group.position);
     removeCleanTargets(this.group);
@@ -1186,6 +1217,321 @@ function removeCleanTargets(group) {
 }
 
 /* =====================================================================
+   8.5 WHARF TOYS — the interactive layer: washable grime, suds barrels,
+        beach balls, the harbor bell, wet-plank slips and gull bombing
+        runs. All of it is optional fun — none of it gates the win.
+   ===================================================================== */
+
+// ---- wet planks: spray the deck (or pop anything juicy) and it stays
+// slick for a few seconds; a hustling zombie that crosses one wipes out.
+const wetPatches = [];
+let slipToastShown = false;
+const _wetGeo = new THREE.CircleGeometry(0.85, 14);
+function spawnWetPatch(point) {
+  for (const w of wetPatches) { // refresh a nearby patch instead of stacking decals
+    if (Math.abs(w.m.position.x - point.x) < 1.1 && Math.abs(w.m.position.z - point.z) < 1.1) {
+      w.ttl = Math.max(w.ttl, 7); return w;
+    }
+  }
+  if (wetPatches.length >= 14) { const old = wetPatches.shift(); scene.remove(old.m); old.m.material.dispose(); }
+  const m = new THREE.Mesh(_wetGeo, new THREE.MeshStandardMaterial({ color: 0x1c2c40,
+    transparent: true, opacity: 0.32, roughness: 0.12, metalness: 0.4, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(point.x, 0.018, point.z);
+  scene.add(m);
+  const w = { m, ttl: 7 };
+  wetPatches.push(w);
+  return w;
+}
+function updateWetPatches(dt) {
+  for (let i = wetPatches.length - 1; i >= 0; i--) {
+    const w = wetPatches[i];
+    w.ttl -= dt;
+    if (w.ttl <= 0) { scene.remove(w.m); w.m.material.dispose(); wetPatches.splice(i, 1); continue; }
+    w.m.material.opacity = 0.32 * Math.min(1, w.ttl / 1.5);
+  }
+}
+
+// ---- washable grime: dark stains baked onto the planks. Pure power-washer
+// satisfaction — hose one and it fades away stroke by stroke. Bonus XP.
+const grimes = [];
+let grimeCleaned = 0;
+function makeGrimeTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  for (let i = 0; i < 26; i++) { // overlapping smears read as one organic stain
+    const a = Math.random() * Math.PI * 2, r = 12 + Math.random() * 36;
+    x.fillStyle = `rgba(26,20,12,${0.22 + Math.random() * 0.3})`;
+    x.beginPath();
+    x.ellipse(64 + Math.cos(a) * 20, 64 + Math.sin(a) * 20, r * 0.5, r * 0.32, a, 0, 7);
+    x.fill();
+  }
+  return new THREE.CanvasTexture(c);
+}
+class Grime {
+  constructor(x, z, s = 1) {
+    this.dirt = 30;
+    this.resolved = false;
+    const m = this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.2 * s, 2.2 * s),
+      new THREE.MeshBasicMaterial({ map: makeGrimeTexture(), transparent: true, opacity: 0.95, depthWrite: false }));
+    m.rotation.x = -Math.PI / 2;
+    m.rotation.z = Math.random() * 6.28;
+    m.position.set(x, 0.024, z);
+    m.userData.entity = this;
+    this.group = m; // .group.position duck-typing for the wide-nozzle fan
+    scene.add(m);
+    cleanTargets.push(m);
+    grimes.push(this);
+  }
+  clean(amount, point) {
+    if (this.resolved) return;
+    this.dirt -= amount;
+    this.mesh.material.opacity = 0.95 * Math.max(this.dirt, 0) / 30;
+    if (Math.random() < 0.2) spawnGlitter(point || this.mesh.position, 4, 1.5);
+    if (this.dirt <= 0) this.scrub();
+  }
+  scrub() {
+    this.resolved = true;
+    grimeCleaned++;
+    spawnGlitter(this.mesh.position.clone().setY(0.4), 30, 3);
+    spawnFloatText(this.mesh.position.clone().setY(1.4), 'SPOTLESS!', '#9fdcff');
+    spawnWetPatch(this.mesh.position);
+    SFX.chime(0.9);
+    gainXP(10, this.mesh.position);
+    const i = cleanTargets.indexOf(this.mesh);
+    if (i >= 0) cleanTargets.splice(i, 1);
+    scene.remove(this.mesh);
+    if (grimeCleaned === grimes.length) {
+      showToast('✨ Every stain scrubbed — the boardwalk gleams! +50 XP');
+      gainXP(50, Player.pos);
+    }
+  }
+}
+
+// ---- suds barrels: janitor supply drops. Blast one open and it detonates
+// in a foam nova that scrubs every pile, zombie and sea lion around it.
+const barrels = [];
+let sudsToastShown = false;
+class SudsBarrel {
+  constructor(x, z) {
+    this.dirt = 50;
+    this.resolved = false;
+    const g = this.group = new THREE.Group();
+    g.position.set(x, 0, z);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 0.9, 12),
+      new THREE.MeshStandardMaterial({ color: 0xe8f4ff, roughness: 0.35 }));
+    body.position.y = 0.45; body.castShadow = true; body.userData.entity = this;
+    g.add(body); cleanTargets.push(body);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.445, 0.445, 0.16, 12),
+      new THREE.MeshStandardMaterial({ color: 0x2f8fd0, roughness: 0.4 }));
+    band.position.y = 0.45; band.userData.entity = this;
+    g.add(band); cleanTargets.push(band);
+    const foam = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, emissive: 0xbfe8ff, emissiveIntensity: 0.3 }));
+    foam.scale.y = 0.55; foam.position.y = 0.95; foam.userData.entity = this;
+    g.add(foam); cleanTargets.push(foam);
+    const glow = glowSprite(0x9fdcff, 1.8, 0.22);
+    glow.position.y = 1;
+    g.add(glow);
+    scene.add(g);
+    barrels.push(this);
+  }
+  clean(amount, point) {
+    if (this.resolved) return;
+    this.dirt -= amount;
+    this.group.rotation.z = (Math.random() - 0.5) * 0.1; // fizzing agitation
+    if (Math.random() < 0.25) spawnSplash(this.group.position.clone().setY(1.1));
+    if (this.dirt <= 0) this.burst();
+  }
+  burst() {
+    this.resolved = true;
+    const p = this.group.position;
+    // foam nova: scrub everything nearby — pile, zombie or infected sea lion
+    for (const list of [piles, zombies, civilians, gullSplats]) {
+      for (const tgt of list) {
+        if (!tgt || tgt.resolved || tgt.alive === false || tgt.falling) continue;
+        if (tgt.group.position.distanceTo(p) < 7) tgt.clean(80, tgt.group.position);
+      }
+    }
+    for (const z of zombies) { // survivors stagger out of the foam, dazed
+      if (z.alive && z.group.position.distanceTo(p) < 7) z.stun(1.2);
+    }
+    spawnGlitter(p.clone().setY(1), 120, 8);
+    spawnChunkBurst(p, { count: 7,
+      mat: new THREE.MeshStandardMaterial({ color: 0xf4fbff, roughness: 0.25 }),
+      rMin: 0.12, rMax: 0.26, power: 1.3 });
+    spawnSplash(p.clone().setY(0.8), true);
+    spawnWetPatch(p);
+    SFX.pop(panFor(p), 1);
+    SFX.splat(panFor(p), 0.9);
+    spawnFloatText(p.clone().setY(2), 'FOAM BLAST!', '#bfe8ff');
+    gainXP(15, p);
+    Player.shake = Math.max(Player.shake, 0.12);
+    if (!sudsToastShown) { sudsToastShown = true; showToast('🧼 SUDS BARREL! Burst one next to filth for a foam blast.'); }
+    removeCleanTargets(this.group);
+    scene.remove(this.group);
+  }
+}
+
+// ---- beach balls: feather-light physics toys. The jet launches them,
+// and (via the flying-prop stagger rule) a fast ball bowls a zombie over.
+const beachBalls = [];
+function buildBeachBalls() {
+  const c = document.createElement('canvas'); c.width = 96; c.height = 48;
+  const x = c.getContext('2d');
+  ['#ff5f7e', '#ffd94f', '#5fc8ff', '#7dffb0', '#ff9ae0', '#f4f4ee']
+    .forEach((col, i) => { x.fillStyle = col; x.fillRect(i * 16, 0, 16, 48); });
+  const tex = new THREE.CanvasTexture(c);
+  for (const [bx, bz] of [[2.5, -16], [-3, -46]]) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 12),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 }));
+    m.position.set(bx, 0.45, bz);
+    m.castShadow = true;
+    scene.add(m);
+    beachBalls.push(addPhysBody(m, 0.5, 0.45, { mass: 0.3, rest: 0.8, aimY: 0 }));
+  }
+}
+
+// ---- harbor bell: hose it with a sustained blast and it DINGs — every
+// zombie in earshot is mesmerized and shambles to the bell instead of you.
+let bell = null;
+let bellToastShown = false;
+function buildBell() {
+  const g = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a3620, roughness: 0.9 });
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.6, 0.22), woodMat);
+  post.position.y = 1.3; g.add(post);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.18, 0.18), woodMat);
+  arm.position.set(-0.35, 2.55, 0); g.add(arm);
+  const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.42, 0.5, 12),
+    new THREE.MeshStandardMaterial({ color: 0xd9a832, metalness: 0.75, roughness: 0.3,
+      emissive: 0x664c10, emissiveIntensity: 0.25 }));
+  dome.position.set(-0.62, 2.2, 0);
+  g.add(dome);
+  const glow = glowSprite(0xffd94f, 2, 0.25);
+  glow.position.set(-0.62, 2.2, 0);
+  g.add(glow);
+  g.position.set(6.6, 0, -44);
+  scene.add(g);
+  bell = {
+    group: g, dome, charge: 0, cd: 0, swing: 0,
+    pos: new THREE.Vector3(5.98, 2.2, -44), // dome in world space
+    clean(amount) { // the water jet is the clapper
+      this.charge += amount;
+      if (this.charge > 20 && this.cd <= 0) this.ring();
+    },
+    ring() {
+      this.cd = 8; this.charge = 0; this.swing = 1;
+      SFX.chime(0.55);
+      let lured = 0;
+      for (const z of zombies) {
+        if (!z.alive) continue;
+        if (z.group.position.distanceTo(this.pos) < 26) {
+          z.lureT = 6;
+          z.lurePos.set(this.pos.x, 0, this.pos.z);
+          if (z.state === 'wander') z.setState('chase'); // hustle to the sound
+          lured++;
+        }
+      }
+      spawnFloatText(this.pos.clone().add(new THREE.Vector3(0, 1, 0)), '🔔 DING!', '#ffd94f');
+      Player.shake = Math.max(Player.shake, 0.08);
+      if (lured && !bellToastShown) {
+        bellToastShown = true;
+        showToast('🔔 The harbor bell mesmerizes zombies — they shamble toward it!');
+      }
+    },
+  };
+  dome.userData.entity = bell;
+  cleanTargets.push(dome);
+}
+function updateBell(dt) {
+  if (!bell) return;
+  bell.cd = Math.max(0, bell.cd - dt);
+  bell.charge = Math.max(0, bell.charge - 12 * dt); // demands a sustained blast, not a drip
+  if (bell.swing > 0) {
+    bell.swing = Math.max(0, bell.swing - dt * 0.8);
+    bell.dome.rotation.z = Math.sin(bell.swing * 22) * 0.5 * bell.swing;
+  }
+}
+
+// ---- gull bombing runs: every so often a gull lets one go near the player.
+// Fresh splats are quick bonus XP (and keep the deck feeling alive/hostile).
+const gullSplats = [];
+let gullBombT = 9;
+let gullToastShown = false;
+class MiniSplat {
+  constructor(x, z) {
+    this.dirt = 18;
+    this.resolved = false;
+    this.falling = true; // registered as a clean target only once it lands
+    const hue = Math.random();
+    const m = this.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.5,
+        emissive: new THREE.Color().setHSL(hue, 0.9, 0.45), emissiveIntensity: 0.8 }));
+    m.scale.set(1, 0.38, 1);
+    m.position.set(x, 8.5, z);
+    m.castShadow = true;
+    m.userData.entity = this;
+    this.group = m;
+    scene.add(m);
+    gullSplats.push(this);
+  }
+  clean(amount, point) {
+    if (this.resolved || this.falling) return;
+    this.dirt -= amount;
+    const f = Math.max(this.dirt, 0) / 18;
+    this.mesh.scale.set(0.5 + 0.5 * f, 0.38 * (0.5 + 0.5 * f), 0.5 + 0.5 * f);
+    if (Math.random() < 0.15) spawnGlitter(point || this.mesh.position, 4, 1.5);
+    if (this.dirt <= 0) {
+      this.resolved = true;
+      spawnGlitter(this.mesh.position.clone().setY(0.5), 24, 3);
+      SFX.pop(panFor(this.mesh.position), 0.5);
+      registerCombo(this.mesh.position);
+      gainXP(5, this.mesh.position);
+      const i = cleanTargets.indexOf(this.mesh);
+      if (i >= 0) cleanTargets.splice(i, 1);
+      const j = gullSplats.indexOf(this);
+      if (j >= 0) gullSplats.splice(j, 1);
+      scene.remove(this.mesh);
+    }
+  }
+}
+function spawnGullSplat(x, z) {
+  const px = x ?? THREE.MathUtils.clamp(Player.pos.x + (Math.random() - 0.5) * 10, -6.5, 6.5);
+  const pz = z ?? THREE.MathUtils.clamp(Player.pos.z - 5 - Math.random() * 12,
+    CFG.bridge.playZEnd + 2, CFG.bridge.zStart - 6);
+  return new MiniSplat(px, pz);
+}
+function updateGullSplats(dt) {
+  gullBombT -= dt;
+  if (gullBombT <= 0) {
+    gullBombT = 13 + Math.random() * 9;
+    if (gullSplats.length < 6) {
+      spawnGullSplat();
+      if (!gullToastShown) { gullToastShown = true; showToast('💩 Seagull bombing run! Fresh splats are bonus XP.'); }
+    }
+  }
+  for (const s of gullSplats) {
+    if (!s.falling) continue;
+    s.mesh.position.y -= 13 * dt;
+    if (s.mesh.position.y <= 0.16) {
+      s.mesh.position.y = 0.16;
+      s.falling = false;
+      cleanTargets.push(s.mesh);
+      SFX.splat(panFor(s.mesh.position), 0.7);
+      spawnSplash(s.mesh.position.clone().setY(0.3));
+    }
+  }
+}
+
+// one call site for the whole toy layer (shared by tick AND UJ.step)
+function updateWharfToys(dt) {
+  updateWetPatches(dt);
+  updateBell(dt);
+  updateGullSplats(dt);
+}
+
+/* =====================================================================
    9. ZOMBIES — flamboyant glitter zombies. Shirtless, hot-pink shorts,
       covered in rainbow goo; hose the goo off to defeat them.
       FSM: wander -> chase -> windup -> lunge -> recover
@@ -1204,6 +1550,9 @@ class Zombie {
     this.groanT = 2 + Math.random() * 4;
     this.hitCd = 0;
     this.lungeDir = new THREE.Vector3();
+    this.lureT = 0;                       // harbor-bell mesmerize timer
+    this.lurePos = new THREE.Vector3();
+    this.slipCd = 0;                      // wet-plank pratfall cooldown
 
     const g = this.group = new THREE.Group();
     g.position.set(x, 0, z);
@@ -1417,7 +1766,24 @@ class Zombie {
       this.groanT = this.state === 'chase' ? 1.6 + Math.random() * 1.5 : 4 + Math.random() * 4;
     }
 
-    switch (this.state) {
+    // harbor-bell mesmerize: forget the player, shamble toward the ring.
+    // Committed lunges/windups and stuns take priority; the timer holds
+    // during a stun, so a dazed zombie resumes its pilgrimage after.
+    let lured = false;
+    if (this.lureT > 0 && this.state !== 'stunned' && this.state !== 'lunge' && this.state !== 'windup') {
+      this.lureT -= dt;
+      lured = true;
+      _v2.subVectors(this.lurePos, pos); _v2.y = 0;
+      if (_v2.length() > 2) {
+        _v2.normalize();
+        pos.addScaledVector(_v2, CFG.zombie.chaseSpeed * 0.85 * dt);
+        this.group.rotation.y = Math.atan2(_v2.x, _v2.z);
+      } else {
+        this.group.rotation.y += dt * 1.5; // milling at the bell, entranced
+      }
+    }
+
+    if (!lured) switch (this.state) {
       case 'wander': {
         if (dist < CFG.zombie.detect) { this.setState('chase'); break; }
         _v2.subVectors(this.target, pos); _v2.y = 0;
@@ -1476,6 +1842,24 @@ class Zombie {
     // keep on the deck
     pos.x = THREE.MathUtils.clamp(pos.x, -7.5, 7.5);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
+
+    // wet planks: a hustling zombie that crosses a slick patch wipes out
+    this.slipCd = Math.max(0, this.slipCd - dt);
+    if (this.slipCd <= 0 && (this.state === 'chase' || this.state === 'lunge' || lured)) {
+      for (const w of wetPatches) {
+        const dx = pos.x - w.m.position.x, dz = pos.z - w.m.position.z;
+        if (dx * dx + dz * dz < 0.8) {
+          this.slipCd = 3;
+          this.flinch = 1;
+          this.stun(0.8);
+          SFX.splat(panFor(pos), 0.7);
+          spawnSplash(pos.clone().setY(0.3), true);
+          spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.2, 0)), 'SLIP!', '#9fdcff');
+          if (!slipToastShown) { slipToastShown = true; showToast('💦 Zombies slip on wet planks — hose the deck to lay traps!'); }
+          break;
+        }
+      }
+    }
 
     // ---- articulated gait: every part moves, driven by how fast he's walking.
     // gait phase advances with locomotion so steps match ground speed.
@@ -2532,9 +2916,9 @@ function updateHose(dt) {
     // misses still clean, and grouped piles melt together.
     if (WIDE_NOZZLE) {
       const seen = hits.length ? hits[0].object.userData.entity : null;
-      for (const list of [piles, zombies, civilians]) {
+      for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
         for (const tgt of list) {
-          if (!tgt || tgt === seen || tgt.resolved || tgt.alive === false) continue;
+          if (!tgt || tgt === seen || tgt.resolved || tgt.alive === false || tgt.falling) continue;
           const gp = tgt.group.position;
           _v2.subVectors(gp, camera.position);
           _v2.y += 0.9; // aim at the target's body, not its feet
@@ -2547,17 +2931,20 @@ function updateHose(dt) {
       }
     }
     if (!hits.length && Player.aim.y < -0.05) {
-      // no target: show the water hitting the roadway instead
+      // no target: the water hits the planks — splash, and leave them slick
+      // (wet patches are the zombie slip-trap, see the wharf-toys section)
       const tGround = (camera.position.y - 0.05) / -Player.aim.y;
-      if (tGround < CFG.hose.range + 6 && Math.random() < dt * 10) {
-        spawnSplash(_v2.copy(camera.position).addScaledVector(Player.aim, tGround));
+      if (tGround < CFG.hose.range + 6) {
+        _v2.copy(camera.position).addScaledVector(Player.aim, tGround);
+        if (Math.random() < dt * 10) spawnSplash(_v2);
+        if (Math.random() < dt * 5) spawnWetPatch(_v2);
       }
     }
 
     // the jet is a real force: any physics prop in the stream gets blasted
     for (const b of physBodies) {
       _v2.subVectors(b.g.position, nozzle);
-      _v2.y += b.restY + 0.15; // aim at the prop's middle, not its base
+      _v2.y += b.aimY; // offset to the prop's middle (0 for center-origin bodies)
       const along = _v2.dot(Player.aim);
       if (along < 0.5 || along > CFG.hose.range) continue;
       const off2 = _v2.lengthSq() - along * along; // squared distance off the jet axis
@@ -2698,7 +3085,7 @@ function updateAudioCues(dt) {
 const RPG = {
   xp: 0, level: 1, points: 0, kills: 0,
   ranks: { speed: 0, power: 0, beam: 0, nova: 0 },
-  thresholds: [100, 250, 450, 700, 1050], // cumulative XP for each level-up
+  thresholds: [120, 300, 550, 850, 1250], // cumulative XP per level-up — raised vs level 1 because the wharf-toys bonus XP (grime, splats, barrels) would otherwise cap the tree; scarcity is the point
   speedMul() { return 1 + 0.12 * this.ranks.speed; },
   hoseMul() { return 1 + 0.25 * this.ranks.power; },
   beamMul() { return 1 + 0.25 * this.ranks.beam; },
@@ -3261,6 +3648,17 @@ function buildLevel() {
   buildGraffiti();
   buildProps();
 
+  // the interactive toy layer: washable stains, suds barrels, beach balls
+  // and the harbor bell (gull bombing runs spawn on a timer during play)
+  const grimeSpots = [
+    [-3, -14, 1], [4, -21, 1.2], [0.5, -36, 1], [-5.5, -44, 1.1],
+    [3, -59, 1], [-2, -64, 1.2], [6, -77, 1], [-4.8, -86, 1],
+  ];
+  for (const [x, z, s] of grimeSpots) new Grime(x, z, s);
+  new SudsBarrel(-6, -22); new SudsBarrel(6, -48); new SudsBarrel(-5.5, -80);
+  buildBeachBalls();
+  buildBell();
+
   // three infected sea lions hauled out on the pier — cleanse them in time
   civilians.push(new Civilian(-4, -33), new Civilian(5, -57), new Civilian(-3, -74));
 
@@ -3382,9 +3780,13 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
     for (const z of zombies) z.update(dt, t);
     for (const c of civilians) c.update(dt, t);
+    updateWharfToys(dt);
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
   },
   physBodies, cars, civilians2: civilians, setWideNozzle: v => { WIDE_NOZZLE = v; },
+  // wharf-toys hooks (BUILD 2): the interactive layer, reachable by playtests
+  grimes, barrels, gullSplats, beachBalls, wetPatches, spawnWetPatch, spawnGullSplat,
+  getBell: () => bell, ambientSeaLions,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -3408,7 +3810,7 @@ function tick() {
   updateFogParticles(dt, t);
   updateOcean(t);
   updateGulls(t);
-  updateSeaLions(t);
+  updateSeaLions(t, dt);
   updateGlitter(dt);
   updateSplashes(dt);
   updatePhysics(dt); updateCars(dt); // physics keeps settling even in menus
@@ -3439,6 +3841,7 @@ function tick() {
     updatePing(dt);
     for (const z of zombies) z.update(dt, t);
     for (const c of civilians) c.update(dt, t);
+    updateWharfToys(dt);
     updateShard(dt, t);
     updateStreetlights(dt);
     updateAudioCues(dt);
