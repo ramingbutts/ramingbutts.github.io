@@ -362,14 +362,18 @@ const panel = await page.evaluate(() => {
 ok('talents/allocation panel opens and closes', panel.found && panel.opened && panel.closed, `open=${panel.opened} close=${panel.closed}`);
 
 await page.evaluate(() => window.__QA_CLEAN());
-// L2a. WHARF — three infected sea lions on the pier, ambient ones on the docks
+// L2a. WHARF — the 3x pier: 5 sea lions, 20 piles, 14 zombies, 2 bells
 const wharf = await page.evaluate(() => ({
   civs: window.UJ.civilians.length,
   piles: window.UJ.piles.length,
   zombies: window.UJ.CFG.zombie.count,
+  bells: window.UJ.bells.length,
+  playLen: window.UJ.CFG.bridge.zStart - window.UJ.CFG.bridge.playZEnd,
+  width: window.UJ.CFG.bridge.width,
 }));
-ok('wharf layout: 3 sea lions, 12 piles, 8 zombies', wharf.civs === 3 && wharf.piles === 12 && wharf.zombies === 8,
-   `civs=${wharf.civs} piles=${wharf.piles} zombies=${wharf.zombies}`);
+ok('3x wharf layout: 5 sea lions, 20 piles, 14 zombies, 2 bells, 221m pier',
+   wharf.civs === 5 && wharf.piles === 20 && wharf.zombies === 14 && wharf.bells === 2 && wharf.playLen === 221 && wharf.width === 26,
+   `civs=${wharf.civs} piles=${wharf.piles} zombies=${wharf.zombies} bells=${wharf.bells} · ${wharf.width}x${wharf.playLen}m`);
 
 // L2b. Cleansing an infected sea lion saves it
 const rescue = await page.evaluate(() => {
@@ -667,6 +671,65 @@ const senseUI = await page.evaluate(() => {
 });
 ok('crosshair target-sense: gold on a cleanable, off against the sky',
    senseUI.onTarget && !senseUI.offTarget, `on=${senseUI.onTarget} off=${senseUI.offTarget}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B4a. PLAYER MOMENTUM — velocity ramps up under input and coasts to a stop
+const momentum = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.hvel.set(0, 0, 0);
+  UJ.Input.keys.KeyW = true;
+  for (let i = 0; i < 2; i++) UJ.step(0.03);
+  const early = P.hvel.length();
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const cruise = P.hvel.length();
+  UJ.Input.keys.KeyW = false;
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const stopped = P.hvel.length();
+  return { early, cruise, stopped };
+});
+ok('player momentum: speed ramps up, cruises, and coasts to a stop',
+   momentum.early > 0.5 && momentum.cruise > momentum.early * 1.5 && momentum.stopped < 0.3,
+   `speed ${momentum.early.toFixed(1)} → ${momentum.cruise.toFixed(1)} m/s → ${momentum.stopped.toFixed(2)} after release`);
+
+// B4b. ZOMBIE STEERING — heading turns at a capped rate (arcs, not snap pivots)
+const steer = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const z = UJ.spawnZombieAt(P.pos.x, P.pos.z - 10);
+  z.heading += Math.PI; // force him to face dead away from his prey
+  const cap = UJ.CFG.zombie.turnRate * (z.runner ? 1.4 : 1) * 0.03 + 1e-6;
+  let maxStep = 0, prev = z.heading;
+  for (let i = 0; i < 60; i++) {
+    UJ.step(0.03);
+    let d = z.heading - prev;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    maxStep = Math.max(maxStep, Math.abs(d));
+    prev = z.heading;
+  }
+  // after ~2s he should have carved around to face the player again
+  const want = Math.atan2(P.pos.x - z.group.position.x, P.pos.z - z.group.position.z);
+  let err = want - z.heading;
+  err = Math.atan2(Math.sin(err), Math.cos(err));
+  const out = { maxStep, cap, aligned: Math.abs(err) };
+  z.alive = false; z.group.visible = false;
+  return out;
+});
+ok('zombie steering: turn rate is capped per-frame and converges on the target',
+   steer.maxStep <= steer.cap * 1.05 && steer.aligned < 0.5,
+   `max per-frame turn ${steer.maxStep.toFixed(3)} rad (cap ${steer.cap.toFixed(3)}) · final aim error ${steer.aligned.toFixed(2)} rad`);
+
+// B4c. CROWD SEPARATION — two zombies dropped on the same spot shoulder apart
+const sep = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const a = UJ.spawnZombieAt(P.pos.x + 1, P.pos.z - 8);
+  const b = UJ.spawnZombieAt(P.pos.x + 1, P.pos.z - 8);
+  for (let i = 0; i < 20; i++) UJ.step(0.03);
+  const d = a.group.position.distanceTo(b.group.position);
+  a.alive = false; a.group.visible = false;
+  b.alive = false; b.group.visible = false;
+  return { d };
+});
+ok('crowd separation: stacked zombies shoulder each other apart', sep.d > 0.6,
+   `spawned overlapping → ${sep.d.toFixed(2)}m apart after 0.6s`);
 
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));

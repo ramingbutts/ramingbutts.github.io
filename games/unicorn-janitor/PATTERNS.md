@@ -544,3 +544,40 @@ dead zombies' meshes from `cleanTargets` (invisible corpses eat rays —
 the L1 gotcha, now handled centrally); and any check that raycasts after
 teleporting must re-aim every step for ~2 s (`aimAt` computes from the
 still-lerping camera) and stand within `hose.range` of its target.
+
+## Steering locomotion + the 3x pier (level 2 BUILD 4)
+
+Movement realism, both sides of the chase:
+- **Jax has momentum**: `Player.hvel` chases the wish velocity with real
+  acceleration (34/s² grounded, 10/s² airborne) instead of teleport-snap
+  input; his body yaw eases after the camera (`1 - 0.0005^dt`) so flicks
+  read as the camera leading and the body catching up.
+- **Zombies steer**: `Zombie.moveToward()` is the single locomotion
+  path for wander/chase/lure — heading turns at a capped rate
+  (`CFG.zombie.turnRate`, runners 1.4×) so they carve arcs; speed ramps
+  with accel/decel and is scaled by heading error, so they bank and slow
+  through corners; **stride frequency comes from actual ground speed**
+  (`gaitT += speed * 2.9 * dt`), which keeps footsteps planted through
+  acceleration and knockback for free. Wander gets random "sniff" stops
+  with a head sweep (`headG.rotation.y`, previously unused). Crowd
+  separation (O(n²) pairwise push under 0.9 m) stops the horde stacking
+  into one super-zombie. `spawnZombieAt` seeds heading toward the player
+  and half chase speed — spawned chasers face their prey, and playtests
+  don't flake on the random initial heading.
+
+The 3x map (26×221 m vs 18×101 m play area) is mostly data: spot lists
+for piles (20), zombies (14, 4 runners), sea lions (5), shops (10),
+docks (6), lamps (12), grime (14), barrels (5), bells (2), props, and
+`CFG.bridge.playHalfW` replacing every hardcoded ±7.4/7.5 clamp
+(physics walls, zombie/player clamps, gull-splat spawns). Rank speed
+thresholds scale with the map (8/12 min). Two rendering gotchas at this
+scale, both invisible on the small map:
+- The sky sphere grew past `camera.far` (300) — everything beyond the
+  far plane clips to the background color, which reads as a giant
+  fog-colored dome dead ahead. far → 520, and diagnose "crisp-edged
+  dome/arc in the sky" as far-plane clipping first.
+- An origin-centered sky sphere's gradient distorts once the camera
+  travels 100 m+ off-center — the sky now follows the player in xz
+  (set in `updatePlayer`, so headless `step()` renders match too), and
+  the sea plane must extend past the sky radius or its edge silhouettes
+  at the horizon.

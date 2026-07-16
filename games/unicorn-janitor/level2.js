@@ -12,17 +12,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const CFG = {
   // "bridge" keys are the engine's level-bounds vocabulary (kept so every
   // system reads the same fields): here they describe the wharf pier.
-  bridge: { width: 18, zStart: 13, zEnd: -110, playZEnd: -88 }, // shorter, denser level than the bridge
+  bridge: { width: 26, zStart: 13, zEnd: -230, playZEnd: -208, playHalfW: 11.4 }, // BUILD 4: ~3x the play area of BUILD 3's pier
   fogDensity: 0.030,
   fogColor: 0x6d5570, // mauve dusk rolling off the bay — level 2 is sunset
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
   hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34,
             assistOff2: 0.5, assistPower: 0.35 }, // soft aim assist: near-misses ≤ ~0.7m off-axis still scrub, weakly
   beam:   { range: 40, damage: 45, cooldown: 1.2, grazeOff2: 1.0 }, // the big shot bends into anything ~1m off the line
-  zombie: { count: 8, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 3.1,
+  zombie: { count: 14, detect: 16, lose: 30, wanderSpeed: 1.1, chaseSpeed: 3.1,
             lungeSpeed: 11.5, lungeTime: 0.35, windup: 0.5, recover: 0.85,
             hitRange: 1.5, damage: 13, goo: 110, knockback: 3.6, // level 2: slightly meaner
-            runners: 2, runnerSpeedMul: 1.5, runnerGoo: 70 }, // BUILD 3: lean sprinter variant
+            runners: 4, runnerSpeedMul: 1.5, runnerGoo: 70, // lean sprinter variant
+            turnRate: 3.5, accel: 6, decel: 10 }, // BUILD 4 steering: they carve arcs, not pivots
   pile:   { dirt: 100, regen: 3.5, regenDelay: 4 }, // abandoned progress re-festers
   civilian: { timer: 22 }, // BUILD 3: tighter rescue window (was 26)
 };
@@ -446,7 +447,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(CFG.fogColor);
 scene.fog = new THREE.FogExp2(CFG.fogColor, CFG.fogDensity);
 
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 300);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 520); // far plane must clear the sky sphere (r 420) or it clips into a fog-colored dome
 
 scene.add(new THREE.HemisphereLight(0xcfe3f2, 0x51606e, 1.1));
 const sun = new THREE.DirectionalLight(0xfff2dd, 0.85);
@@ -612,7 +613,9 @@ function buildWharf() {
   const shopDefs = [ // [z, width, hull color, awning color, sign color]
     [-8, 9, 0x7e4a5a, 0xe8e4da, 0x8fe0ff], [-24, 11, 0x4a6a5e, 0xd66a6a, 0xffd94f],
     [-42, 8, 0x5a5a7e, 0xe8b04a, 0xff9ae0], [-58, 10, 0x6a4a3a, 0x9ad6c2, 0x9fdcff],
-    [-76, 9, 0x44585a, 0xe8e4da, 0xffb36a],
+    [-76, 9, 0x44585a, 0xe8e4da, 0xffb36a], [-96, 10, 0x5e4a6e, 0xd6c26a, 0x8fffc9],
+    [-116, 9, 0x3f5a6a, 0xe8a4b8, 0xffd0f0], [-136, 11, 0x6a5a3f, 0xa8d6e8, 0xfff08f],
+    [-158, 9, 0x4a3f5a, 0xd6e8a8, 0x9fb0ff], [-180, 10, 0x5a6a4a, 0xe8b8d6, 0x8fe0ff],
   ];
   for (const [z, w, hull, awn, sign] of shopDefs) {
     const shopX = -(B.width / 2 + 3.2);
@@ -646,7 +649,7 @@ function buildWharf() {
   const slBody = new THREE.CapsuleGeometry(0.55, 1.5, 4, 8);
   const slMat = new THREE.MeshStandardMaterial({ color: 0x6b5643, roughness: 0.7 });
   const slDark = new THREE.MeshStandardMaterial({ color: 0x57452f, roughness: 0.75 });
-  for (const [dz, n] of [[-16, 2], [-38, 3], [-64, 2]]) {
+  for (const [dz, n] of [[-16, 2], [-38, 3], [-64, 2], [-98, 3], [-132, 2], [-166, 3]]) {
     const dock = new THREE.Group();
     const plat = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.5, 7), woodDark);
     dock.add(plat);
@@ -696,7 +699,7 @@ function buildWharf() {
 
   // two wooden fish carts (reuse the car suspension springs — jet rocks them)
   const cartBody = new THREE.BoxGeometry(1.6, 0.9, 2.6);
-  [[4.8, -28, 0x7a5a33], [-4.6, -52, 0x8a6a43]].forEach(([x, z, col]) => {
+  [[4.8, -28, 0x7a5a33], [-4.6, -52, 0x8a6a43], [7.5, -118, 0x6a5a43], [-8, -152, 0x7a6a53]].forEach(([x, z, col]) => {
     const m = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
     const b = new THREE.Mesh(cartBody, m); b.position.set(x, 0.45, z); b.rotation.y = (Math.random() - 0.5) * 0.6;
     const tub = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.3, 2.2),
@@ -714,7 +717,7 @@ function buildWharf() {
   });
 
   // the bay — right below the pier this time, breathing swells at dusk
-  const seaGeo = new THREE.PlaneGeometry(600, 600, 40, 40);
+  const seaGeo = new THREE.PlaneGeometry(900, 900, 40, 40); // must reach past the sky sphere (r 420) or its edge silhouettes at the horizon
   seaMesh = new THREE.Mesh(seaGeo,
     new THREE.MeshStandardMaterial({ color: 0x35415e, roughness: 0.3, metalness: 0.35,
       flatShading: true }));
@@ -723,14 +726,15 @@ function buildWharf() {
   grp.add(seaMesh);
 
   // dusk sky: deep violet overhead melting into hot pink at the waterline
-  const skyGeo = new THREE.SphereGeometry(260, 24, 16);
+  const skyGeo = new THREE.SphereGeometry(420, 24, 16);
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide, fog: false, depthWrite: false,
     uniforms: { top: { value: new THREE.Color(0x2e2440) }, bot: { value: new THREE.Color(0xc76a7e) } },
     vertexShader: 'varying float vh; void main(){ vh = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: 'varying float vh; uniform vec3 top; uniform vec3 bot; void main(){ gl_FragColor = vec4(mix(bot, top, smoothstep(-0.1, 0.55, vh)), 1.0); }',
   });
-  scene.add(new THREE.Mesh(skyGeo, skyMat));
+  skyMesh = new THREE.Mesh(skyGeo, skyMat);
+  scene.add(skyMesh);
 
   // the setting sun, low over the water off the sea-lion side
   const sunGlow = glowSprite(0xffc9a8, 90, 0.6);
@@ -761,7 +765,7 @@ function updateSeaLions(t, dt = 0.016) {
 }
 
 // --- animated ocean + circling seagulls, both cheap ambient life ---
-let seaMesh, seaBaseZ;
+let seaMesh, seaBaseZ, skyMesh;
 function updateOcean(t) {
   if (!seaMesh || Settings.reduceMotion) return;
   const p = seaMesh.geometry.attributes.position;
@@ -785,7 +789,7 @@ function buildGulls() {
       g.add(wing);
     }
     g.userData = { r: 22 + Math.random() * 26, cy: 30 + Math.random() * 22,
-      cz: -40 - Math.random() * 90, sp: 0.15 + Math.random() * 0.2, ph: Math.random() * 6.28,
+      cz: -30 - Math.random() * 170, sp: 0.15 + Math.random() * 0.2, ph: Math.random() * 6.28,
       wings: g.children };
     scene.add(g); gulls.push(g);
   }
@@ -872,11 +876,11 @@ function updateCrater(dt, t) {
    ===================================================================== */
 const fogSprites = [];
 function buildFogParticles() {
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 34; i++) { // more mist for 3x the pier
     const s = glowSprite(0xdde8f0, 34 + Math.random() * 20, 0.035 + Math.random() * 0.035);
-    s.position.set((Math.random() - 0.5) * 40,
+    s.position.set((Math.random() - 0.5) * 52,
                    1 + Math.random() * 8,
-                   CFG.bridge.zStart - Math.random() * 160);
+                   CFG.bridge.zStart - Math.random() * 235);
     s.userData.drift = 0.3 + Math.random() * 0.6;
     s.userData.phase = Math.random() * Math.PI * 2;
     fogSprites.push(s); scene.add(s);
@@ -1005,7 +1009,8 @@ function updatePhysics(dt) {
       if (b.vel.lengthSq() < 0.01 && b.angVel.lengthSq() < 0.01) { b.vel.set(0, 0, 0); b.angVel.set(0, 0, 0); }
     }
     // rails + level bounds reflect
-    if (Math.abs(p.x) > 7.4) { p.x = Math.sign(p.x) * 7.4; b.vel.x *= -0.45; }
+    const wallX = CFG.bridge.playHalfW;
+    if (Math.abs(p.x) > wallX) { p.x = Math.sign(p.x) * wallX; b.vel.x *= -0.45; }
     if (p.z > CFG.bridge.zStart - 1) { p.z = CFG.bridge.zStart - 1; b.vel.z *= -0.45; }
     if (p.z < CFG.bridge.playZEnd) { p.z = CFG.bridge.playZEnd; b.vel.z *= -0.45; }
     // walking through a prop boots it aside — the deck feels solid
@@ -1055,6 +1060,10 @@ function buildProps() {
     ['cone', 5.1, -37], ['cone', -1.8, -49], ['cone', 2.6, -63], ['cone', -5.4, -76],
     ['bucket', 1.4, -9], ['bucket', -3.6, -31], ['bucket', 4.4, -55], ['bucket', 0.8, -70],
     ['crate', -5.8, -17], ['crate', 6, -44], ['crate', -6.1, -68], ['crate', 6.4, -66],
+    ['cone', 8.5, -94], ['cone', -9.2, -108], ['cone', 7.8, -128], ['cone', -8.4, -144],
+    ['cone', 9.1, -162], ['cone', -7.6, -182], ['bucket', 8.8, -102], ['bucket', -9.5, -122],
+    ['bucket', 7.2, -146], ['bucket', -8.8, -176], ['crate', 9.6, -114], ['crate', -10, -140],
+    ['crate', 8.2, -158], ['crate', -9.4, -192],
   ];
   for (const [kind, x, z] of spots) {
     const g = new THREE.Group();
@@ -1402,7 +1411,7 @@ function buildBeachBalls() {
   ['#ff5f7e', '#ffd94f', '#5fc8ff', '#7dffb0', '#ff9ae0', '#f4f4ee']
     .forEach((col, i) => { x.fillStyle = col; x.fillRect(i * 16, 0, 16, 48); });
   const tex = new THREE.CanvasTexture(c);
-  for (const [bx, bz] of [[2.5, -16], [-3, -46]]) {
+  for (const [bx, bz] of [[2.5, -16], [-3, -46], [6, -120]]) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 12),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 }));
     m.position.set(bx, 0.45, bz);
@@ -1414,9 +1423,9 @@ function buildBeachBalls() {
 
 // ---- harbor bell: hose it with a sustained blast and it DINGs — every
 // zombie in earshot is mesmerized and shambles to the bell instead of you.
-let bell = null;
+const bells = [];
 let bellToastShown = false;
-function buildBell() {
+function buildBell(bx, bz) {
   const g = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a3620, roughness: 0.9 });
   const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.6, 0.22), woodMat);
@@ -1431,11 +1440,11 @@ function buildBell() {
   const glow = glowSprite(0xffd94f, 2, 0.25);
   glow.position.set(-0.62, 2.2, 0);
   g.add(glow);
-  g.position.set(6.6, 0, -44);
+  g.position.set(bx, 0, bz);
   scene.add(g);
-  bell = {
+  const bell = {
     group: g, dome, charge: 0, cd: 0, swing: 0,
-    pos: new THREE.Vector3(5.98, 2.2, -44), // dome in world space
+    pos: new THREE.Vector3(bx - 0.62, 2.2, bz), // dome in world space
     clean(amount) { // the water jet is the clapper
       this.charge += amount;
       if (this.charge > 20 && this.cd <= 0) this.ring();
@@ -1463,14 +1472,16 @@ function buildBell() {
   };
   dome.userData.entity = bell;
   cleanTargets.push(dome);
+  bells.push(bell);
 }
 function updateBell(dt) {
-  if (!bell) return;
-  bell.cd = Math.max(0, bell.cd - dt);
-  bell.charge = Math.max(0, bell.charge - 12 * dt); // demands a sustained blast, not a drip
-  if (bell.swing > 0) {
-    bell.swing = Math.max(0, bell.swing - dt * 0.8);
-    bell.dome.rotation.z = Math.sin(bell.swing * 22) * 0.5 * bell.swing;
+  for (const bell of bells) {
+    bell.cd = Math.max(0, bell.cd - dt);
+    bell.charge = Math.max(0, bell.charge - 12 * dt); // demands a sustained blast, not a drip
+    if (bell.swing > 0) {
+      bell.swing = Math.max(0, bell.swing - dt * 0.8);
+      bell.dome.rotation.z = Math.sin(bell.swing * 22) * 0.5 * bell.swing;
+    }
   }
 }
 
@@ -1518,7 +1529,7 @@ class MiniSplat {
   }
 }
 function spawnGullSplat(x, z) {
-  const px = x ?? THREE.MathUtils.clamp(Player.pos.x + (Math.random() - 0.5) * 10, -6.5, 6.5);
+  const px = x ?? THREE.MathUtils.clamp(Player.pos.x + (Math.random() - 0.5) * 10, -(CFG.bridge.playHalfW - 1), CFG.bridge.playHalfW - 1);
   const pz = z ?? THREE.MathUtils.clamp(Player.pos.z - 5 - Math.random() * 12,
     CFG.bridge.playZEnd + 2, CFG.bridge.zStart - 6);
   return new MiniSplat(px, pz);
@@ -1571,6 +1582,9 @@ class Zombie {
     this.goo = this.gooMax;
     this.sclX = this.runner ? 0.86 : 1; // lean, stretched silhouette reads at a glance
     this.sclY = this.runner ? 1.08 : 1;
+    this.heading = Math.random() * Math.PI * 2; // BUILD 4 steering: facing = movement dir
+    this.speed = 0;                             // current ground speed, ramps up/down
+    this.pauseT = 0;                            // wander "sniff" stops
     this.alive = true;
     this.state = 'wander';
     this.stateT = 0;
@@ -1777,13 +1791,40 @@ class Zombie {
     _knockV.normalize();
     const p = this.group.position;
     p.addScaledVector(_knockV, CFG.zombie.knockback * dt);
-    p.x = THREE.MathUtils.clamp(p.x, -7.5, 7.5);
+    this.speed = Math.max(0, this.speed - 12 * dt); // the blast kills their momentum too
+    p.x = THREE.MathUtils.clamp(p.x, -(CFG.bridge.playHalfW + 0.1), CFG.bridge.playHalfW + 0.1);
     p.z = THREE.MathUtils.clamp(p.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
     this.group.rotation.x = -0.18; // brief lean-back from the blast
   }
 
+  // BUILD 4 locomotion: a real steering model. Heading turns at a capped
+  // rate (arcs, not pivots), speed ramps with acceleration and bleeds off in
+  // hard turns, and the body faces its actual direction of travel.
+  moveToward(tx, tz, maxSpeed, dt) {
+    this._moved = true;
+    const pos = this.group.position;
+    const dx = tx - pos.x, dz = tz - pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-3) { this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt); return d; }
+    const want = Math.atan2(dx, dz);
+    let diff = want - this.heading;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    const tr = CFG.zombie.turnRate * (this.runner ? 1.4 : 1) * dt;
+    this.heading += THREE.MathUtils.clamp(diff, -tr, tr);
+    // commit less speed while turning hard — they bank into corners
+    const align = Math.max(0, Math.cos(diff));
+    const target = maxSpeed * (0.35 + 0.65 * align);
+    const acc = (target > this.speed ? CFG.zombie.accel * (this.runner ? 1.6 : 1) : CFG.zombie.decel) * dt;
+    this.speed += THREE.MathUtils.clamp(target - this.speed, -acc, acc);
+    pos.x += Math.sin(this.heading) * this.speed * dt;
+    pos.z += Math.cos(this.heading) * this.speed * dt;
+    this.group.rotation.y = this.heading;
+    return d;
+  }
+
   update(dt, t) {
     if (!this.alive) return;
+    this._moved = false;
     this.stateT += dt;
     this.hitCd = Math.max(0, this.hitCd - dt);
     const pos = this.group.position;
@@ -1805,42 +1846,42 @@ class Zombie {
     if (this.lureT > 0 && this.state !== 'stunned' && this.state !== 'lunge' && this.state !== 'windup') {
       this.lureT -= dt;
       lured = true;
-      _v2.subVectors(this.lurePos, pos); _v2.y = 0;
-      if (_v2.length() > 2) {
-        _v2.normalize();
-        pos.addScaledVector(_v2, CFG.zombie.chaseSpeed * this.speedMul * 0.85 * dt);
-        this.group.rotation.y = Math.atan2(_v2.x, _v2.z);
-      } else {
-        this.group.rotation.y += dt * 1.5; // milling at the bell, entranced
-      }
+      const ld = this.moveToward(this.lurePos.x, this.lurePos.z, CFG.zombie.chaseSpeed * this.speedMul * 0.85, dt);
+      if (ld <= 2) { this.speed = Math.max(0, this.speed - 8 * dt); this.group.rotation.y += dt * 1.5; } // milling at the bell, entranced
     }
 
     if (!lured) switch (this.state) {
       case 'wander': {
         if (dist < CFG.zombie.detect) { this.setState('chase'); break; }
+        // sniff stops: every so often he halts and sweeps his head around —
+        // idle predators pause, they don't metronome between waypoints
+        if (this.pauseT > 0) {
+          this.pauseT -= dt;
+          this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
+          break;
+        }
+        if (Math.random() < dt * 0.12) { this.pauseT = 0.7 + Math.random() * 1.2; break; }
         _v2.subVectors(this.target, pos); _v2.y = 0;
         if (_v2.length() < 0.5 || this.stateT > 6) {
           this.target.set(this.home.x + (Math.random() - 0.5) * 8, 0, this.home.z + (Math.random() - 0.5) * 8);
           this.stateT = 0;
         } else {
-          _v2.normalize();
-          pos.addScaledVector(_v2, CFG.zombie.wanderSpeed * this.speedMul * dt);
-          this.group.rotation.y = Math.atan2(_v2.x, _v2.z);
+          this.moveToward(this.target.x, this.target.z, CFG.zombie.wanderSpeed * this.speedMul, dt);
         }
         break;
       }
       case 'chase': {
         if (dist > CFG.zombie.lose) { this.setState('wander'); break; }
         if (dist < 3.2) { this.setState('windup'); break; }
-        toPlayer.normalize();
-        pos.addScaledVector(toPlayer, CFG.zombie.chaseSpeed * this.speedMul * dt);
-        this.group.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
+        this.moveToward(Player.pos.x, Player.pos.z, CFG.zombie.chaseSpeed * this.speedMul, dt);
         break;
       }
       case 'windup': { // dramatic lean-back before the flying lunge-hug
         this.group.rotation.x = -0.35 * Math.min(1, this.stateT / CFG.zombie.windup);
         if (this.stateT >= CFG.zombie.windup) {
           this.lungeDir.copy(toPlayer).normalize();
+          this.heading = Math.atan2(this.lungeDir.x, this.lungeDir.z); // commit the body to the dive
+          this.group.rotation.y = this.heading;
           this.setState('lunge');
           SFX.groan(panFor(pos), 0.9);
         }
@@ -1871,8 +1912,22 @@ class Zombie {
       }
     }
 
+    if (!this._moved) this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
+
+    // crowd separation: shamblers shoulder each other aside instead of
+    // stacking into one super-zombie — cheap O(n^2), n is small
+    for (const o of zombies) {
+      if (o === this || !o.alive) continue;
+      const sx = pos.x - o.group.position.x, sz = pos.z - o.group.position.z;
+      const d2 = sx * sx + sz * sz;
+      if (d2 > 0.81 || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), push = (0.9 - d) * 0.5;
+      pos.x += (sx / d) * push;
+      pos.z += (sz / d) * push;
+    }
+
     // keep on the deck
-    pos.x = THREE.MathUtils.clamp(pos.x, -7.5, 7.5);
+    pos.x = THREE.MathUtils.clamp(pos.x, -(CFG.bridge.playHalfW + 0.1), CFG.bridge.playHalfW + 0.1);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
 
     // wet planks: a hustling zombie that crosses a slick patch wipes out
@@ -1895,10 +1950,12 @@ class Zombie {
 
     // ---- articulated gait: every part moves, driven by how fast he's walking.
     // gait phase advances with locomotion so steps match ground speed.
-    const gaitRate = (this.state === 'chase' ? 9 : this.state === 'wander' ? 5.5 : 0) * this.speedMul;
+    // BUILD 4: stride frequency comes from ACTUAL ground speed, so steps
+    // match the deck exactly through acceleration, turns and knockback
+    const gaitRate = this.speed * 2.9;
     this.gaitT += dt * gaitRate;
     const gp = this.gaitT;
-    const walking = gaitRate > 0;
+    const walking = this.speed > 0.25;
     const k = 1 - Math.pow(0.001, dt); // smoothing toward pose targets
 
     // waddle roll + pitch rock, scaled by stride
@@ -1920,6 +1977,8 @@ class Zombie {
     this.headG.rotation.z += ((walking ? Math.sin(gp - 0.6) * 0.1 : 0) - this.headG.rotation.z) * k;
     this.headG.rotation.x += ((this.state === 'stunned' ? Math.sin(t * 9) * 0.15
       : walking ? Math.sin(gp * 2 - 0.8) * 0.05 : 0) - this.headG.rotation.x) * k;
+    // sniff stop: the head sweeps side to side while he pauses mid-wander
+    this.headG.rotation.y += ((this.pauseT > 0 ? Math.sin(t * 1.9) * 0.55 : 0) - this.headG.rotation.y) * k;
 
     // arms: reach forward when hunting, flail high in windup, swing with gait
     const reach = this.state === 'chase' ? -0.9 : this.state === 'windup' ? -2.2 : 0;
@@ -2238,7 +2297,7 @@ class Civilian {
 let shard = null;
 function buildShard() {
   shard = new THREE.Group();
-  shard.position.set(6.6, 0.9, -66.5); // tucked behind the crates near the last dock
+  shard.position.set(-10.2, 0.9, -186); // way out by the last shops — a reason to walk the dark end
   const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0),
     new THREE.MeshStandardMaterial({ color: 0xbfffff, emissive: 0x7fe8ff,
       emissiveIntensity: 1.6, roughness: 0.15 }));
@@ -2270,8 +2329,10 @@ function buildStreetlights() {
   const armGeo = new THREE.BoxGeometry(0.08, 0.08, 1.1);
   const bulbGeo = new THREE.SphereGeometry(0.14, 8, 6);
   for (const [side, z, flicker] of [[-1, -14, false], [1, -28, false], [-1, -44, true],
-                                    [1, -58, false], [-1, -72, true], [1, -84, false]]) {
-    const x = side * 6.9;
+                                    [1, -58, false], [-1, -72, true], [1, -84, false],
+                                    [-1, -100, true], [1, -118, false], [-1, -136, true],
+                                    [1, -154, false], [-1, -172, false], [1, -190, true]]) {
+    const x = side * (CFG.bridge.playHalfW - 0.5);
     const pole = new THREE.Mesh(poleGeo, poleMat);
     pole.position.set(x, 1.9, z);
     scene.add(pole);
@@ -2290,7 +2351,7 @@ function buildStreetlights() {
   }
   // one real light under the first flickering lamp — moody pools on the deck
   lampLight = new THREE.PointLight(0xffe4a0, 2.2, 16);
-  lampLight.position.set(-5.9, 3.6, -52);
+  lampLight.position.set(-(CFG.bridge.playHalfW - 1.5), 3.6, -44);
   scene.add(lampLight);
 }
 function updateStreetlights(dt) {
@@ -2322,7 +2383,7 @@ function buildGraffiti() {
     const side = i % 2 === 0 ? -1 : 1;
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.85),
       new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
-    plane.position.set(side * 8.18, 0.62, 11 - i * 6);
+    plane.position.set(side * (CFG.bridge.width / 2 - 0.82), 0.62, 11 - i * 6);
     plane.rotation.y = -side * Math.PI / 2; // on the curb's inner face
     scene.add(plane);
   });
@@ -2333,6 +2394,7 @@ function buildGraffiti() {
    ===================================================================== */
 const Player = {
   group: null, pos: null, vel: new THREE.Vector3(), knock: new THREE.Vector3(),
+  hvel: new THREE.Vector3(), // horizontal momentum (BUILD 4)
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
   hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
@@ -2613,6 +2675,9 @@ function updatePlayer(dt, t) {
   Player.pitch = THREE.MathUtils.clamp(Player.pitch - dy * sens, -0.9, 0.7);
 
   Player.forward.set(Math.sin(Player.yaw), 0, Math.cos(Player.yaw));
+  // the sky sphere rides along (xz only) so its gradient stays horizon-true
+  // this far down the pier — an origin-pinned sphere reads as a violet dome
+  if (skyMesh) { skyMesh.position.x = Player.pos.x; skyMesh.position.z = Player.pos.z; }
   const cp = Math.cos(Player.pitch);
   Player.aim.set(Math.sin(Player.yaw) * cp, Math.sin(Player.pitch), Math.cos(Player.yaw) * cp);
 
@@ -2630,7 +2695,15 @@ function updatePlayer(dt, t) {
   if (_v2.lengthSq() > 1) _v2.normalize();
   const moving = _v2.lengthSq() > 0.001;
   const sprinting = moving && Player.onGround && (Input.keys.ShiftLeft || Input.keys.ShiftRight || Input.gpSprint);
-  Player.pos.addScaledVector(_v2, CFG.player.speed * RPG.speedMul() * (sprinting ? 1.45 : 1) * dt);
+  // BUILD 4 momentum: velocity chases the wish direction with real
+  // acceleration (much less of it mid-air), so starts, stops and strafes
+  // carry weight instead of teleport-snapping
+  _v2.multiplyScalar(CFG.player.speed * RPG.speedMul() * (sprinting ? 1.45 : 1));
+  const accel = (Player.onGround ? 34 : 10) * dt;
+  Player.hvel.x += THREE.MathUtils.clamp(_v2.x - Player.hvel.x, -accel, accel);
+  Player.hvel.z += THREE.MathUtils.clamp(_v2.z - Player.hvel.z, -accel, accel);
+  Player.pos.x += Player.hvel.x * dt;
+  Player.pos.z += Player.hvel.z * dt;
 
   // sprint FOV kick — subtle speed sensation
   const targetFov = sprinting ? 78 : 70;
@@ -2665,11 +2738,14 @@ function updatePlayer(dt, t) {
   }
 
   // stay on the playable deck
-  Player.pos.x = THREE.MathUtils.clamp(Player.pos.x, -7.6, 7.6);
+  Player.pos.x = THREE.MathUtils.clamp(Player.pos.x, -(CFG.bridge.playHalfW + 0.2), CFG.bridge.playHalfW + 0.2);
   Player.pos.z = THREE.MathUtils.clamp(Player.pos.z, CFG.bridge.playZEnd, 13);
 
-  // body faces where the camera faces; bob a little when running
-  Player.group.rotation.y = Player.yaw;
+  // body follows the camera yaw with a beat of lag — fast flicks read as
+  // the camera leading and the body catching up, not a statue on a turntable
+  let bodyD = Player.yaw - Player.group.rotation.y;
+  bodyD = Math.atan2(Math.sin(bodyD), Math.cos(bodyD));
+  Player.group.rotation.y += bodyD * (1 - Math.pow(0.0005, dt));
   // running bob, or a slow idle-breathing rise when standing still
   const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
   Player.group.position.y = Player.pos.y + bob;
@@ -3654,7 +3730,7 @@ const Game = {
   state: 'menu', // menu | intro | playing | skills | won | dead
   pilesCleaned: 0, zombiesDefeated: 0,
   totalPiles: 0, totalZombies: 0,
-  civSaved: 0, civResolved: 0, civTotal: 3,
+  civSaved: 0, civResolved: 0, civTotal: 5,
   shardFound: false,
   dmgFlash: 0, startTime: 0,
 };
@@ -3700,7 +3776,7 @@ function checkWin() {
     const objs = [Game.zombiesDefeated >= 5, Game.civSaved >= Game.civTotal, Game.shardFound];
     let score = objs.filter(Boolean).length * 2;           // up to 6 for objectives
     if (Player.hp >= 90) score += 2; else if (Player.hp >= 50) score += 1; // survival
-    if (secs <= 240) score += 2; else if (secs <= 360) score += 1;         // speed
+    if (secs <= 480) score += 2; else if (secs <= 720) score += 1;         // speed (3x map: 8/12 min)
     const rank = score >= 9 ? 'S' : score >= 7 ? 'A' : score >= 4 ? 'B' : 'C';
     const rankColor = { S: '#ffd94f', A: '#5fffb0', B: '#5fc8ff', C: '#c58fff' }[rank];
     try {
@@ -3755,20 +3831,26 @@ function buildLevel() {
   const grimeSpots = [
     [-3, -14, 1], [4, -21, 1.2], [0.5, -36, 1], [-5.5, -44, 1.1],
     [3, -59, 1], [-2, -64, 1.2], [6, -77, 1], [-4.8, -86, 1],
+    [-8, -95, 1.1], [7, -110, 1], [-6, -135, 1.2], [9, -155, 1],
+    [-9, -172, 1], [4, -195, 1.1],
   ];
   for (const [x, z, s] of grimeSpots) new Grime(x, z, s);
   new SudsBarrel(-6, -22); new SudsBarrel(6, -48); new SudsBarrel(-5.5, -80);
+  new SudsBarrel(9, -125); new SudsBarrel(-8, -170);
   buildBeachBalls();
-  buildBell();
+  buildBell(10.4, -44);   // mid-pier, sea-lion side
+  buildBell(-10.4, -140); // deep pier, shop side
 
   // three infected sea lions hauled out on the pier — cleanse them in time
-  civilians.push(new Civilian(-4, -33), new Civilian(5, -57), new Civilian(-3, -74));
+  civilians.push(new Civilian(-4, -33), new Civilian(5, -57), new Civilian(-3, -74),
+    new Civilian(8, -118), new Civilian(-9, -158));
 
   // poop piles — twelve of them; the first two are the tutorial targets
   const pileSpots = [
     [2, -11, 1.2], [-4, -18, 1], [4, -26, 0.9], [-5, -33, 1.1], [1, -40, 1],
     [5, -47, 0.9], [-4, -54, 1.1], [2, -61, 1], [-6, -67, 0.9], [4, -73, 1.2],
-    [-2, -79, 1], [5, -84, 1],
+    [-2, -79, 1], [5, -84, 1], [8, -92, 1], [-9, -101, 1.1], [3, -112, 0.9],
+    [9, -124, 1], [-7, -138, 1.2], [5, -152, 1], [-9, -168, 0.9], [2, -190, 1.3],
   ];
   for (const [x, z, s] of pileSpots) piles.push(new PoopPile(x, z, s));
   Game.totalPiles = piles.length;
@@ -3778,6 +3860,8 @@ function buildLevel() {
   const zombieSpots = [
     [0, -30], [-4, -42], [4, -50, 'runner'], [-3, -58],
     [5, -66], [-5, -72], [0, -78, 'runner'], [3, -84],
+    [-7, -98], [6, -112, 'runner'], [-8, -130], [4, -148],
+    [-3, -168, 'runner'], [7, -188],
   ];
   for (const [x, z, kind] of zombieSpots) zombies.push(new Zombie(x, z, { runner: kind === 'runner' }));
   Game.totalZombies = zombies.length;
@@ -3866,7 +3950,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   // the barrel tip rather than the chest without needing to see the render
   HoseFX,
   nozzleWorldPos: (out) => nozzleWorldPos(out || new THREE.Vector3()),
-  spawnZombieAt: (x, z, opts) => { const z2 = new Zombie(x, z, opts); z2.setState('chase'); zombies.push(z2); Game.totalZombies++; return z2; },
+  spawnZombieAt: (x, z, opts) => { const z2 = new Zombie(x, z, opts); z2.setState('chase'); z2.heading = Math.atan2(Player.pos.x - x, Player.pos.z - z); z2.speed = CFG.zombie.chaseSpeed * z2.speedMul * 0.5; zombies.push(z2); Game.totalZombies++; return z2; },
   maybeTriggerClimax,
   getZombies: () => zombies,
   getFrames: () => _frameCount,
@@ -3893,7 +3977,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   physBodies, cars, civilians2: civilians, setWideNozzle: v => { WIDE_NOZZLE = v; },
   // wharf-toys hooks (BUILD 2): the interactive layer, reachable by playtests
   grimes, barrels, gullSplats, beachBalls, wetPatches, spawnWetPatch, spawnGullSplat,
-  getBell: () => bell, ambientSeaLions,
+  getBell: () => bells[0], bells, ambientSeaLions,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
