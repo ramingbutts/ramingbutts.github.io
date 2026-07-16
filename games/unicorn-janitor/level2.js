@@ -16,12 +16,15 @@ const CFG = {
   fogDensity: 0.030,
   fogColor: 0x6d5570, // mauve dusk rolling off the bay — level 2 is sunset
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
-  hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34 }, // dense high-pressure jet
-  beam:   { range: 40, damage: 45, cooldown: 1.2 }, // rainbow energy is the real limiter
+  hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34,
+            assistOff2: 0.5, assistPower: 0.35 }, // soft aim assist: near-misses ≤ ~0.7m off-axis still scrub, weakly
+  beam:   { range: 40, damage: 45, cooldown: 1.2, grazeOff2: 1.0 }, // the big shot bends into anything ~1m off the line
   zombie: { count: 8, detect: 15, lose: 26, wanderSpeed: 1.1, chaseSpeed: 3.1,
             lungeSpeed: 11.5, lungeTime: 0.35, windup: 0.5, recover: 0.85,
-            hitRange: 1.5, damage: 13, goo: 110, knockback: 3.6 }, // level 2: slightly meaner
-  pile:   { dirt: 100 },
+            hitRange: 1.5, damage: 13, goo: 110, knockback: 3.6, // level 2: slightly meaner
+            runners: 2, runnerSpeedMul: 1.5, runnerGoo: 70 }, // BUILD 3: lean sprinter variant
+  pile:   { dirt: 100, regen: 3.5, regenDelay: 4 }, // abandoned progress re-festers
+  civilian: { timer: 22 }, // BUILD 3: tighter rescue window (was 26)
 };
 
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -1117,6 +1120,7 @@ class PoopPile {
     this.dirt = CFG.pile.dirt;
     this.alive = true;
     this.size = size;
+    this.sinceClean = 99; // seconds since last sprayed (drives BUILD 3 regen)
     this.baseScale = 1;              // shrink level from cleaning
     this.wob = 0; this.wobV = 0;     // jelly-wobble spring, excited by the jet
     this.group = new THREE.Group();
@@ -1147,6 +1151,7 @@ class PoopPile {
   clean(amount, point) {
     if (!this.alive) return;
     this.dirt -= amount;
+    this.sinceClean = 0; // regen holds off while you're actively scrubbing
     const f = Math.max(this.dirt, 0) / CFG.pile.dirt;
     this.baseScale = 0.35 + 0.65 * f;
     this.wobV += amount * 0.35; // the pressure blast sets the jelly quivering
@@ -1183,14 +1188,20 @@ function maybeTriggerClimax() {
   if (climaxFired || Game.totalPiles === 0) return;
   if (Game.pilesCleaned / Game.totalPiles < 0.8) return;
   climaxFired = true;
-  let woken = 0;
-  for (const z of zombies) if (z.alive && z.state !== 'stunned') { z.setState('chase'); woken++; }
-  if (woken > 0) {
-    showToast('🌉 BRIDGE ESCAPE! Every zombie has your scent — clear them out!');
-    narrate('The horde has your scent. Clean the wharf, janitor!', 0.6);
-    SFX.setMusicMood('hero');
-    Player.shake = Math.max(Player.shake, 0.25);
+  for (const z of zombies) if (z.alive && z.state !== 'stunned') z.setState('chase');
+  // BUILD 3: the climax also lands reinforcements — two runners burst out of
+  // the far fog so the final stretch stays dangerous even on a clean sweep
+  for (const [x, z] of [[-3, CFG.bridge.playZEnd + 3], [3, CFG.bridge.playZEnd + 6]]) {
+    const r = new Zombie(x, z, { runner: true });
+    r.setState('chase');
+    zombies.push(r);
+    Game.totalZombies++;
   }
+  updateObjectiveHUD();
+  showToast('🚨 WHARF PANIC! Every zombie has your scent — and runners are storming the pier!');
+  narrate('The horde has your scent, janitor — and the fast ones are coming!', 0.6);
+  SFX.setMusicMood('hero');
+  Player.shake = Math.max(Player.shake, 0.25);
 }
 
 // living emissives + jelly physics: glow breathes with remaining dirt, and a
@@ -1200,6 +1211,13 @@ function updatePileJelly(dt, t) {
   for (let i = 0; i < piles.length; i++) {
     const p = piles[i];
     if (!p.alive) continue;
+    // BUILD 3: abandoned progress re-festers — a half-cleaned pile slowly
+    // regrows if it hasn't been sprayed for a few seconds. Finish the job.
+    p.sinceClean += dt;
+    if (p.dirt < CFG.pile.dirt && p.sinceClean > CFG.pile.regenDelay) {
+      p.dirt = Math.min(CFG.pile.dirt, p.dirt + CFG.pile.regen * dt);
+      p.baseScale = 0.35 + 0.65 * Math.max(p.dirt, 0) / CFG.pile.dirt;
+    }
     const f = Math.max(p.dirt, 0) / CFG.pile.dirt;
     p.glow.material.opacity = 0.1 + 0.25 * f + 0.06 * Math.sin(t * 3 + i * 2.1);
     p.wobV += (-p.wob * 90 - p.wobV * 7) * dt;      // stiff, under-damped jelly
@@ -1272,6 +1290,7 @@ class Grime {
   constructor(x, z, s = 1) {
     this.dirt = 30;
     this.resolved = false;
+    this.aimY = 0; // flat decal: the jet grabs it at deck level
     const m = this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.2 * s, 2.2 * s),
       new THREE.MeshBasicMaterial({ map: makeGrimeTexture(), transparent: true, opacity: 0.95, depthWrite: false }));
     m.rotation.x = -Math.PI / 2;
@@ -1316,6 +1335,7 @@ class SudsBarrel {
   constructor(x, z) {
     this.dirt = 50;
     this.resolved = false;
+    this.aimY = 0.55; // barrel mid-height
     const g = this.group = new THREE.Group();
     g.position.set(x, 0, z);
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 0.9, 12),
@@ -1463,6 +1483,7 @@ class MiniSplat {
   constructor(x, z) {
     this.dirt = 18;
     this.resolved = false;
+    this.aimY = 0.05; // squat blob: jet aim point is basically the deck
     this.falling = true; // registered as a clean target only once it lands
     const hue = Math.random();
     const m = this.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6),
@@ -1540,8 +1561,16 @@ const zombies = [];
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.Vector3();
 
 class Zombie {
-  constructor(x, z) {
-    this.goo = CFG.zombie.goo;
+  constructor(x, z, opts = {}) {
+    // BUILD 3 "runner" variant: lean, fast, less goo — a different threat
+    // shape, not just bigger numbers. Two ship in the layout, two more storm
+    // the pier as climax reinforcements.
+    this.runner = !!opts.runner;
+    this.speedMul = this.runner ? CFG.zombie.runnerSpeedMul : 1;
+    this.gooMax = this.runner ? CFG.zombie.runnerGoo : CFG.zombie.goo;
+    this.goo = this.gooMax;
+    this.sclX = this.runner ? 0.86 : 1; // lean, stretched silhouette reads at a glance
+    this.sclY = this.runner ? 1.08 : 1;
     this.alive = true;
     this.state = 'wander';
     this.stateT = 0;
@@ -1556,6 +1585,7 @@ class Zombie {
 
     const g = this.group = new THREE.Group();
     g.position.set(x, 0, z);
+    g.scale.set(this.sclX, this.sclY, this.sclX); // maintained by the flinch code below
 
     // concept art: waddling poop golem — swirl head, one yellow eye, toothy
     // grin, claw arms/feet, dripping rainbow slime (the cleanable part)
@@ -1586,8 +1616,10 @@ class Zombie {
     tip.position.set(0.06, 0.64, 0); tip.rotation.z = -0.55;
     headG.add(tip);
 
-    // one big yellow eye + pupil, and a toothy grin
-    this.eyeMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
+    // one big yellow eye + pupil, and a toothy grin (runners burn red)
+    this.eyeMat = this.runner
+      ? new THREE.MeshStandardMaterial({ color: 0xff5f5f, emissive: 0xff2040, emissiveIntensity: 1.1 })
+      : new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), this.eyeMat);
     eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5),
@@ -1703,7 +1735,7 @@ class Zombie {
     if (!this.alive) return;
     this.goo -= amount;
     this.flinch = Math.min(1, (this.flinch || 0) + amount * 0.12); // impact shudder (gain must beat the per-frame decay under continuous spray)
-    const f = Math.max(this.goo, 0) / CFG.zombie.goo;
+    const f = Math.max(this.goo, 0) / this.gooMax;
     this.bodyMat.emissiveIntensity = 0.05 * f;
     for (const b of this.gooBlobs) b.scale.setScalar(Math.max(0.01, f));
     if (Math.random() < 0.12) spawnGlitter(point || this.group.position, 5, 2);
@@ -1776,7 +1808,7 @@ class Zombie {
       _v2.subVectors(this.lurePos, pos); _v2.y = 0;
       if (_v2.length() > 2) {
         _v2.normalize();
-        pos.addScaledVector(_v2, CFG.zombie.chaseSpeed * 0.85 * dt);
+        pos.addScaledVector(_v2, CFG.zombie.chaseSpeed * this.speedMul * 0.85 * dt);
         this.group.rotation.y = Math.atan2(_v2.x, _v2.z);
       } else {
         this.group.rotation.y += dt * 1.5; // milling at the bell, entranced
@@ -1792,7 +1824,7 @@ class Zombie {
           this.stateT = 0;
         } else {
           _v2.normalize();
-          pos.addScaledVector(_v2, CFG.zombie.wanderSpeed * dt);
+          pos.addScaledVector(_v2, CFG.zombie.wanderSpeed * this.speedMul * dt);
           this.group.rotation.y = Math.atan2(_v2.x, _v2.z);
         }
         break;
@@ -1801,7 +1833,7 @@ class Zombie {
         if (dist > CFG.zombie.lose) { this.setState('wander'); break; }
         if (dist < 3.2) { this.setState('windup'); break; }
         toPlayer.normalize();
-        pos.addScaledVector(toPlayer, CFG.zombie.chaseSpeed * dt);
+        pos.addScaledVector(toPlayer, CFG.zombie.chaseSpeed * this.speedMul * dt);
         this.group.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
         break;
       }
@@ -1815,7 +1847,7 @@ class Zombie {
         break;
       }
       case 'lunge': {
-        pos.addScaledVector(this.lungeDir, CFG.zombie.lungeSpeed * dt);
+        pos.addScaledVector(this.lungeDir, CFG.zombie.lungeSpeed * (1 + (this.speedMul - 1) * 0.4) * dt);
         this.group.rotation.x = 0.4;
         if (dist < CFG.zombie.hitRange && this.hitCd <= 0) {
           this.hitCd = 1;
@@ -1863,7 +1895,7 @@ class Zombie {
 
     // ---- articulated gait: every part moves, driven by how fast he's walking.
     // gait phase advances with locomotion so steps match ground speed.
-    const gaitRate = this.state === 'chase' ? 9 : this.state === 'wander' ? 5.5 : 0;
+    const gaitRate = (this.state === 'chase' ? 9 : this.state === 'wander' ? 5.5 : 0) * this.speedMul;
     this.gaitT += dt * gaitRate;
     const gp = this.gaitT;
     const walking = gaitRate > 0;
@@ -1904,7 +1936,7 @@ class Zombie {
     // facing for a beat — the jet visibly lands (applies to rig AND GLB)
     this.flinch = Math.max(0, (this.flinch || 0) - dt * 3.5);
     const fl = this.flinch;
-    this.group.scale.set(1 + fl * 0.06, 1 - fl * 0.09, 1 + fl * 0.06);
+    this.group.scale.set(this.sclX * (1 + fl * 0.06), this.sclY * (1 - fl * 0.09), this.sclX * (1 + fl * 0.06));
     if (fl > 0.01) this.group.rotation.y += Math.sin(t * 45) * fl * 0.05;
 
     // ---- GLB locomotion: the textured model is one baked mesh, so its life
@@ -2092,7 +2124,7 @@ const civilians = [];
 class Civilian {
   constructor(x, z) {
     this.goo = 60;
-    this.timer = 26;
+    this.timer = CFG.civilian.timer;
     this.active = false;
     this.resolved = false;
     this.warned = false;
@@ -2191,7 +2223,7 @@ class Civilian {
     }
     if (!this.active) return;
     this.timer -= dt;
-    const panic = 1 - Math.max(this.timer, 0) / 26;
+    const panic = 1 - Math.max(this.timer, 0) / CFG.civilian.timer;
     this.group.rotation.z = Math.sin(t * (8 + panic * 16)) * 0.05 * (1 + panic * 2);
     for (const d of this.rot) d.scale.multiplyScalar(1 + 0.02 * dt); // rot slowly spreads
     if (!this.warned && this.timer < 8) {
@@ -2576,7 +2608,7 @@ function buildHornPickup() {
 function updatePlayer(dt, t) {
   // --- look ---
   const [dx, dy] = Input.consumeLook();
-  const sens = 0.0023;
+  const sens = 0.0023 * (Settings.sens || 1); // mouse, touch-drag and gamepad all funnel through consumeLook
   Player.yaw -= dx * sens;
   Player.pitch = THREE.MathUtils.clamp(Player.pitch - dy * sens, -0.9, 0.7);
 
@@ -2848,6 +2880,7 @@ function nozzleWorldPos(out) {
 
 let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0, hitPulse = 0;
 const crosshairEl = document.getElementById('crosshair');
+let targetSenseT = 0, crosshairOnTarget = false; // BUILD 3 aim confirmation
 const pressureFill = document.getElementById('pressureFill');
 const rainbowFill = document.getElementById('rainbowFill');
 function updateHose(dt) {
@@ -2911,6 +2944,32 @@ function updateHose(dt) {
     } else if (Player.aim.y < -0.05) {
       /* handled below */
     }
+    // SOFT AIM ASSIST (BUILD 3): when the ray misses everything, the single
+    // nearest target hugging the jet axis (≤ ~0.7m off) still gets scrubbed
+    // at 35% power — near-misses feel wet, not dead. Much tighter and weaker
+    // than the earned wide-nozzle fan below, which stays the real prize.
+    let assisted = null;
+    if (!hits.length) {
+      let bestOff = CFG.hose.assistOff2;
+      for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
+        for (const tgt of list) {
+          if (!tgt || tgt.resolved || tgt.alive === false || tgt.falling) continue;
+          const gp = tgt.group.position;
+          _v2.subVectors(gp, camera.position);
+          _v2.y += tgt.aimY ?? 0.9; // flat targets (grime, splats) aim at deck level
+          const along = _v2.dot(Player.aim);
+          if (along < 1 || along > CFG.hose.range + 4) continue;
+          const off2 = _v2.lengthSq() - along * along;
+          if (off2 < bestOff) { bestOff = off2; assisted = tgt; }
+        }
+      }
+      if (assisted) {
+        assisted.clean(CFG.hose.dps * RPG.hoseMul() * CFG.hose.assistPower * dt, assisted.group.position);
+        Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * 0.5 * dt);
+        hitPulse = Math.max(hitPulse, 0.6);
+        if (Math.random() < dt * 8) spawnSplash(assisted.group.position.clone().setY(0.9));
+      }
+    }
     // WIDE SPRAY NOZZLE (this level's reward, active once earned): the fan of
     // water also scrubs anything close to the jet axis at 55% power — near
     // misses still clean, and grouped piles melt together.
@@ -2918,10 +2977,10 @@ function updateHose(dt) {
       const seen = hits.length ? hits[0].object.userData.entity : null;
       for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
         for (const tgt of list) {
-          if (!tgt || tgt === seen || tgt.resolved || tgt.alive === false || tgt.falling) continue;
+          if (!tgt || tgt === seen || tgt === assisted || tgt.resolved || tgt.alive === false || tgt.falling) continue;
           const gp = tgt.group.position;
           _v2.subVectors(gp, camera.position);
-          _v2.y += 0.9; // aim at the target's body, not its feet
+          _v2.y += tgt.aimY ?? 0.9; // aim at the target's body, not its feet
           const along = _v2.dot(Player.aim);
           if (along < 1 || along > CFG.hose.range + 4) continue;
           if (_v2.lengthSq() - along * along > 3.2) continue; // ~1.8m off-axis fan
@@ -2970,6 +3029,21 @@ function updateHose(dt) {
     HoseFX.light.intensity = 0;
   }
 
+  // TARGET SENSE (BUILD 3): the crosshair warms up gold whenever the jet
+  // WOULD land on something cleanable — aim confirmation before you spend
+  // pressure. Cheap: one raycast at ~12Hz, not per frame.
+  targetSenseT -= dt;
+  if (targetSenseT <= 0) {
+    targetSenseT = 0.08;
+    raycaster.set(camera.position, Player.aim);
+    raycaster.far = CFG.hose.range + 6;
+    const on = Game.state === 'playing' && raycaster.intersectObjects(cleanTargets, false).length > 0;
+    if (on !== crosshairOnTarget) {
+      crosshairOnTarget = on;
+      crosshairEl.classList.toggle('onTarget', on);
+    }
+  }
+
   // advance all particles
   const p = HoseFX.points.geometry.attributes.position;
   for (let i = 0; i < HoseFX.N; i++) {
@@ -3014,7 +3088,32 @@ function updateBeam(dt) {
         spawnSplash(hits[0].point, true);
         SFX.splat(panFor(hits[0].point), 0.7);
       } else {
-        end = nozzle.clone().addScaledVector(Player.aim, CFG.beam.range);
+        // BEAM GRAZE (BUILD 3): the big cooldown shot shouldn't whiff on a
+        // hair miss — bend the blast into the nearest target within ~1m of
+        // the beam line (the drawn beam visibly kinks to it, honest feedback)
+        let graze = null, bestOff = CFG.beam.grazeOff2;
+        for (const list of [piles, zombies, civilians]) {
+          for (const tgt of list) {
+            if (!tgt || tgt.resolved || tgt.alive === false) continue;
+            _v2.subVectors(tgt.group.position, camera.position);
+            _v2.y += tgt.aimY ?? 0.9;
+            const along = _v2.dot(Player.aim);
+            if (along < 1 || along > CFG.beam.range) continue;
+            const off2 = _v2.lengthSq() - along * along;
+            if (off2 < bestOff) { bestOff = off2; graze = tgt; }
+          }
+        }
+        if (graze) {
+          const gp = graze.group.position.clone(); gp.y += 1;
+          end = gp;
+          graze.clean(CFG.beam.damage * RPG.beamMul(), gp);
+          if (graze.stun) graze.stun(2.5);
+          spawnGlitter(gp, 30, 4);
+          spawnSplash(gp, true);
+          SFX.splat(panFor(gp), 0.7);
+        } else {
+          end = nozzle.clone().addScaledVector(Player.aim, CFG.beam.range);
+        }
       }
 
       // beam visual: two nested additive cylinders from horn to target
@@ -3377,11 +3476,12 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0, nozzleAdj: { fwd: 0, up: 0 } };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0, nozzleAdj: { fwd: 0, up: 0 }, sens: 1 };
 if (!Settings.nozzleAdj) Settings.nozzleAdj = { fwd: 0, up: 0 }; // heal older saves
 let fpsAccum = 0, fpsCount = 0;
 const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
+if (!Settings.sens) Settings.sens = 1; // heal saves that predate the look-sensitivity setting
 function saveSettings() { try { localStorage.setItem('uj_settings', JSON.stringify(Settings)); } catch (e) {} }
 
 const QUALITY_TIERS = {
@@ -3415,6 +3515,8 @@ function applySettings() {
 }
 function refreshSettingsUI() {
   document.getElementById('setVol').value = Settings.volume;
+  document.getElementById('setSens').value = Settings.sens || 1;
+  document.getElementById('setSensVal').textContent = (Settings.sens || 1).toFixed(1) + '×';
   document.getElementById('setMusic').textContent = Settings.music ? 'ON' : 'OFF';
   document.getElementById('setVoice').textContent = Settings.voice ? 'ON' : 'OFF';
   document.getElementById('setQuality').textContent =
@@ -3671,12 +3773,13 @@ function buildLevel() {
   for (const [x, z, s] of pileSpots) piles.push(new PoopPile(x, z, s));
   Game.totalPiles = piles.length;
 
-  // zombies — first one waits past the beam tutorial so mechanics land one at a time
+  // zombies — first one waits past the beam tutorial so mechanics land one at
+  // a time; two mid/late spots are red-eyed runners (BUILD 3 threat variety)
   const zombieSpots = [
-    [0, -30], [-4, -42], [4, -50], [-3, -58],
-    [5, -66], [-5, -72], [0, -78], [3, -84],
+    [0, -30], [-4, -42], [4, -50, 'runner'], [-3, -58],
+    [5, -66], [-5, -72], [0, -78, 'runner'], [3, -84],
   ];
-  for (const [x, z] of zombieSpots) zombies.push(new Zombie(x, z));
+  for (const [x, z, kind] of zombieSpots) zombies.push(new Zombie(x, z, { runner: kind === 'runner' }));
   Game.totalZombies = zombies.length;
 
   updateObjectiveHUD();
@@ -3709,6 +3812,9 @@ document.getElementById('pauseResume').addEventListener('click', () => togglePau
 document.getElementById('pauseRestart').addEventListener('click', () => location.reload());
 document.getElementById('setVol').addEventListener('input', e => {
   Settings.volume = +e.target.value; saveSettings(); applySettings();
+});
+document.getElementById('setSens').addEventListener('input', e => {
+  Settings.sens = +e.target.value; saveSettings(); refreshSettingsUI();
 });
 document.getElementById('setMusic').addEventListener('click', () => {
   Settings.music = !Settings.music; saveSettings(); applySettings();
@@ -3760,7 +3866,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   // the barrel tip rather than the chest without needing to see the render
   HoseFX,
   nozzleWorldPos: (out) => nozzleWorldPos(out || new THREE.Vector3()),
-  spawnZombieAt: (x, z) => { const z2 = new Zombie(x, z); z2.setState('chase'); zombies.push(z2); Game.totalZombies++; return z2; },
+  spawnZombieAt: (x, z, opts) => { const z2 = new Zombie(x, z, opts); z2.setState('chase'); zombies.push(z2); Game.totalZombies++; return z2; },
+  maybeTriggerClimax,
   getZombies: () => zombies,
   getFrames: () => _frameCount,
   camera,
