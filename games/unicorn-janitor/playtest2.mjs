@@ -659,18 +659,25 @@ await page.evaluate(() => window.__QA_CLEAN());
 // B3g. TARGET SENSE — the crosshair lights up gold on a cleanable, dims on sky
 const senseUI = await page.evaluate(() => {
   const UJ = window.UJ, el = document.getElementById('crosshair');
-  const p = UJ.piles.find(p => p.alive);
+  // pick an UNTOUCHED pile: a partly-cleaned one has shrunk (baseScale falls
+  // with dirt), so a fixed aim height sails over it and the check goes flaky
+  const p = UJ.piles.find(p => p.alive && p.dirt >= UJ.CFG.pile.dirt - 1) || UJ.piles.find(p => p.alive);
   UJ.Player.pos.set(p.group.position.x, 0, p.group.position.z + 8); // within hose range
   // re-aim every step: the third-person camera swings for ~2s after a big
   // aim change, and aimAt computes from the camera's current position
-  for (let i = 0; i < 70; i++) { UJ.aimAt(p.group.position.x, 1, p.group.position.z); UJ.step(0.03); }
+  for (let i = 0; i < 70; i++) { UJ.aimAt(p.group.position.x, 0.7, p.group.position.z); UJ.step(0.03); }
   const onTarget = el.classList.contains('onTarget');
   for (let i = 0; i < 70; i++) { UJ.aimAt(UJ.Player.pos.x, 60, UJ.Player.pos.z - 2); UJ.step(0.03); } // at the sky
   const offTarget = el.classList.contains('onTarget');
-  return { onTarget, offTarget };
+  return { onTarget, offTarget, dbg: {
+    state: UJ.Game.state, hp: UJ.Player.hp, pileAlive: p.alive,
+    dist: +p.group.position.distanceTo(UJ.Player.pos).toFixed(1),
+    targets: UJ.cleanTargets.length, cls: el.className,
+  } };
 });
 ok('crosshair target-sense: gold on a cleanable, off against the sky',
-   senseUI.onTarget && !senseUI.offTarget, `on=${senseUI.onTarget} off=${senseUI.offTarget}`);
+   senseUI.onTarget && !senseUI.offTarget,
+   `on=${senseUI.onTarget} off=${senseUI.offTarget}` + (senseUI.onTarget ? '' : ' · dbg=' + JSON.stringify(senseUI.dbg)));
 
 await page.evaluate(() => window.__QA_CLEAN());
 // B4a. PLAYER MOMENTUM — velocity ramps up under input and coasts to a stop
@@ -730,6 +737,277 @@ const sep = await page.evaluate(() => {
 });
 ok('crowd separation: stacked zombies shoulder each other apart', sep.d > 0.6,
    `spawned overlapping → ${sep.d.toFixed(2)}m apart after 0.6s`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B5a. CAMERA BOOM COLLISION — a shop wall behind Jax pulls the lens in
+const boom = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const settle = (x, z) => {
+    P.pos.set(x, 0, z);
+    P.yaw = Math.PI / 2; P.pitch = 0; // face +x, so the boom swings out over -x
+    P.hvel.set(0, 0, 0); P.firing = false; P._aimT = 0; P.shake = 0;
+    UJ.camera.position.set(x, 2.5, z);
+    for (let i = 0; i < 90; i++) UJ.step(0.03);
+    const head = { x: P.pos.x, y: P.pos.y + 1.9, z: P.pos.z };
+    return { arm: Math.hypot(UJ.camera.position.x - head.x, UJ.camera.position.y - head.y,
+                             UJ.camera.position.z - head.z), camX: UJ.camera.position.x };
+  };
+  const open = settle(-11, -33);  // clear stretch between two shops
+  const wall = settle(-11, -24);  // shop hull spans z -29.5..-18.5 at x -19.2..-13.2
+  return { open, wall, blockers: UJ.camBlockers.length };
+});
+ok('camera boom collides: a shop wall shortens the arm instead of clipping through',
+   boom.open.arm > 4.5 && boom.wall.arm < boom.open.arm - 1 && boom.wall.camX > -13.3,
+   `arm ${boom.open.arm.toFixed(2)}m in the open → ${boom.wall.arm.toFixed(2)}m at the wall · lens x ${boom.wall.camX.toFixed(2)} (hull face -13.2) · ${boom.blockers} blockers`);
+
+// B5b. SHOULDER AIM — firing slides the lens off-axis so Jax stops eclipsing the crosshair
+const shoulder = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -33); P.yaw = Math.PI; P.pitch = 0; P.hvel.set(0, 0, 0); P.shake = 0;
+  const lateral = () => { // perpendicular distance from the head-aim line
+    const hx = P.pos.x, hz = P.pos.z;
+    const dx = UJ.camera.position.x - hx, dz = UJ.camera.position.z - hz;
+    const along = dx * P.aim.x + dz * P.aim.z;
+    return Math.hypot(dx - P.aim.x * along, dz - P.aim.z * along);
+  };
+  P.firing = false; P._aimT = 0;
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  const hip = lateral();
+  UJ.Input.spray = true;
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const aimed = lateral();
+  UJ.Input.spray = false;
+  return { hip, aimed, aimT: P._aimT };
+});
+ok('over-the-shoulder aim: the lens slides wider while spraying',
+   shoulder.aimed > shoulder.hip + 0.25 && shoulder.aimT > 0.8,
+   `lateral offset ${shoulder.hip.toFixed(2)}m → ${shoulder.aimed.toFixed(2)}m (aim blend ${shoulder.aimT.toFixed(2)})`);
+
+// B5c. TRAUMA SHAKE — impacts roll the lens, then decay cleanly to zero
+const shake = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.shake = 0.7;
+  let maxRoll = 0;
+  for (let i = 0; i < 8; i++) { UJ.step(0.03); maxRoll = Math.max(maxRoll, Math.abs(UJ.camera.rotation.z)); }
+  for (let i = 0; i < 40; i++) UJ.step(0.03); // ride it out
+  return { maxRoll, rest: Math.abs(UJ.camera.rotation.z), trauma: P.shake };
+});
+ok('trauma shake rolls the camera on impact and settles back to level',
+   shake.maxRoll > 0.004 && shake.trauma === 0 && shake.rest < 0.002,
+   `peak roll ${shake.maxRoll.toFixed(4)} rad → rest ${shake.rest.toFixed(4)} · trauma drained to ${shake.trauma}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B5d. COMPASS — an objective dead ahead sits centred, one behind clamps to an edge
+const compass = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const pile = UJ.piles.find(p => p.alive);
+  const pp = pile.group.position;
+  P.pos.set(pp.x, 0, pp.z + 14);            // stand 14m away...
+  P.yaw = Math.atan2(pp.x - P.pos.x, pp.z - P.pos.z); // ...looking right at it
+  UJ.updateCompass();
+  const ahead = UJ.compassPool.find(el => el.style.opacity === '1' && el.firstChild.textContent.includes('💩'));
+  const aheadLeft = ahead ? parseFloat(ahead.style.left) : -1;
+  const label = ahead ? ahead.lastChild.textContent : '';
+  P.yaw += Math.PI;                          // turn our back on it
+  UJ.updateCompass();
+  const behind = UJ.compassPool.find(el => el.style.opacity === '1' && el.firstChild.textContent.includes('💩'));
+  const behindLeft = behind ? parseFloat(behind.style.left) : -1;
+  const edge = behind ? behind.classList.contains('edge') : false;
+  // and the bearing helper itself: a point off the player's right reads positive
+  const right = UJ.screenBearing({ x: P.pos.x - 5, y: 0, z: P.pos.z + 10 });
+  P.yaw = 0;
+  return { aheadLeft, label, behindLeft, edge, rightSign: right };
+});
+ok('compass: objectives track by bearing, off-screen ones clamp to the edge',
+   Math.abs(compass.aheadLeft - 50) < 8 && compass.label === '14m' &&
+   (compass.behindLeft <= 2 || compass.behindLeft >= 98) && compass.edge,
+   `dead ahead ${compass.aheadLeft.toFixed(1)}% "${compass.label}" · behind ${compass.behindLeft.toFixed(1)}% edge=${compass.edge}`);
+
+// B5e. DAMAGE DIRECTION — a hit from the right paints the arc at ~90°
+const dmgDir = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.yaw = 0;
+  UJ.dmgArcs.forEach(a => { a.life = 0; a.el.style.opacity = 0; });
+  UJ.showDamageFrom({ x: 1, y: 0, z: 0 }); // attacker sits at -x, i.e. screen-right
+  const a = UJ.dmgArcs[0];
+  const deg = parseFloat((a.el.style.transform.match(/-?[\d.]+/) || [NaN])[0]);
+  UJ.updateDamageArcs(0.05);
+  const litOpacity = parseFloat(a.el.style.opacity);
+  for (let i = 0; i < 30; i++) UJ.updateDamageArcs(0.05); // 1.5s later
+  return { deg, litOpacity, faded: parseFloat(a.el.style.opacity) };
+});
+ok('damage indicator points at the attacker and fades out',
+   Math.abs(dmgDir.deg - 90) < 6 && dmgDir.litOpacity > 0.9 && dmgDir.faded === 0,
+   `arc at ${dmgDir.deg.toFixed(1)}° (expected 90°) · opacity ${dmgDir.litOpacity} → ${dmgDir.faded}`);
+
+// B5f. DIFFICULTY — the same hit costs a different amount of HP per preset
+const diff = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const saved = UJ.Settings.difficulty;
+  const hit = (mode) => {
+    UJ.Settings.difficulty = mode;
+    P.hp = 100;
+    UJ.damagePlayer(20, { x: 0, y: 0, z: 1 });
+    return 100 - P.hp;
+  };
+  const out = { story: hit('story'), normal: hit('normal'), nightmare: hit('nightmare') };
+  UJ.Settings.difficulty = saved;
+  P.hp = 100;
+  return out;
+});
+ok('difficulty presets scale incoming damage', diff.story === 10 && diff.normal === 20 && diff.nightmare === 32,
+   `20 damage lands as ${diff.story} / ${diff.normal} / ${diff.nightmare} HP (story/normal/nightmare)`);
+
+// B5g. UPDATE BUDGET — distant shamblers tick in batches, near ones every frame
+const budget = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -30);
+  const near = UJ.spawnZombieAt(0, -38);   // 8m
+  const far = UJ.spawnZombieAt(0, -110);   // 80m, past the 55m budget line
+  let nearTicks = 0, farTicks = 0;
+  const wrap = (z, bump) => { const o = z.update.bind(z); z.update = (dt, t) => { bump(); o(dt, t); }; };
+  wrap(near, () => nearTicks++);
+  wrap(far, () => farTicks++);
+  for (let i = 0; i < 40; i++) UJ.step(0.03); // 1.2s
+  near.alive = false; near.group.visible = false;
+  far.alive = false; far.group.visible = false;
+  return { nearTicks, farTicks };
+});
+ok('update budget: far-away zombies tick in coarse batches, near ones every frame',
+   budget.nearTicks === 40 && budget.farTicks > 0 && budget.farTicks <= 14,
+   `over 40 frames — near zombie ${budget.nearTicks} updates, distant ${budget.farTicks}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B5h. THREAT MUSIC — the score's intensity rises with hunters and settles after
+const threat = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  // the intensity slew is deliberately slow, so let the previous check's
+  // chasers wash out before sampling the calm baseline
+  for (let i = 0; i < 100; i++) UJ.step(0.03);
+  const calm = UJ.getThreat();
+  const zs = [UJ.spawnZombieAt(P.pos.x + 3, P.pos.z - 4), UJ.spawnZombieAt(P.pos.x - 3, P.pos.z - 5)];
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const hunted = UJ.getThreat();
+  zs.forEach(z => { z.alive = false; z.group.visible = false; });
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  return { calm, hunted, after: UJ.getThreat() };
+});
+ok('threat music: intensity swells while hunted and decays once clear',
+   threat.calm < 0.1 && threat.hunted > 0.5 && threat.after < threat.hunted * 0.4,
+   `intensity ${threat.calm.toFixed(2)} → ${threat.hunted.toFixed(2)} → ${threat.after.toFixed(2)}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B6a. HYPE — chaining cleans heats the meter, tiers up, and drops the disco rig
+const hype = await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.Hype.heat = 0; UJ.Hype.tier = 0;
+  for (let i = 0; i < 5; i++) UJ.step(0.03);
+  // the rig is built once and then parked in the fog, so "cold" means
+  // stowed out of sight, not absent
+  const cold = { tier: UJ.Hype.tier, stowed: !UJ.getDisco() || UJ.getDisco().y > 18 };
+  const bloomBase = UJ.bloom.strength;
+  // simulate a sustained run: the meter is topped up as fast as it drains
+  for (let i = 0; i < 120; i++) { UJ.Hype.heat = 1; UJ.step(0.03); } // let the rig fly in
+  const d = UJ.getDisco();
+  const hot = { tier: UJ.Hype.tier, name: UJ.HYPE_TIERS[UJ.Hype.tier].name,
+                y: d.y, visible: d.g.visible, bloom: UJ.bloom.strength,
+                banner: document.getElementById('hypeWrap').classList.contains('on'),
+                label: document.getElementById('hypeLabel').textContent };
+  UJ.Hype.heat = 0;                          // and let it cool right back down
+  for (let i = 0; i < 200; i++) UJ.step(0.03);
+  const cooled = { tier: UJ.Hype.tier, y: UJ.getDisco().y, bloom: UJ.bloom.strength };
+  return { cold, hot, cooled, bloomBase };
+});
+ok('hype: chaining tiers up, drops the disco rig and swells the bloom — then packs up',
+   hype.cold.tier === 0 && hype.cold.stowed && hype.hot.tier === 3 && hype.hot.visible &&
+   hype.hot.y < 12 && hype.hot.bloom > hype.bloomBase && hype.hot.banner &&
+   hype.cooled.tier === 0 && hype.cooled.y > 18,
+   `tier 0 (rig stowed=${hype.cold.stowed}) → ${hype.hot.tier} (${hype.hot.label}, banner=${hype.hot.banner}) · ball drops to y ${hype.hot.y.toFixed(1)} · bloom ${hype.bloomBase.toFixed(2)} → ${hype.hot.bloom.toFixed(2)} · cools back to tier ${hype.cooled.tier}, ball at y ${hype.cooled.y.toFixed(1)}`);
+
+// B6b. HYPE POWER — a hot streak visibly hits harder
+const hypeDmg = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const at = (heat) => { UJ.Hype.heat = heat; UJ.updateHype(0.001); return UJ.Hype.dmgMul(); };
+  const out = { cold: at(0), hot: at(0.95) };
+  UJ.Hype.heat = 0; UJ.updateHype(0.001);
+  return out;
+});
+ok('hype multiplies hose power at higher tiers', hypeDmg.cold === 1 && hypeDmg.hot > 1.4,
+   `hose multiplier ${hypeDmg.cold.toFixed(2)}× cold → ${hypeDmg.hot.toFixed(2)}× at LEGENDARY`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B6c. JET BOOST — hosing the deck mid-air rides the recoil upward
+const boost = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const hop = (useJet) => {
+    P.pos.set(0, 0, -30); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+    UJ.Meters.pressure = 100;
+    P.pitch = -0.9; // straight down at the planks
+    UJ.Input.jumpPressed = true;
+    UJ.Input.spray = useJet;
+    let peak = 0;
+    for (let i = 0; i < 45; i++) { UJ.step(0.03); peak = Math.max(peak, P.pos.y); }
+    UJ.Input.spray = false;
+    const psi = UJ.Meters.pressure;
+    for (let i = 0; i < 60; i++) UJ.step(0.03); // land again
+    return { peak, psi };
+  };
+  const plain = hop(false);
+  const jet = hop(true);
+  P.pitch = 0;
+  return { plain, jet };
+});
+ok('jet boost: spraying downward mid-air lifts Jax far above a plain jump',
+   boost.jet.peak > boost.plain.peak + 2 && boost.jet.psi < 40,
+   `apex ${boost.plain.peak.toFixed(2)}m jumping → ${boost.jet.peak.toFixed(2)}m on the jet · pressure left ${boost.jet.psi.toFixed(0)}%`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B6d. STYLE KILLS — finishing airborne pays hype and punches the camera
+const style = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Hype.heat = 0; P._fovPunch = 0;
+  for (let i = 0; i < 120; i++) UJ.step(0.03); // let any running chain expire first
+  UJ.Hype.heat = 0; P._fovPunch = 0;
+  const z = UJ.spawnZombieAt(P.pos.x + 2, P.pos.z - 6);
+  P.onGround = false;              // mid-air finish
+  z.clean(9999, z.group.position);
+  const air = { heat: UJ.Hype.heat, punch: P._fovPunch };
+  P.onGround = true;
+  for (let i = 0; i < 120; i++) UJ.step(0.03); // and again, so the control is a clean single kill
+  UJ.Hype.heat = 0; P._fovPunch = 0;
+  const z2 = UJ.spawnZombieAt(P.pos.x + 2, P.pos.z - 6);
+  z2.clean(9999, z2.group.position);
+  const plain = { heat: UJ.Hype.heat, punch: P._fovPunch };
+  UJ.Hype.heat = 0;
+  return { air, plain };
+});
+ok('style kills: an airborne finish pays extra hype and kicks the lens',
+   style.air.heat > style.plain.heat + 0.15 && style.air.punch >= 7 && style.plain.punch < 7,
+   `hype gained — airborne ${style.air.heat.toFixed(2)} vs grounded ${style.plain.heat.toFixed(2)} · fov punch ${style.air.punch} vs ${style.plain.punch}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B6e. BRUTE — a heavy that shrugs off the jet entirely
+const brute = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const layout = UJ.getZombies().filter(z => z.brute);
+  const b = UJ.spawnZombieAt(P.pos.x, P.pos.z - 8, { brute: true });
+  const n = UJ.spawnZombieAt(P.pos.x + 4, P.pos.z - 8);
+  const bz = b.group.position.z, nz = n.group.position.z;
+  b.push(0.5); n.push(0.5);
+  const out = {
+    layout: layout.length, cfgBrutes: UJ.CFG.zombie.brutes,
+    goo: b.gooMax, cfgGoo: UJ.CFG.zombie.bruteGoo,
+    scale: +b.group.scale.x.toFixed(2), slower: b.speedMul < n.speedMul,
+    bruteShoved: Math.abs(b.group.position.z - bz), normalShoved: Math.abs(n.group.position.z - nz),
+  };
+  b.alive = false; b.group.visible = false;
+  n.alive = false; n.group.visible = false;
+  return out;
+});
+ok('brute: bigger, tougher, slower, and too heavy for the jet to shove',
+   brute.layout === brute.cfgBrutes && brute.goo === brute.cfgGoo && brute.scale > 1.3 &&
+   brute.slower && brute.bruteShoved === 0 && brute.normalShoved > 0.5,
+   `${brute.layout} in the layout · ${brute.goo} goo · ${brute.scale}× scale · knockback ${brute.bruteShoved.toFixed(2)}m vs a normal zombie's ${brute.normalShoved.toFixed(2)}m`);
 
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));

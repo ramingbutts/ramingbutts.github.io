@@ -581,3 +581,118 @@ scale, both invisible on the small map:
   (set in `updatePlayer`, so headless `step()` renders match too), and
   the sea plane must extend past the sky radius or its edge silhouettes
   at the horizon.
+
+## The AAA-feel pass (level 2 BUILD 5)
+
+"AAA" in a browser game with no art budget is not more polygons — it's the
+layer of *presentation and readability* that shipped games have and hobby
+games skip. Five systems, none of which change the core verbs:
+
+**Cinematic camera rig** (`CFG.cam`, replaces the one-line follow lerp).
+A spring arm anchored at the head: boom behind the aim, offset to one
+shoulder so Jax never eclipses the crosshair, pulled in and pushed wider
+while firing (`Player._aimT` eases the two together), led by
+`Player.hvel` so the world slides ahead of a run. The boom raycasts
+against an explicit `camBlockers` list (shop hulls, roofs, carts) and
+shortens rather than clipping through — the damping is **asymmetric**,
+near-instant when closing (a wall must never eat a frame) and slow when
+opening (reads as a crane pull-back). Shake became **trauma**: the same
+`Player.shake` call sites now feed a 0–1 value whose effect is trauma
+*squared* and which **rolls** the lens (`camera.rotation.z`) as well as
+jittering it — roll is what separates "screen shake" from a camera
+operator flinching. Noise is layered sines at irrational-ish ratios; no
+noise library, and smooth instead of the old per-frame `Math.random()`
+buzz. A decaying `_fovPunch` fires on beams, novas and hits.
+
+**Navigation HUD.** A 221 m pier in heavy fog is unreadable without
+bearings, so objectives ride a compass strip: `screenBearing()` returns
+the bearing relative to the crosshair (note the basis — `right` is
+`forward × up` = `(-fz, 0, fx)`, so **+x is screen-LEFT** and the helper
+negates), markers clamp to the strip edge with a chevron when off-screen,
+and same-bearing markers nudge apart instead of printing on top of each
+other. Damage arrives as a conic-gradient arc rotated to the attacker's
+bearing — the same helper, reused.
+
+**Difficulty presets** (`DIFFICULTIES` / `DIFF`). Story / Normal /
+Nightmare scale incoming damage, zombie speed, pile regen and rescue
+timers. Same discipline as the talent multipliers: applied at the call
+site, never written back into CFG, so switching mid-run is safe.
+Selectable from the start screen *and* the pause menu via one shared
+`cycleDifficulty()`.
+
+**Reactive score.** `SFX.setIntensity(0..1)` opens the pad's lowpass,
+lifts the music bus and swells a filtered saw drone; `updateThreatMusic`
+derives intensity from how many hunters are within 26 m plus a bonus when
+one is inside 7 m, slewed so it never flickers. The drone is the layer
+that actually reads as danger.
+
+**Filmic post + an update budget.** Grain and damage-driven chromatic
+aberration folded into the *existing* vignette pass — three effects for
+the cost of the one pass already paid for (grain 0.032; 0.045 was visibly
+noisy on flat sky). And `updateZombies()` gives anything past 55 m a
+batched ~10 Hz tick, shared by `tick()` and `UJ.step` so tests exercise
+what ships.
+
+Testing notes: the threat slew is deliberately slow, so a check sampling
+a "calm" baseline must let the previous check's chasers wash out (~3 s of
+steps, not 1). Camera-rig assertions need ~90 steps to settle because the
+arm damping is asymmetric. And the boom-collision check works because the
+shops sit *outside* the play area (`playHalfW` 11.4, shop inner face
+−13.2): stand at x −11 facing +x and the boom swings into the hull.
+
+## Style, not just polish (level 2 BUILD 6)
+
+BUILD 5 made the game *read* well; this one makes it fun to show off in.
+Everything here leans into the camp-disco identity rather than away from
+it — the house style is the feature.
+
+**HYPE — the style meter.** Every clean adds heat (pile 0.16, zombie
+0.22, brute 0.34, rescue 0.30, grime 0.08, plus a combo-scaled bonus);
+it bleeds at 0.075/s, so a streak is something you *keep alive*. Three
+tiers — GROOVY / FABULOUS / LEGENDARY — each raising hose damage
+(`Hype.dmgMul()`, up to +45%) and glitter counts, and dropping a
+mirrorball out of the fog. Two things that were wrong on the first pass
+and are worth remembering: the top tier sat at 0.90, which the decay
+crossed back over instantly, so tiers **strobed** — fixed with
+hysteresis (enter at the threshold, fall out 0.07 below) and by lowering
+LEGENDARY to 0.84. And a tier must never be a hard gate on progress; it
+only amplifies.
+
+**The disco rig, and why volumetric beams are a trap.** First attempt
+hung seven wide cones (radius 1.7) under a ball 8.4 m above the player.
+Additive + `depthWrite:false` + `DoubleSide` means that when the camera
+ends up *inside* a cone — which it always does, hanging above the
+player — you render its far wall across the entire screen. The pier
+vanished behind coloured wedges. The fix is narrow spokes (radius 0.5)
+tilted ~50° out so they land on deck well clear of the lens, at a tenth
+the opacity, and to put the real payload on the floor: a glow sprite
+**light pool** per spoke, parked where it strikes the planks
+(`reach = ballY * tan(tiltZ)`). Pools read as a mirrorball from the
+player's eyeline; the beams are just garnish. Bloom strength ramps with
+tier off a captured `bloomBase` (`applyQuality` owns `bloom.enabled`,
+not `.strength`, so they don't fight).
+
+**Jet boost.** Airborne + spraying with `aim.y < -0.25` converts the
+hose into thrust (`CFG.hose.boost`, capped at `boostMax`, draining
+pressure at `boostDrain` on top of the normal spray cost) plus a shove
+along the recoil axis. A plain jump peaks at ~1.3 m; the jet reaches
+~8 m and eats 60% of the tank. Note the ordering: `updatePlayer` runs
+before `updateHose`, so thrust written to `Player.vel.y` lands on the
+*next* frame's integration — correct, but don't expect same-frame
+altitude in a test.
+
+**Style kills.** `Zombie.die()` classifies the finish — airborne, a prop
+STRIKE (`_propStun`, set when a flying body clobbers it), a brute, or a
+combo chain — and pays hit-stop, an FOV punch, shake and bonus hype.
+**Brutes** are the counterweight: 240 goo, 0.6× speed, 1.42× scale,
+1.6× damage, and `push()` early-returns so the jet can't shove them at
+all. All of it rides the `sclX/sclY/gooMax/speedMul` fields the runner
+variant already introduced — variants are cheap now, which was the point
+of building them that way.
+
+Harness lesson worth keeping: `UJ.step` was never expiring combos
+(`comboT` only ticked in `tick()`), so headless runs held an infinite
+chain and a "grounded control kill" silently counted as a style kill.
+Any state the playing branch mutates must be mirrored in `step`, or
+tests quietly measure a different game. Same class of bug as the
+`updatePileJelly` split back in BUILD 28 of level 1.
