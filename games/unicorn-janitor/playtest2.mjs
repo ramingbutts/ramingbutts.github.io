@@ -731,6 +731,164 @@ const sep = await page.evaluate(() => {
 ok('crowd separation: stacked zombies shoulder each other apart', sep.d > 0.6,
    `spawned overlapping → ${sep.d.toFixed(2)}m apart after 0.6s`);
 
+await page.evaluate(() => window.__QA_CLEAN());
+// B5a. CAMERA BOOM COLLISION — a shop wall behind Jax pulls the lens in
+const boom = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const settle = (x, z) => {
+    P.pos.set(x, 0, z);
+    P.yaw = Math.PI / 2; P.pitch = 0; // face +x, so the boom swings out over -x
+    P.hvel.set(0, 0, 0); P.firing = false; P._aimT = 0; P.shake = 0;
+    UJ.camera.position.set(x, 2.5, z);
+    for (let i = 0; i < 90; i++) UJ.step(0.03);
+    const head = { x: P.pos.x, y: P.pos.y + 1.9, z: P.pos.z };
+    return { arm: Math.hypot(UJ.camera.position.x - head.x, UJ.camera.position.y - head.y,
+                             UJ.camera.position.z - head.z), camX: UJ.camera.position.x };
+  };
+  const open = settle(-11, -33);  // clear stretch between two shops
+  const wall = settle(-11, -24);  // shop hull spans z -29.5..-18.5 at x -19.2..-13.2
+  return { open, wall, blockers: UJ.camBlockers.length };
+});
+ok('camera boom collides: a shop wall shortens the arm instead of clipping through',
+   boom.open.arm > 4.5 && boom.wall.arm < boom.open.arm - 1 && boom.wall.camX > -13.3,
+   `arm ${boom.open.arm.toFixed(2)}m in the open → ${boom.wall.arm.toFixed(2)}m at the wall · lens x ${boom.wall.camX.toFixed(2)} (hull face -13.2) · ${boom.blockers} blockers`);
+
+// B5b. SHOULDER AIM — firing slides the lens off-axis so Jax stops eclipsing the crosshair
+const shoulder = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -33); P.yaw = Math.PI; P.pitch = 0; P.hvel.set(0, 0, 0); P.shake = 0;
+  const lateral = () => { // perpendicular distance from the head-aim line
+    const hx = P.pos.x, hz = P.pos.z;
+    const dx = UJ.camera.position.x - hx, dz = UJ.camera.position.z - hz;
+    const along = dx * P.aim.x + dz * P.aim.z;
+    return Math.hypot(dx - P.aim.x * along, dz - P.aim.z * along);
+  };
+  P.firing = false; P._aimT = 0;
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  const hip = lateral();
+  UJ.Input.spray = true;
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const aimed = lateral();
+  UJ.Input.spray = false;
+  return { hip, aimed, aimT: P._aimT };
+});
+ok('over-the-shoulder aim: the lens slides wider while spraying',
+   shoulder.aimed > shoulder.hip + 0.25 && shoulder.aimT > 0.8,
+   `lateral offset ${shoulder.hip.toFixed(2)}m → ${shoulder.aimed.toFixed(2)}m (aim blend ${shoulder.aimT.toFixed(2)})`);
+
+// B5c. TRAUMA SHAKE — impacts roll the lens, then decay cleanly to zero
+const shake = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.shake = 0.7;
+  let maxRoll = 0;
+  for (let i = 0; i < 8; i++) { UJ.step(0.03); maxRoll = Math.max(maxRoll, Math.abs(UJ.camera.rotation.z)); }
+  for (let i = 0; i < 40; i++) UJ.step(0.03); // ride it out
+  return { maxRoll, rest: Math.abs(UJ.camera.rotation.z), trauma: P.shake };
+});
+ok('trauma shake rolls the camera on impact and settles back to level',
+   shake.maxRoll > 0.004 && shake.trauma === 0 && shake.rest < 0.002,
+   `peak roll ${shake.maxRoll.toFixed(4)} rad → rest ${shake.rest.toFixed(4)} · trauma drained to ${shake.trauma}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B5d. COMPASS — an objective dead ahead sits centred, one behind clamps to an edge
+const compass = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const pile = UJ.piles.find(p => p.alive);
+  const pp = pile.group.position;
+  P.pos.set(pp.x, 0, pp.z + 14);            // stand 14m away...
+  P.yaw = Math.atan2(pp.x - P.pos.x, pp.z - P.pos.z); // ...looking right at it
+  UJ.updateCompass();
+  const ahead = UJ.compassPool.find(el => el.style.opacity === '1' && el.firstChild.textContent.includes('💩'));
+  const aheadLeft = ahead ? parseFloat(ahead.style.left) : -1;
+  const label = ahead ? ahead.lastChild.textContent : '';
+  P.yaw += Math.PI;                          // turn our back on it
+  UJ.updateCompass();
+  const behind = UJ.compassPool.find(el => el.style.opacity === '1' && el.firstChild.textContent.includes('💩'));
+  const behindLeft = behind ? parseFloat(behind.style.left) : -1;
+  const edge = behind ? behind.classList.contains('edge') : false;
+  // and the bearing helper itself: a point off the player's right reads positive
+  const right = UJ.screenBearing({ x: P.pos.x - 5, y: 0, z: P.pos.z + 10 });
+  P.yaw = 0;
+  return { aheadLeft, label, behindLeft, edge, rightSign: right };
+});
+ok('compass: objectives track by bearing, off-screen ones clamp to the edge',
+   Math.abs(compass.aheadLeft - 50) < 8 && compass.label === '14m' &&
+   (compass.behindLeft <= 2 || compass.behindLeft >= 98) && compass.edge,
+   `dead ahead ${compass.aheadLeft.toFixed(1)}% "${compass.label}" · behind ${compass.behindLeft.toFixed(1)}% edge=${compass.edge}`);
+
+// B5e. DAMAGE DIRECTION — a hit from the right paints the arc at ~90°
+const dmgDir = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.yaw = 0;
+  UJ.dmgArcs.forEach(a => { a.life = 0; a.el.style.opacity = 0; });
+  UJ.showDamageFrom({ x: 1, y: 0, z: 0 }); // attacker sits at -x, i.e. screen-right
+  const a = UJ.dmgArcs[0];
+  const deg = parseFloat((a.el.style.transform.match(/-?[\d.]+/) || [NaN])[0]);
+  UJ.updateDamageArcs(0.05);
+  const litOpacity = parseFloat(a.el.style.opacity);
+  for (let i = 0; i < 30; i++) UJ.updateDamageArcs(0.05); // 1.5s later
+  return { deg, litOpacity, faded: parseFloat(a.el.style.opacity) };
+});
+ok('damage indicator points at the attacker and fades out',
+   Math.abs(dmgDir.deg - 90) < 6 && dmgDir.litOpacity > 0.9 && dmgDir.faded === 0,
+   `arc at ${dmgDir.deg.toFixed(1)}° (expected 90°) · opacity ${dmgDir.litOpacity} → ${dmgDir.faded}`);
+
+// B5f. DIFFICULTY — the same hit costs a different amount of HP per preset
+const diff = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const saved = UJ.Settings.difficulty;
+  const hit = (mode) => {
+    UJ.Settings.difficulty = mode;
+    P.hp = 100;
+    UJ.damagePlayer(20, { x: 0, y: 0, z: 1 });
+    return 100 - P.hp;
+  };
+  const out = { story: hit('story'), normal: hit('normal'), nightmare: hit('nightmare') };
+  UJ.Settings.difficulty = saved;
+  P.hp = 100;
+  return out;
+});
+ok('difficulty presets scale incoming damage', diff.story === 10 && diff.normal === 20 && diff.nightmare === 32,
+   `20 damage lands as ${diff.story} / ${diff.normal} / ${diff.nightmare} HP (story/normal/nightmare)`);
+
+// B5g. UPDATE BUDGET — distant shamblers tick in batches, near ones every frame
+const budget = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -30);
+  const near = UJ.spawnZombieAt(0, -38);   // 8m
+  const far = UJ.spawnZombieAt(0, -110);   // 80m, past the 55m budget line
+  let nearTicks = 0, farTicks = 0;
+  const wrap = (z, bump) => { const o = z.update.bind(z); z.update = (dt, t) => { bump(); o(dt, t); }; };
+  wrap(near, () => nearTicks++);
+  wrap(far, () => farTicks++);
+  for (let i = 0; i < 40; i++) UJ.step(0.03); // 1.2s
+  near.alive = false; near.group.visible = false;
+  far.alive = false; far.group.visible = false;
+  return { nearTicks, farTicks };
+});
+ok('update budget: far-away zombies tick in coarse batches, near ones every frame',
+   budget.nearTicks === 40 && budget.farTicks > 0 && budget.farTicks <= 14,
+   `over 40 frames — near zombie ${budget.nearTicks} updates, distant ${budget.farTicks}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B5h. THREAT MUSIC — the score's intensity rises with hunters and settles after
+const threat = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  // the intensity slew is deliberately slow, so let the previous check's
+  // chasers wash out before sampling the calm baseline
+  for (let i = 0; i < 100; i++) UJ.step(0.03);
+  const calm = UJ.getThreat();
+  const zs = [UJ.spawnZombieAt(P.pos.x + 3, P.pos.z - 4), UJ.spawnZombieAt(P.pos.x - 3, P.pos.z - 5)];
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const hunted = UJ.getThreat();
+  zs.forEach(z => { z.alive = false; z.group.visible = false; });
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  return { calm, hunted, after: UJ.getThreat() };
+});
+ok('threat music: intensity swells while hunted and decays once clear',
+   threat.calm < 0.1 && threat.hunted > 0.5 && threat.after < threat.hunted * 0.4,
+   `intensity ${threat.calm.toFixed(2)} → ${threat.hunted.toFixed(2)} → ${threat.after.toFixed(2)}`);
+
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
 ok('no JS runtime errors (CDN/network excluded)', jsErrors.length === 0, jsErrors.slice(0,3).join(' | ') || 'clean');

@@ -581,3 +581,61 @@ scale, both invisible on the small map:
   (set in `updatePlayer`, so headless `step()` renders match too), and
   the sea plane must extend past the sky radius or its edge silhouettes
   at the horizon.
+
+## The AAA-feel pass (level 2 BUILD 5)
+
+"AAA" in a browser game with no art budget is not more polygons — it's the
+layer of *presentation and readability* that shipped games have and hobby
+games skip. Five systems, none of which change the core verbs:
+
+**Cinematic camera rig** (`CFG.cam`, replaces the one-line follow lerp).
+A spring arm anchored at the head: boom behind the aim, offset to one
+shoulder so Jax never eclipses the crosshair, pulled in and pushed wider
+while firing (`Player._aimT` eases the two together), led by
+`Player.hvel` so the world slides ahead of a run. The boom raycasts
+against an explicit `camBlockers` list (shop hulls, roofs, carts) and
+shortens rather than clipping through — the damping is **asymmetric**,
+near-instant when closing (a wall must never eat a frame) and slow when
+opening (reads as a crane pull-back). Shake became **trauma**: the same
+`Player.shake` call sites now feed a 0–1 value whose effect is trauma
+*squared* and which **rolls** the lens (`camera.rotation.z`) as well as
+jittering it — roll is what separates "screen shake" from a camera
+operator flinching. Noise is layered sines at irrational-ish ratios; no
+noise library, and smooth instead of the old per-frame `Math.random()`
+buzz. A decaying `_fovPunch` fires on beams, novas and hits.
+
+**Navigation HUD.** A 221 m pier in heavy fog is unreadable without
+bearings, so objectives ride a compass strip: `screenBearing()` returns
+the bearing relative to the crosshair (note the basis — `right` is
+`forward × up` = `(-fz, 0, fx)`, so **+x is screen-LEFT** and the helper
+negates), markers clamp to the strip edge with a chevron when off-screen,
+and same-bearing markers nudge apart instead of printing on top of each
+other. Damage arrives as a conic-gradient arc rotated to the attacker's
+bearing — the same helper, reused.
+
+**Difficulty presets** (`DIFFICULTIES` / `DIFF`). Story / Normal /
+Nightmare scale incoming damage, zombie speed, pile regen and rescue
+timers. Same discipline as the talent multipliers: applied at the call
+site, never written back into CFG, so switching mid-run is safe.
+Selectable from the start screen *and* the pause menu via one shared
+`cycleDifficulty()`.
+
+**Reactive score.** `SFX.setIntensity(0..1)` opens the pad's lowpass,
+lifts the music bus and swells a filtered saw drone; `updateThreatMusic`
+derives intensity from how many hunters are within 26 m plus a bonus when
+one is inside 7 m, slewed so it never flickers. The drone is the layer
+that actually reads as danger.
+
+**Filmic post + an update budget.** Grain and damage-driven chromatic
+aberration folded into the *existing* vignette pass — three effects for
+the cost of the one pass already paid for (grain 0.032; 0.045 was visibly
+noisy on flat sky). And `updateZombies()` gives anything past 55 m a
+batched ~10 Hz tick, shared by `tick()` and `UJ.step` so tests exercise
+what ships.
+
+Testing notes: the threat slew is deliberately slow, so a check sampling
+a "calm" baseline must let the previous check's chasers wash out (~3 s of
+steps, not 1). Camera-rig assertions need ~90 steps to settle because the
+arm damping is asymmetric. And the boom-collision check works because the
+shops sit *outside* the play area (`playHalfW` 11.4, shop inner face
+−13.2): stand at x −11 facing +x and the boom swings into the hull.

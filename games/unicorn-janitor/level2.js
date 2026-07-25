@@ -26,6 +26,25 @@ const CFG = {
             turnRate: 3.5, accel: 6, decel: 10 }, // BUILD 4 steering: they carve arcs, not pivots
   pile:   { dirt: 100, regen: 3.5, regenDelay: 4 }, // abandoned progress re-festers
   civilian: { timer: 22 }, // BUILD 3: tighter rescue window (was 26)
+  // BUILD 5 cinematic camera rig: a spring arm that collides with the world,
+  // slides over the shoulder while you aim, and leads the direction of travel
+  cam: { dist: 5.4, height: 0.4, shoulder: 0.55, aimPull: 1.1, aimShoulder: 0.5,
+         lead: 0.075, minDist: 1.3, fov: 70, sprintFov: 78 },
+};
+
+// BUILD 5: difficulty presets — every multiplier is applied at the call site,
+// never written back into CFG, so switching mid-run is safe and reversible.
+const DIFFICULTIES = {
+  story:     { label: 'STORY',     dmg: 0.5, speed: 0.85, regen: 0.4, rescue: 1.4 },
+  normal:    { label: 'NORMAL',    dmg: 1,   speed: 1,    regen: 1,   rescue: 1 },
+  nightmare: { label: 'NIGHTMARE', dmg: 1.6, speed: 1.18, regen: 1.8, rescue: 0.75 },
+};
+const DIFF = {
+  cur() { return DIFFICULTIES[Settings.difficulty] || DIFFICULTIES.normal; },
+  dmg() { return this.cur().dmg; },
+  speed() { return this.cur().speed; },
+  regen() { return this.cur().regen; },
+  rescue() { return this.cur().rescue; },
 };
 
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -93,7 +112,17 @@ const SFX = {
     breathe.connect(breatheG); breatheG.connect(lp.frequency); breathe.start();
     const bus = this.ctx.createGain(); bus.gain.value = 0.05;
     this._musicBus = bus; // settings menu can mute the music independently
+    this._musicLP = lp;   // threat intensity opens this filter (setIntensity)
     lp.connect(bus); bus.connect(this.master);
+    // the danger layer: a detuned low drone that only exists when hunted
+    const drone = this.ctx.createOscillator(); drone.type = 'sawtooth';
+    drone.frequency.value = 55;
+    const droneLP = this.ctx.createBiquadFilter();
+    droneLP.type = 'lowpass'; droneLP.frequency.value = 240; droneLP.Q.value = 3;
+    const droneG = this.ctx.createGain(); droneG.gain.value = 0;
+    drone.connect(droneLP); droneLP.connect(droneG); droneG.connect(bus);
+    drone.start();
+    this._droneG = droneG;
     this._musicVoices = this._chords[0].map((f, i) => {
       const o = this.ctx.createOscillator(); o.type = 'triangle';
       o.frequency.value = f; o.detune.value = (i - 1.5) * 5;
@@ -111,6 +140,16 @@ const SFX = {
         o.frequency.linearRampToValueAtTime(this._chords[step][i], t + 2.5);
       });
     }, 9000);
+  },
+
+  // BUILD 5: the score reacts to danger — the pad opens up, a low drone
+  // swells underneath, and it all settles again once you're clear.
+  setIntensity(x) {
+    if (!this.ctx || !this._musicLP || !Settings.music) return;
+    const t = this.ctx.currentTime;
+    this._musicLP.frequency.setTargetAtTime(700 + x * 1700, t, 1.1);
+    if (this._musicBus) this._musicBus.gain.setTargetAtTime(0.05 * (1 + x * 1.2), t, 1.1);
+    if (this._droneG) this._droneG.gain.setTargetAtTime(x * x * 0.075, t, 0.9);
   },
 
   setMusicMood(name) {
@@ -466,15 +505,32 @@ const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerW
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.42, 0.6, 0.82); // higher threshold: only real light sources bloom, not the whole sky
 composer.addPass(bloom);
+// vignette + film grain + damage chromatic aberration, all in one pass —
+// three filmic touches for the cost of the one we already paid for
 const vignette = new ShaderPass({
   name: 'VignetteShader',
-  uniforms: { tDiffuse: { value: null }, strength: { value: 0.9 } },
+  uniforms: { tDiffuse: { value: null }, strength: { value: 0.9 },
+              time: { value: 0 }, grain: { value: 0.032 }, aberration: { value: 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `varying vec2 vUv; uniform sampler2D tDiffuse; uniform float strength;
+    uniform float time; uniform float grain; uniform float aberration;
     void main(){
-      vec4 c = texture2D(tDiffuse, vUv);
       float d = distance(vUv, vec2(0.5));
+      vec4 c;
+      if (aberration > 0.001) {
+        // channels separate radially — the lens itself feels the hit
+        vec2 dir = (vUv - vec2(0.5)) * aberration * (0.35 + d);
+        c.r = texture2D(tDiffuse, vUv + dir).r;
+        c.g = texture2D(tDiffuse, vUv).g;
+        c.b = texture2D(tDiffuse, vUv - dir).b;
+        c.a = 1.0;
+      } else {
+        c = texture2D(tDiffuse, vUv);
+      }
       c.rgb *= 1.0 - strength * smoothstep(0.4, 0.78, d);
+      // per-pixel hash grain, animated — breaks up the flat fog gradients
+      float n = fract(sin(dot(vUv * vec2(1.0, 1.3) + fract(time * 0.61), vec2(12.9898, 78.233))) * 43758.5453);
+      c.rgb += (n - 0.5) * grain;
       gl_FragColor = c;
     }`,
 });
@@ -565,6 +621,9 @@ function makePlankTexture() {
 }
 
 const ambientSeaLions = [];
+// solid geometry the camera boom collides against (shops, carts, pilings) —
+// a short explicit list, because raycasting the whole scene every frame is waste
+const camBlockers = [];
 function buildWharf() {
   const B = CFG.bridge, len = B.zStart - B.zEnd, zMid = (B.zStart + B.zEnd) / 2;
   const grp = new THREE.Group();
@@ -642,6 +701,7 @@ function buildWharf() {
     shop.add(glow);
     shop.position.set(shopX, 0, z);
     grp.add(shop);
+    camBlockers.push(body, roof);
   }
 
   // floating docks on the +x side, hauled-out sea lions dozing on them —
@@ -713,6 +773,7 @@ function buildWharf() {
     }
     b.castShadow = true;
     grp.add(b);
+    camBlockers.push(b);
     cars.push({ mesh: b, rock: 0, rockV: 0 });
   });
 
@@ -1224,7 +1285,7 @@ function updatePileJelly(dt, t) {
     // regrows if it hasn't been sprayed for a few seconds. Finish the job.
     p.sinceClean += dt;
     if (p.dirt < CFG.pile.dirt && p.sinceClean > CFG.pile.regenDelay) {
-      p.dirt = Math.min(CFG.pile.dirt, p.dirt + CFG.pile.regen * dt);
+      p.dirt = Math.min(CFG.pile.dirt, p.dirt + CFG.pile.regen * DIFF.regen() * dt);
       p.baseScale = 0.35 + 0.65 * Math.max(p.dirt, 0) / CFG.pile.dirt;
     }
     const f = Math.max(p.dirt, 0) / CFG.pile.dirt;
@@ -1571,6 +1632,26 @@ function updateWharfToys(dt) {
 const zombies = [];
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.Vector3();
 
+// BUILD 5 update budget: on a 221m pier most of the horde is far away in the
+// fog, where nobody can see a 60Hz gait. Beyond 55m they tick in coarser
+// batched steps — same behaviour, a fraction of the work. Shared by tick and
+// the headless stepper so tests exercise exactly what ships.
+function updateZombies(dt, t) {
+  for (const z of zombies) {
+    if (!z.alive) continue;
+    const dx = z.group.position.x - Player.pos.x, dz = z.group.position.z - Player.pos.z;
+    if (dx * dx + dz * dz > 3025) {
+      z._acc = (z._acc || 0) + dt;
+      if (z._acc < 0.1) continue;      // ~10Hz out in the murk
+      z.update(Math.min(z._acc, 0.15), t);
+      z._acc = 0;
+    } else {
+      z._acc = 0;
+      z.update(dt, t);
+    }
+  }
+}
+
 class Zombie {
   constructor(x, z, opts = {}) {
     // BUILD 3 "runner" variant: lean, fast, less goo — a different threat
@@ -1813,7 +1894,7 @@ class Zombie {
     this.heading += THREE.MathUtils.clamp(diff, -tr, tr);
     // commit less speed while turning hard — they bank into corners
     const align = Math.max(0, Math.cos(diff));
-    const target = maxSpeed * (0.35 + 0.65 * align);
+    const target = maxSpeed * DIFF.speed() * (0.35 + 0.65 * align);
     const acc = (target > this.speed ? CFG.zombie.accel * (this.runner ? 1.6 : 1) : CFG.zombie.decel) * dt;
     this.speed += THREE.MathUtils.clamp(target - this.speed, -acc, acc);
     pos.x += Math.sin(this.heading) * this.speed * dt;
@@ -1888,7 +1969,7 @@ class Zombie {
         break;
       }
       case 'lunge': {
-        pos.addScaledVector(this.lungeDir, CFG.zombie.lungeSpeed * (1 + (this.speedMul - 1) * 0.4) * dt);
+        pos.addScaledVector(this.lungeDir, CFG.zombie.lungeSpeed * DIFF.speed() * (1 + (this.speedMul - 1) * 0.4) * dt);
         this.group.rotation.x = 0.4;
         if (dist < CFG.zombie.hitRange && this.hitCd <= 0) {
           this.hitCd = 1;
@@ -2183,7 +2264,7 @@ const civilians = [];
 class Civilian {
   constructor(x, z) {
     this.goo = 60;
-    this.timer = CFG.civilian.timer;
+    this.timer = CFG.civilian.timer * DIFF.rescue();
     this.active = false;
     this.resolved = false;
     this.warned = false;
@@ -2282,7 +2363,7 @@ class Civilian {
     }
     if (!this.active) return;
     this.timer -= dt;
-    const panic = 1 - Math.max(this.timer, 0) / CFG.civilian.timer;
+    const panic = 1 - Math.max(this.timer, 0) / (CFG.civilian.timer * DIFF.rescue());
     this.group.rotation.z = Math.sin(t * (8 + panic * 16)) * 0.05 * (1 + panic * 2);
     for (const d of this.rot) d.scale.multiplyScalar(1 + 0.02 * dt); // rot slowly spreads
     if (!this.warned && this.timer < 8) {
@@ -2395,6 +2476,7 @@ function buildGraffiti() {
 const Player = {
   group: null, pos: null, vel: new THREE.Vector3(), knock: new THREE.Vector3(),
   hvel: new THREE.Vector3(), // horizontal momentum (BUILD 4)
+  _aimT: 0, _fovPunch: 0,    // camera-rig state (BUILD 5)
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
   hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
@@ -2705,13 +2787,6 @@ function updatePlayer(dt, t) {
   Player.pos.x += Player.hvel.x * dt;
   Player.pos.z += Player.hvel.z * dt;
 
-  // sprint FOV kick — subtle speed sensation
-  const targetFov = sprinting ? 78 : 70;
-  if (Math.abs(camera.fov - targetFov) > 0.05) {
-    camera.fov += (targetFov - camera.fov) * (1 - Math.pow(0.005, dt));
-    camera.updateProjectionMatrix();
-  }
-
   // footsteps
   if (moving && Player.onGround) {
     Player.stepT = (Player.stepT || 0) - dt;
@@ -2818,21 +2893,67 @@ function updatePlayer(dt, t) {
     g.rotation.x += ((lean + breathe + airTuck - Player._recoil) - g.rotation.x) * k;
   }
 
-  // --- camera: third-person follow, slightly damped ---
-  const headPos = _v1.copy(Player.pos).add(new THREE.Vector3(0, 1.9, 0));
-  const camTarget = _v2.copy(headPos).addScaledVector(Player.aim, -5.4).add(new THREE.Vector3(0, 0.4, 0));
-  camTarget.y = Math.max(camTarget.y, 0.6);
-  camera.position.lerp(camTarget, 1 - Math.pow(0.0001, dt));
-  const lookAt = headPos.clone().addScaledVector(Player.aim, 10);
-  camera.lookAt(lookAt);
+  // --- camera: cinematic spring arm (BUILD 5) ---
+  // The boom sits behind the head along the aim vector, offset to one shoulder
+  // so Jax's body never eclipses the crosshair, pulled in while you're firing,
+  // led slightly by your own velocity, and shortened whenever world geometry
+  // would come between the lens and the character.
+  const C = CFG.cam;
+  const headPos = _camHead.copy(Player.pos).setY(Player.pos.y + 1.9);
+  _camRightV.crossVectors(Player.aim, THREE.Object3D.DEFAULT_UP).normalize();
+  // ease over the shoulder while spraying, ease back out when idle
+  Player._aimT += ((Player.firing ? 1 : 0) - Player._aimT) * (1 - Math.pow(0.03, dt));
+  const boom = C.dist - Player._aimT * C.aimPull;
+  const shoulder = C.shoulder + Player._aimT * C.aimShoulder;
+  _camDesired.copy(headPos)
+    .addScaledVector(Player.aim, -boom)
+    .addScaledVector(_camRightV, shoulder)
+    .addScaledVector(Player.hvel, C.lead); // lead the run — the world slides in ahead of you
+  _camDesired.y += C.height;
 
-  // camera shake (impacts, beam) — positional jitter after lookAt;
-  // disabled entirely by the reduce-motion setting
+  // boom collision: never let a shop wall, cart or piling sit between lens and Jax
+  _camArm.subVectors(_camDesired, headPos);
+  const armLen = _camArm.length();
+  if (armLen > 1e-4) {
+    _camArm.divideScalar(armLen);
+    camRay.set(headPos, _camArm);
+    camRay.far = armLen;
+    const blocked = camRay.intersectObjects(camBlockers, false);
+    const allowed = blocked.length ? Math.max(C.minDist, blocked[0].distance - 0.35) : armLen;
+    _camDesired.copy(headPos).addScaledVector(_camArm, allowed);
+  }
+  _camDesired.y = Math.max(_camDesired.y, 0.6); // never dip under the deck
+
+  // asymmetric damping: snap IN fast (so a wall can't clip the lens for a frame)
+  // and drift OUT slowly (so leaving cover feels like a crane pull-back)
+  const closing = _camDesired.distanceToSquared(headPos) < camera.position.distanceToSquared(headPos);
+  camera.position.lerp(_camDesired, 1 - Math.pow(closing ? 0.000000001 : 0.0001, dt));
+  _camLook.copy(headPos).addScaledVector(Player.aim, 10);
+  camera.lookAt(_camLook);
+
+  // trauma-based shake: intensity is trauma SQUARED, so hits punch and then
+  // vanish instead of buzzing, and it rolls the lens (not just jitters it) —
+  // the difference between "screen shake" and a camera operator flinching.
   if (Player.shake > 0.002 && !Settings.reduceMotion) {
-    Player.shake *= Math.max(0, 1 - 5 * dt);
-    camera.position.x += (Math.random() - 0.5) * Player.shake * 0.5;
-    camera.position.y += (Math.random() - 0.5) * Player.shake * 0.35;
+    Player.shake = Math.max(0, Player.shake - dt * 1.7);
+    const tr = Player.shake * Player.shake;
+    const st = t * 32;
+    // layered sines at irrational-ish ratios ≈ smooth noise, no lib needed
+    const n1 = Math.sin(st) * 0.6 + Math.sin(st * 2.37 + 1.7) * 0.4;
+    const n2 = Math.sin(st * 1.31 + 4.2) * 0.6 + Math.sin(st * 3.11) * 0.4;
+    const n3 = Math.sin(st * 0.87 + 2.4);
+    camera.position.x += n1 * tr * 0.55;
+    camera.position.y += n2 * tr * 0.4;
+    camera.rotation.z += n3 * tr * 0.07; // the roll is what sells the impact
   } else Player.shake = 0;
+
+  // FOV: sprint stretch plus a decaying punch from beams, novas and hits
+  Player._fovPunch = Math.max(0, (Player._fovPunch || 0) - dt * 14);
+  const targetFov = (sprinting ? C.sprintFov : C.fov) + Player._fovPunch;
+  if (Math.abs(camera.fov - targetFov) > 0.05) {
+    camera.fov += (targetFov - camera.fov) * (1 - Math.pow(0.005, dt));
+    camera.updateProjectionMatrix();
+  }
 
   // keep the sun's shadow window centered on the player
   sun.position.set(Player.pos.x + 21, 43, Player.pos.z + 14);
@@ -2870,7 +2991,9 @@ function updatePlayer(dt, t) {
 
 function damagePlayer(amount, fromDir) {
   if (Game.state !== 'playing') return;
-  Player.hp -= amount;
+  Player.hp -= amount * DIFF.dmg();
+  Player._fovPunch = Math.max(Player._fovPunch, 4);
+  showDamageFrom(fromDir);
   Player.knock.copy(fromDir).setY(0).normalize().multiplyScalar(7);
   Game.dmgFlash = 1;
   Player.shake = 0.45;
@@ -2916,6 +3039,11 @@ function updateSplashes(dt) {
 }
 
 const raycaster = new THREE.Raycaster();
+// BUILD 5 camera rig scratch (kept separate from _v1/_v2, which updatePlayer reuses)
+const _camHead = new THREE.Vector3(), _camDesired = new THREE.Vector3(),
+      _camArm = new THREE.Vector3(), _camLook = new THREE.Vector3(),
+      _camRightV = new THREE.Vector3();
+const camRay = new THREE.Raycaster();
 const HoseFX = { N: 900, idx: 0, pos: null, vel: [], life: [], points: null, muzzle: null };
 
 function buildHose() {
@@ -3146,6 +3274,7 @@ function updateBeam(dt) {
     if (Player.hasHorn && beamCooldown <= 0 && Meters.rainbow >= BEAM_COST && Game.state === 'playing') {
       Meters.rainbow -= BEAM_COST;
       beamCooldown = beamMaxCd;
+      Player._fovPunch = Math.max(Player._fovPunch, 6);
       SFX.beam();
       Tutorial.fire('firstBeam');
 
@@ -3552,12 +3681,13 @@ function updateIntro(dt) {
    12.8 SETTINGS, PAUSE MENU, AUTO-QUALITY — the game adapts to weak
    hardware by itself; the player can override everything.
    ===================================================================== */
-const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0, nozzleAdj: { fwd: 0, up: 0 }, sens: 1 };
+const Settings = { volume: 85, music: true, voice: true, quality: 'auto', reduceMotion: false, showFps: false, models: true, modelYaw: 0, nozzleAdj: { fwd: 0, up: 0 }, sens: 1, difficulty: 'normal' };
 if (!Settings.nozzleAdj) Settings.nozzleAdj = { fwd: 0, up: 0 }; // heal older saves
 let fpsAccum = 0, fpsCount = 0;
 const fpsEl = document.getElementById('fpsMeter');
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('uj_settings') || '{}')); } catch (e) { /* private mode */ }
 if (!Settings.sens) Settings.sens = 1; // heal saves that predate the look-sensitivity setting
+if (!DIFFICULTIES[Settings.difficulty]) Settings.difficulty = 'normal';
 function saveSettings() { try { localStorage.setItem('uj_settings', JSON.stringify(Settings)); } catch (e) {} }
 
 const QUALITY_TIERS = {
@@ -3593,6 +3723,8 @@ function refreshSettingsUI() {
   document.getElementById('setVol').value = Settings.volume;
   document.getElementById('setSens').value = Settings.sens || 1;
   document.getElementById('setSensVal').textContent = (Settings.sens || 1).toFixed(1) + '×';
+  document.getElementById('setDiff').textContent = DIFF.cur().label;
+  document.getElementById('startDiff').textContent = DIFF.cur().label;
   document.getElementById('setMusic').textContent = Settings.music ? 'ON' : 'OFF';
   document.getElementById('setVoice').textContent = Settings.voice ? 'ON' : 'OFF';
   document.getElementById('setQuality').textContent =
@@ -3660,6 +3792,134 @@ function pollGamepad() {
   edge(5, () => Input.pingPressed = true);
   edge(9, () => { if (Game.state === 'intro') introSkip = true; else togglePause(); });
   edge(8, () => toggleSkillPanel());
+}
+
+// threat level drives the score: how many hunters are close, and how close
+let threatLevel = 0;
+function updateThreatMusic(dt) {
+  let hunters = 0, nearest = Infinity;
+  for (const z of zombies) {
+    if (!z.alive) continue;
+    if (z.state !== 'chase' && z.state !== 'windup' && z.state !== 'lunge') continue;
+    const d = z.group.position.distanceTo(Player.pos);
+    if (d < 26) { hunters++; nearest = Math.min(nearest, d); }
+  }
+  let want = Math.min(1, hunters / 3);
+  if (nearest < 7) want = Math.min(1, want + 0.35);
+  threatLevel += (want - threatLevel) * (1 - Math.pow(0.25, dt)); // slew, don't flicker
+  SFX.setIntensity(threatLevel);
+}
+
+/* =====================================================================
+   12.9 NAVIGATION HUD (BUILD 5) — a 221m pier in heavy fog needs bearings.
+        A compass strip carries objective markers by relative bearing, and
+        damage arrives as a directional arc so you know where to turn.
+   ===================================================================== */
+const compassEl = document.getElementById('compass');
+const dmgArcsEl = document.getElementById('dmgArcs');
+const compassPool = [];
+const dmgArcs = [];
+const COMPASS_HALF = 0.92; // radians of bearing visible either side of centre
+
+function compassMarker(i) {
+  while (compassPool.length <= i) {
+    const el = document.createElement('div');
+    el.className = 'cmark';
+    el.innerHTML = '<b></b><span></span>';
+    compassEl.appendChild(el);
+    compassPool.push(el);
+  }
+  return compassPool[i];
+}
+
+// relative bearing of a world point, in "screen radians": 0 dead ahead,
+// positive to the right of the crosshair
+function screenBearing(p) {
+  let rel = Math.atan2(p.x - Player.pos.x, p.z - Player.pos.z) - Player.yaw;
+  rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+  return -rel; // +x is screen-left in this camera basis, so flip
+}
+
+function updateCompass() {
+  if (Game.state !== 'playing') { compassEl.classList.add('hidden'); return; }
+  compassEl.classList.remove('hidden');
+  const marks = [];
+  // infected sea lions first — they are on a timer, so they outrank everything
+  for (const c of civilians) {
+    if (c.resolved || !c.active) continue;
+    marks.push({ icon: '🦭', p: c.group.position, urgent: true });
+  }
+  // the nearest dirty pile and the nearest hunting zombie: the two things
+  // you actually steer toward and away from
+  let pile = null, pileD = Infinity, hunter = null, hunterD = Infinity;
+  for (const p of piles) {
+    if (!p.alive) continue;
+    const d = p.group.position.distanceTo(Player.pos);
+    if (d < pileD) { pileD = d; pile = p; }
+  }
+  for (const z of zombies) {
+    if (!z.alive || (z.state !== 'chase' && z.state !== 'windup' && z.state !== 'lunge')) continue;
+    const d = z.group.position.distanceTo(Player.pos);
+    if (d < hunterD) { hunterD = d; hunter = z; }
+  }
+  if (pile) marks.push({ icon: '💩', p: pile.group.position });
+  if (hunter && hunterD < 40) marks.push({ icon: '🧟', p: hunter.group.position, urgent: hunterD < 12 });
+  if (shard && shard.position.distanceTo(Player.pos) < 90) marks.push({ icon: '🌠', p: shard.position });
+
+  const placed = [];
+  for (let i = 0; i < compassPool.length || i < marks.length; i++) {
+    const el = compassMarker(i), m = marks[i];
+    if (!m) { el.style.opacity = 0; continue; }
+    const rel = screenBearing(m.p);
+    const off = Math.abs(rel) > COMPASS_HALF;
+    const clamped = THREE.MathUtils.clamp(rel, -COMPASS_HALF, COMPASS_HALF);
+    let pct = 50 + (clamped / COMPASS_HALF) * 50;
+    // declutter: two objectives on the same bearing would print on top of each
+    // other, so nudge the lower-priority one aside rather than hide it
+    for (const q of placed) {
+      if (Math.abs(pct - q) < 5.5) pct = q + (pct >= q ? 5.5 : -5.5);
+    }
+    placed.push(pct);
+    el.style.left = THREE.MathUtils.clamp(pct, 0, 100) + '%';
+    el.style.opacity = 1;
+    el.classList.toggle('edge', off);
+    el.classList.toggle('urgent', !!m.urgent && !off);
+    const d = Math.round(m.p.distanceTo(Player.pos));
+    const icon = off ? (rel > 0 ? m.icon + '›' : '‹' + m.icon) : m.icon;
+    if (el.firstChild.textContent !== icon) el.firstChild.textContent = icon;
+    const label = d + 'm';
+    if (el.lastChild.textContent !== label) el.lastChild.textContent = label;
+  }
+}
+
+// a red arc blooms at the bearing the hit came from, then fades
+function showDamageFrom(fromDir) {
+  if (!dmgArcsEl || Settings.reduceMotion) return;
+  let el = dmgArcs.find(a => a.life <= 0);
+  if (!el) {
+    if (dmgArcs.length >= 3) el = dmgArcs[0];
+    else {
+      const d = document.createElement('div');
+      d.className = 'dmgArc';
+      dmgArcsEl.appendChild(d);
+      el = { el: d, life: 0 };
+      dmgArcs.push(el);
+    }
+  }
+  // fromDir points from attacker toward Jax, so the attacker is back along it
+  _v2.copy(fromDir).setY(0);
+  if (_v2.lengthSq() < 1e-6) _v2.set(0, 0, 1);
+  _v2.normalize().multiplyScalar(-1);
+  const deg = screenBearing(_v2.add(Player.pos)) * 180 / Math.PI;
+  el.el.style.transform = `rotate(${deg}deg)`;
+  el.life = 1.1;
+}
+function updateDamageArcs(dt) {
+  for (const a of dmgArcs) {
+    if (a.life <= 0) continue;
+    a.life -= dt;
+    a.el.style.opacity = Math.max(0, Math.min(1, a.life * 1.3));
+  }
 }
 
 /* =====================================================================
@@ -3900,6 +4160,15 @@ document.getElementById('setVol').addEventListener('input', e => {
 document.getElementById('setSens').addEventListener('input', e => {
   Settings.sens = +e.target.value; saveSettings(); refreshSettingsUI();
 });
+// one cycler, two buttons: the start screen and the pause menu
+function cycleDifficulty(toast) {
+  const order = ['story', 'normal', 'nightmare'];
+  Settings.difficulty = order[(order.indexOf(Settings.difficulty) + 1) % order.length];
+  saveSettings(); refreshSettingsUI();
+  if (toast) showToast('⚔ Difficulty: ' + DIFF.cur().label);
+}
+document.getElementById('setDiff').addEventListener('click', () => cycleDifficulty(true));
+document.getElementById('startDiff').addEventListener('click', () => cycleDifficulty(false));
 document.getElementById('setMusic').addEventListener('click', () => {
   Settings.music = !Settings.music; saveSettings(); applySettings();
 });
@@ -3969,15 +4238,20 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     const t = clock.elapsedTime + _stepTime;
     if (Game.state !== 'playing') return;
     updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
-    for (const z of zombies) z.update(dt, t);
+    updateZombies(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
+    updateCompass(); updateThreatMusic(dt);
   },
   physBodies, cars, civilians2: civilians, setWideNozzle: v => { WIDE_NOZZLE = v; },
   // wharf-toys hooks (BUILD 2): the interactive layer, reachable by playtests
   grimes, barrels, gullSplats, beachBalls, wetPatches, spawnWetPatch, spawnGullSplat,
   getBell: () => bells[0], bells, ambientSeaLions,
+  // BUILD 5 hooks: camera rig, navigation HUD, difficulty, threat music
+  camBlockers, DIFF, DIFFICULTIES, updateCompass, compassPool, dmgArcs,
+  screenBearing, showDamageFrom, updateDamageArcs, damagePlayer,
+  getThreat: () => threatLevel, vignette, updateZombies,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -4004,6 +4278,10 @@ function tick() {
   updateSeaLions(t, dt);
   updateGlitter(dt);
   updateSplashes(dt);
+  updateDamageArcs(dt);
+  // filmic post: grain always breathing, aberration only when you're hurt
+  vignette.uniforms.time.value = t;
+  vignette.uniforms.aberration.value = Settings.reduceMotion ? 0 : Game.dmgFlash * 0.006;
   updatePhysics(dt); updateCars(dt); // physics keeps settling even in menus
 
   // optional FPS readout (settings toggle) — helps real-device playtesting
@@ -4030,9 +4308,11 @@ function tick() {
     updateBeam(dt);
     updateNova(dt);
     updatePing(dt);
-    for (const z of zombies) z.update(dt, t);
+    updateZombies(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
+    updateCompass();
+    updateThreatMusic(dt);
     updateShard(dt, t);
     updateStreetlights(dt);
     updateAudioCues(dt);

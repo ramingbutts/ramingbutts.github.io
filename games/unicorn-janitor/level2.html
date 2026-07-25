@@ -105,6 +105,32 @@
   /* target sense: gold ring when the jet would land on something cleanable */
   #crosshair.onTarget::before { background:#ffd94f; box-shadow:0 0 8px rgba(255,217,79,.95); }
   #crosshair.onTarget::after { border-color:#ffd94f; box-shadow:0 0 10px rgba(255,217,79,.7); }
+  /* ---- compass: objective bearings across the top (BUILD 5) ---- */
+  #compass { position:absolute; top:0; left:50%; transform:translateX(-50%);
+             width:min(460px,64vw); height:34px; overflow:hidden;
+             -webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);
+             mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent); }
+  #compassTicks { position:absolute; inset:0; opacity:.35;
+                  background:repeating-linear-gradient(90deg,transparent 0 22px,
+                             rgba(255,255,255,.55) 22px 23px); }
+  .cmark { position:absolute; top:3px; transform:translateX(-50%); text-align:center;
+           font-size:15px; line-height:1; filter:drop-shadow(0 1px 3px #000);
+           transition:opacity .18s; white-space:nowrap; }
+  .cmark span { display:block; font-size:9px; letter-spacing:.5px; margin-top:2px;
+                color:#cfe3ff; font-variant-numeric:tabular-nums;
+                text-shadow:0 1px 3px #000, 0 0 6px rgba(0,0,0,.9); }
+  .cmark.urgent { animation:cpulse .7s ease-in-out infinite; }
+  .cmark.urgent span { color:#ff8fa8; }
+  .cmark.edge { opacity:.55; }
+  @keyframes cpulse { 50% { transform:translateX(-50%) scale(1.22); } }
+  /* ---- directional damage indicators ---- */
+  #dmgArcs { position:absolute; inset:0; pointer-events:none; }
+  .dmgArc { position:absolute; left:50%; top:50%; width:min(62vmin,420px); height:min(62vmin,420px);
+            margin-left:calc(min(62vmin,420px) / -2); margin-top:calc(min(62vmin,420px) / -2);
+            border-radius:50%; opacity:0;
+            background:conic-gradient(from -22deg, rgba(255,60,90,.85), rgba(255,60,90,0) 44deg);
+            -webkit-mask-image:radial-gradient(closest-side,transparent 68%,#000 78%,#000 100%);
+            mask-image:radial-gradient(closest-side,transparent 68%,#000 78%,#000 100%); }
   #beamCd { position:absolute; left:50%; top:calc(50% + 24px); transform:translateX(-50%);
             width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
   #beamCdFill { height:100%; width:100%; background:linear-gradient(90deg,#c58fff,#5fc8ff); }
@@ -172,6 +198,8 @@
     <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
     <div>🦭 Sea lions saved: <span class="n" id="civCount">0/5</span></div>
   </div>
+  <div id="compass" class="hidden"><div id="compassTicks"></div></div>
+  <div id="dmgArcs"></div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
   <div id="novaCd" class="hidden"><div id="novaCdFill"></div></div>
@@ -182,7 +210,7 @@
   <div id="resumeHint" class="hidden">Click to resume</div>
 </div>
 <div id="cineTop"></div><div id="cineBot"></div>
-<div id="cineTitle">GOLDEN GATE BRIDGE · AWAKENING OF THE UNICORN</div>
+<div id="cineTitle">FISHERMAN’S WHARF · THE ROT REACHES THE SEA</div>
 
 <!-- ================= touch controls ================= -->
 <div id="touchUI">
@@ -198,12 +226,16 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 4</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 5</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
     Fog is thick out there — <b>trust your ears</b>, or press <b>C</b> for a sixth-sense ping.<br>
     <b>P</b> pause &amp; settings &nbsp;·&nbsp; <b>Shift+R</b> rotate Jax · <b>[ ]</b> / <b>; '</b> aim the water jet &nbsp;·&nbsp; 🎮 gamepad supported
+  </div>
+  <div class="setRow" style="justify-content:center; margin-bottom:16px;">
+    <span style="font-size:12px; letter-spacing:2px;">DIFFICULTY</span>
+    <button class="tog" id="startDiff">NORMAL</button>
   </div>
   <button id="startBtn" disabled>LOADING…</button>
 </div>
@@ -231,6 +263,7 @@
   <h1 style="font-size:clamp(24px,4vw,40px);">PAUSED</h1>
   <div class="setRow"><span>VOLUME</span><input id="setVol" type="range" min="0" max="100" value="85"></div>
   <div class="setRow"><span>LOOK SPEED <span id="setSensVal">1.0×</span></span><input id="setSens" type="range" min="0.5" max="2" step="0.1" value="1"></div>
+  <div class="setRow"><span>DIFFICULTY</span><button class="tog" id="setDiff">NORMAL</button></div>
   <div class="setRow"><span>MUSIC</span><button class="tog" id="setMusic">ON</button></div>
   <div class="setRow"><span>NARRATION</span><button class="tog" id="setVoice">ON</button></div>
   <div class="setRow"><span>QUALITY</span><button class="tog" id="setQuality">AUTO</button></div>
