@@ -123,6 +123,18 @@
   .cmark.urgent span { color:#ff8fa8; }
   .cmark.edge { opacity:.55; }
   @keyframes cpulse { 50% { transform:translateX(-50%) scale(1.22); } }
+  /* ---- HYPE: the style meter. Clean with flair and the wharf goes disco ---- */
+  #hypeWrap { position:absolute; top:40px; left:50%; transform:translateX(-50%);
+              width:min(300px,52vw); text-align:center; opacity:0; transition:opacity .25s; }
+  #hypeWrap.on { opacity:1; }
+  #hypeLabel { font-size:19px; font-weight:800; letter-spacing:5px; line-height:1;
+               text-shadow:0 2px 10px #000; margin-bottom:4px; }
+  #hypeLabel.bump { animation:hypepop .45s cubic-bezier(.2,1.6,.4,1); }
+  @keyframes hypepop { 0% { transform:scale(2.1) rotate(-6deg); filter:brightness(2.4); } }
+  #hypeBar { height:5px; border-radius:4px; background:rgba(0,0,0,.5);
+             border:1px solid rgba(255,255,255,.28); overflow:hidden; }
+  #hypeFill { height:100%; width:0%; border-radius:4px; transition:width .12s;
+              background:linear-gradient(90deg,#5fc8ff,#ff8fd0,#ffd94f); }
   /* ---- directional damage indicators ---- */
   #dmgArcs { position:absolute; inset:0; pointer-events:none; }
   .dmgArc { position:absolute; left:50%; top:50%; width:min(62vmin,420px); height:min(62vmin,420px);
@@ -199,6 +211,7 @@
     <div>🦭 Sea lions saved: <span class="n" id="civCount">0/5</span></div>
   </div>
   <div id="compass" class="hidden"><div id="compassTicks"></div></div>
+  <div id="hypeWrap"><div id="hypeLabel">GROOVY</div><div id="hypeBar"><div id="hypeFill"></div></div></div>
   <div id="dmgArcs"></div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
@@ -226,10 +239,11 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 5</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 6</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
+    <b>Jump, then hose straight down</b> to ride the jet — the recoil is a rocket. Chain cleans to go <b>disco</b>.<br>
     Fog is thick out there — <b>trust your ears</b>, or press <b>C</b> for a sixth-sense ping.<br>
     <b>P</b> pause &amp; settings &nbsp;·&nbsp; <b>Shift+R</b> rotate Jax · <b>[ ]</b> / <b>; '</b> aim the water jet &nbsp;·&nbsp; 🎮 gamepad supported
   </div>

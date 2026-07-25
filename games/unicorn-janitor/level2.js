@@ -17,12 +17,14 @@ const CFG = {
   fogColor: 0x6d5570, // mauve dusk rolling off the bay — level 2 is sunset
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
   hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34,
-            assistOff2: 0.5, assistPower: 0.35 }, // soft aim assist: near-misses ≤ ~0.7m off-axis still scrub, weakly
+            assistOff2: 0.5, assistPower: 0.35, // soft aim assist: near-misses ≤ ~0.7m off-axis still scrub, weakly
+            boost: 30, boostMax: 7.5, boostDrain: 30 }, // BUILD 6: ride your own recoil
   beam:   { range: 40, damage: 45, cooldown: 1.2, grazeOff2: 1.0 }, // the big shot bends into anything ~1m off the line
   zombie: { count: 14, detect: 16, lose: 30, wanderSpeed: 1.1, chaseSpeed: 3.1,
             lungeSpeed: 11.5, lungeTime: 0.35, windup: 0.5, recover: 0.85,
             hitRange: 1.5, damage: 13, goo: 110, knockback: 3.6, // level 2: slightly meaner
             runners: 4, runnerSpeedMul: 1.5, runnerGoo: 70, // lean sprinter variant
+            brutes: 2, bruteGoo: 240, bruteSpeedMul: 0.6, bruteDamage: 1.6, // BUILD 6 heavy
             turnRate: 3.5, accel: 6, decel: 10 }, // BUILD 4 steering: they carve arcs, not pivots
   pile:   { dirt: 100, regen: 3.5, regenDelay: 4 }, // abandoned progress re-festers
   civilian: { timer: 22 }, // BUILD 3: tighter rescue window (was 26)
@@ -150,6 +152,36 @@ const SFX = {
     this._musicLP.frequency.setTargetAtTime(700 + x * 1700, t, 1.1);
     if (this._musicBus) this._musicBus.gain.setTargetAtTime(0.05 * (1 + x * 1.2), t, 1.1);
     if (this._droneG) this._droneG.gain.setTargetAtTime(x * x * 0.075, t, 0.9);
+  },
+
+  // BUILD 6: a four-on-the-floor groove that only exists while you're
+  // styling. Tier drives how much of the kit shows up.
+  setGroove(tier) {
+    if (!this.ctx || this._grooveTier === tier) return;
+    this._grooveTier = tier;
+    if (this._grooveTimer) { clearInterval(this._grooveTimer); this._grooveTimer = null; }
+    if (tier <= 0) return;
+    let beat = 0;
+    this._grooveTimer = setInterval(() => {
+      if (!Settings.music || !this.ctx) return;
+      const t = this.ctx.currentTime, bus = this._musicBus || this.master;
+      beat = (beat + 1) % 4;
+      const kick = this.ctx.createOscillator(); kick.type = 'sine';
+      const kg = this.ctx.createGain();
+      kick.frequency.setValueAtTime(125, t);
+      kick.frequency.exponentialRampToValueAtTime(44, t + 0.11);
+      kg.gain.setValueAtTime(0.9 + 0.5 * tier, t);
+      kg.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
+      kick.connect(kg); kg.connect(bus); kick.start(t); kick.stop(t + 0.2);
+      if (tier >= 2 && beat % 2 === 1) { // offbeat tick once it's really cooking
+        const h = this.ctx.createOscillator(); h.type = 'square';
+        h.frequency.value = 5200 + Math.random() * 900;
+        const hg = this.ctx.createGain();
+        hg.gain.setValueAtTime(0.16 * tier, t);
+        hg.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+        h.connect(hg); hg.connect(bus); h.start(t); h.stop(t + 0.05);
+      }
+    }, 480); // ~125 BPM
   },
 
   setMusicMood(name) {
@@ -1092,6 +1124,7 @@ function updatePhysics(dt) {
         if (!z.alive) continue;
         if (p.distanceTo(z.group.position) < b.r + 0.75) {
           z.stun(0.8);
+          z._propStun = 1.4; // remember it, so a kill right after reads as a STRIKE
           z.clean(10, p);
           b.vel.multiplyScalar(-0.35); // the prop caroms off
           b.vel.y = Math.max(b.vel.y, 2);
@@ -1233,7 +1266,8 @@ class PoopPile {
   die() {
     this.alive = false;
     const c = this.group.position.clone(); c.y += 1;
-    spawnGlitter(c, 90, 6);
+    spawnGlitter(c, Math.round(90 * Hype.glitterMul()), 6);
+    Hype.add(0.16);
     // the pile bursts into physical gobs in its own glowing color
     spawnChunkBurst(this.group.position, { count: 5, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 0.9 });
     spawnWetPatch(this.group.position); // a burst pile leaves the planks slick
@@ -1384,6 +1418,7 @@ class Grime {
     grimeCleaned++;
     spawnGlitter(this.mesh.position.clone().setY(0.4), 30, 3);
     spawnFloatText(this.mesh.position.clone().setY(1.4), 'SPOTLESS!', '#9fdcff');
+    Hype.add(0.08);
     spawnWetPatch(this.mesh.position);
     SFX.chime(0.9);
     gainXP(10, this.mesh.position);
@@ -1658,11 +1693,16 @@ class Zombie {
     // shape, not just bigger numbers. Two ship in the layout, two more storm
     // the pier as climax reinforcements.
     this.runner = !!opts.runner;
-    this.speedMul = this.runner ? CFG.zombie.runnerSpeedMul : 1;
-    this.gooMax = this.runner ? CFG.zombie.runnerGoo : CFG.zombie.goo;
+    // BUILD 6 brute: a slab of a zombie — slow, enormously thick with goo,
+    // and too heavy for the jet to shove. You have to commit to killing it.
+    this.brute = !!opts.brute;
+    this.speedMul = this.runner ? CFG.zombie.runnerSpeedMul
+                  : this.brute ? CFG.zombie.bruteSpeedMul : 1;
+    this.gooMax = this.runner ? CFG.zombie.runnerGoo
+                : this.brute ? CFG.zombie.bruteGoo : CFG.zombie.goo;
     this.goo = this.gooMax;
-    this.sclX = this.runner ? 0.86 : 1; // lean, stretched silhouette reads at a glance
-    this.sclY = this.runner ? 1.08 : 1;
+    this.sclX = this.runner ? 0.86 : this.brute ? 1.42 : 1; // silhouette reads the threat at a glance
+    this.sclY = this.runner ? 1.08 : this.brute ? 1.3 : 1;
     this.heading = Math.random() * Math.PI * 2; // BUILD 4 steering: facing = movement dir
     this.speed = 0;                             // current ground speed, ramps up/down
     this.pauseT = 0;                            // wander "sniff" stops
@@ -1686,8 +1726,8 @@ class Zombie {
     // grin, claw arms/feet, dripping rainbow slime (the cleanable part)
     const poopDark = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
     const clawMat = new THREE.MeshStandardMaterial({ color: 0xcbb391, roughness: 0.4 });
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: 0x6b4426, roughness: 0.5,
-      emissive: 0xff40c0, emissiveIntensity: 0.05 });
+    this.bodyMat = new THREE.MeshStandardMaterial({ color: this.brute ? 0x4a2f18 : 0x6b4426,
+      roughness: 0.5, emissive: this.brute ? 0xff8000 : 0xff40c0, emissiveIntensity: 0.05 });
 
     // round belly
     const belly = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), this.bodyMat);
@@ -1714,6 +1754,8 @@ class Zombie {
     // one big yellow eye + pupil, and a toothy grin (runners burn red)
     this.eyeMat = this.runner
       ? new THREE.MeshStandardMaterial({ color: 0xff5f5f, emissive: 0xff2040, emissiveIntensity: 1.1 })
+      : this.brute
+      ? new THREE.MeshStandardMaterial({ color: 0xffa23f, emissive: 0xff6a00, emissiveIntensity: 1.3 })
       : new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), this.eyeMat);
     eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
@@ -1842,7 +1884,21 @@ class Zombie {
   die() {
     this.alive = false;
     const c = this.group.position.clone(); c.y += 1.3;
-    spawnGlitter(c, 130, 7);
+    spawnGlitter(c, Math.round(130 * Hype.glitterMul()), 7);
+    // STYLE KILLS: how you finished it matters. Each one slams the brakes
+    // for a beat, punches the lens and pays into the hype meter.
+    const style = !Player.onGround ? 'AIRBORNE PURIFY!'
+      : this._propStun > 0 ? 'STRIKE!'
+      : this.brute ? 'BRUTE DOWN!'
+      : comboCount >= 3 ? 'PURIFY CHAIN!' : null;
+    if (style) {
+      hitStop = 0.22;
+      Player._fovPunch = Math.max(Player._fovPunch, 7);
+      Player.shake = Math.max(Player.shake, 0.3);
+      Hype.add(0.2);
+      spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f');
+    }
+    Hype.add(this.brute ? 0.34 : 0.22);
     spawnRagdoll(this.group.position); // physics chunks bounce off the deck
     SFX.pop(panFor(this.group.position), 1);
     registerCombo(this.group.position);
@@ -1854,7 +1910,7 @@ class Zombie {
     Meters.rainbow = Math.min(100, Meters.rainbow + 15);
     Game.zombiesDefeated++;
     RPG.kills++;
-    gainXP(50, this.group.position);
+    gainXP(this.brute ? 110 : 50, this.group.position);
     Tutorial.fire('zombieDefeated');
     updateObjectiveHUD();
     checkWin();
@@ -1867,6 +1923,7 @@ class Zombie {
   // away and leans back, clamped to the deck.
   push(dt) {
     if (!this.alive || this.state === 'lunge') return;
+    if (this.brute) return; // too heavy to shove — the jet just makes it angry
     _knockV.subVectors(this.group.position, Player.pos); _knockV.y = 0;
     if (_knockV.lengthSq() < 1e-4) return;
     _knockV.normalize();
@@ -1908,6 +1965,7 @@ class Zombie {
     this._moved = false;
     this.stateT += dt;
     this.hitCd = Math.max(0, this.hitCd - dt);
+    this._propStun = Math.max(0, (this._propStun || 0) - dt); // recent prop clobber (style kills)
     const pos = this.group.position;
     const toPlayer = _v1.subVectors(Player.pos, pos); toPlayer.y = 0;
     const dist = toPlayer.length();
@@ -1973,7 +2031,7 @@ class Zombie {
         this.group.rotation.x = 0.4;
         if (dist < CFG.zombie.hitRange && this.hitCd <= 0) {
           this.hitCd = 1;
-          damagePlayer(CFG.zombie.damage, this.lungeDir);
+          damagePlayer(CFG.zombie.damage * (this.brute ? CFG.zombie.bruteDamage : 1), this.lungeDir);
         }
         if (this.stateT >= CFG.zombie.lungeTime) { this.group.rotation.x = 0; this.setState('recover'); }
         break;
@@ -2327,6 +2385,7 @@ class Civilian {
     Meters.rainbow = Math.min(100, Meters.rainbow + 20);
     spawnGlitter(this.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)), 80, 5);
     spawnFloatText(this.group.position.clone().add(new THREE.Vector3(0, 2.3, 0)), 'SAVED!', '#5fffb0');
+    Hype.add(0.3);
     gainXP(75, this.group.position);
     SFX.chime(1.25);
     showToast('🦭 Sea lion saved! It barks and flops back toward the water.');
@@ -3128,6 +3187,21 @@ function updateHose(dt) {
       HoseFX.life[i] = 0.6;
     }
 
+    // JET BOOST (BUILD 6): a power-washer this size has recoil. Hose
+    // downward while airborne and you ride it — hover, cross a gap, or
+    // stay above a lunging zombie. It burns pressure fast, so it's a
+    // move you commit to, not a second pair of legs.
+    if (!Player.onGround && Player.aim.y < -0.25 && Meters.pressure > 0) {
+      const thrust = CFG.hose.boost * (-Player.aim.y) * dt;
+      Player.vel.y = Math.min(Player.vel.y + thrust, CFG.hose.boostMax);
+      Player.hvel.x -= Player.aim.x * thrust * 0.45; // shoved along the recoil too
+      Player.hvel.z -= Player.aim.z * thrust * 0.45;
+      Meters.pressure = Math.max(0, Meters.pressure - CFG.hose.boostDrain * dt);
+      Player._boosting = 0.12;
+      if (Math.random() < dt * 22) spawnSplash(_v2.copy(Player.pos).setY(0.12), true);
+    }
+    Player._boosting = Math.max(0, (Player._boosting || 0) - dt);
+
     // the actual cleaning: ray from the camera through the crosshair
     raycaster.set(camera.position, Player.aim);
     raycaster.far = CFG.hose.range + 6; // camera sits ~5.4 behind the player
@@ -3138,7 +3212,7 @@ function updateHose(dt) {
     if (hits.length) {
       const e = hits[0].object.userData.entity;
       if (e) {
-        e.clean(CFG.hose.dps * RPG.hoseMul() * dt, hits[0].point);
+        e.clean(CFG.hose.dps * RPG.hoseMul() * Hype.dmgMul() * dt, hits[0].point);
         if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
@@ -3188,7 +3262,7 @@ function updateHose(dt) {
           const along = _v2.dot(Player.aim);
           if (along < 1 || along > CFG.hose.range + 4) continue;
           if (_v2.lengthSq() - along * along > 3.2) continue; // ~1.8m off-axis fan
-          tgt.clean(CFG.hose.dps * RPG.hoseMul() * 0.55 * dt, gp);
+          tgt.clean(CFG.hose.dps * RPG.hoseMul() * Hype.dmgMul() * 0.55 * dt, gp);
           if (Math.random() < dt * 6) spawnSplash(gp.clone().setY(0.8));
         }
       }
@@ -3611,11 +3685,146 @@ let comboCount = 0, comboT = 0;
 function registerCombo(pos) {
   comboT = 3;
   comboCount++;
+  Hype.add(0.06 + 0.03 * Math.min(comboCount, 6)); // chaining is the point
   SFX.chime(1 + 0.08 * Math.min(comboCount - 1, 8));
   if (comboCount >= 2) {
     spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0');
     gainXP(5 * Math.min(comboCount - 1, 6)); // bonus, no popup spam
   }
+}
+
+/* ---------------------------------------------------------------------
+   HYPE (BUILD 6) — the style meter. Cleaning with flair heats it up; at
+   each tier the wharf itself gets more fabulous: a disco ball drops out
+   of the fog, coloured beams sweep the deck, the bloom swells and a
+   groove kicks in under the score. Let it cool and the party packs up.
+   --------------------------------------------------------------------- */
+const HYPE_TIERS = [
+  null,
+  { name: 'GROOVY',    color: '#5fc8ff', at: 0.30 },
+  { name: 'FABULOUS',  color: '#ff8fd0', at: 0.62 },
+  { name: 'LEGENDARY', color: '#ffd94f', at: 0.84 },
+];
+const hypeWrapEl = document.getElementById('hypeWrap');
+const hypeLabelEl = document.getElementById('hypeLabel');
+const hypeFillEl = document.getElementById('hypeFill');
+const Hype = {
+  heat: 0, tier: 0, peak: 0,
+  add(x) { if (Game.state === 'playing') this.heat = Math.min(1, this.heat + x); },
+  dmgMul() { return 1 + this.tier * 0.15; },      // up to +45% at LEGENDARY
+  glitterMul() { return 1 + this.tier * 0.7; },
+};
+
+function updateHype(dt) {
+  // heat bleeds away steadily — a streak is something you keep alive
+  Hype.heat = Math.max(0, Hype.heat - dt * 0.075);
+  // hysteresis: you climb at the threshold but only fall 0.07 below it, so a
+  // tier you earned doesn't strobe on and off while the meter drains
+  let tier = 0;
+  for (let i = HYPE_TIERS.length - 1; i >= 1; i--) {
+    const enter = HYPE_TIERS[i].at;
+    const hold = i <= Hype.tier ? enter - 0.07 : enter;
+    if (Hype.heat >= hold) { tier = i; break; }
+  }
+  if (tier !== Hype.tier) {
+    const rising = tier > Hype.tier;
+    Hype.tier = tier;
+    Hype.peak = Math.max(Hype.peak, tier);
+    SFX.setGroove(tier);
+    if (tier > 0) {
+      const T = HYPE_TIERS[tier];
+      hypeLabelEl.textContent = T.name;
+      hypeLabelEl.style.color = T.color;
+      if (rising) {
+        hypeLabelEl.classList.remove('bump'); void hypeLabelEl.offsetWidth;
+        hypeLabelEl.classList.add('bump');
+        SFX.chime(1.2 + 0.15 * tier);
+        spawnFloatText(Player.pos.clone().add(new THREE.Vector3(0, 3.1, 0)), T.name, T.color);
+        Player._fovPunch = Math.max(Player._fovPunch, 3 + tier);
+      }
+    }
+    hypeWrapEl.classList.toggle('on', tier > 0);
+  }
+  hypeFillEl.style.width = (Hype.heat * 100) + '%';
+  updateDisco(dt);
+}
+
+// the disco rig: a mirrorball on an invisible wire, plus sweeping cones.
+// Built lazily the first time anyone earns it — no cost until it matters.
+let disco = null;
+function buildDisco() {
+  const g = new THREE.Group();
+  const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.85, 1),
+    new THREE.MeshStandardMaterial({ color: 0xdfe8ff, metalness: 1, roughness: 0.12,
+      flatShading: true, emissive: 0x8fa8ff, emissiveIntensity: 0.4 }));
+  g.add(ball);
+  const halo = glowSprite(0xcfe0ff, 4.2, 0.3);
+  g.add(halo);
+  const beams = [];
+  for (let i = 0; i < 7; i++) {
+    const col = new THREE.Color().setHSL(i / 7, 0.95, 0.6);
+    // Narrow spokes, tilted well out from vertical. Width matters: a fat cone
+    // hung above the player swallows the camera, and being *inside* an additive
+    // double-sided cone paints its far wall across the whole screen.
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.5, 18, 8, 1, true),
+      new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.06,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+    cone.position.y = -9;
+    const pivot = new THREE.Group();
+    pivot.add(cone);
+    pivot.rotation.z = 0.78 + Math.random() * 0.22; // ~45°+ out, so it lands on deck, not on the lens
+    pivot.rotation.y = (i / 7) * Math.PI * 2;
+    g.add(pivot);
+    // the light pool where that spoke meets the planks — this is the part
+    // that actually reads as a mirrorball from the player's eyeline
+    const pool = glowSprite(col.getHex(), 3.4, 0.3);
+    pool.material.fog = false;
+    scene.add(pool);
+    beams.push({ pivot, cone, pool, spin: (i % 2 ? 1 : -1) * (0.5 + Math.random() * 0.4) });
+  }
+  g.position.set(Player.pos.x, 22, Player.pos.z);
+  g.visible = false;
+  scene.add(g);
+  disco = { g, ball, halo, beams, y: 22, bloomBase: bloom.strength };
+  return disco;
+}
+function updateDisco(dt) {
+  const tier = Hype.tier;
+  if (!disco) {
+    if (tier <= 0) return;
+    buildDisco();
+  }
+  const want = tier > 0 ? 8.4 : 22;
+  disco.y += (want - disco.y) * (1 - Math.pow(0.12, dt));
+  disco.g.visible = disco.y < 20.5;
+  if (!disco.g.visible) {
+    bloom.strength = disco.bloomBase;
+    for (const b of disco.beams) b.pool.visible = false;
+    return;
+  }
+  // the ball hangs over the party, drifting after the player rather than
+  // welded to him — it reads as a fixture, not a hat
+  disco.g.position.x += (Player.pos.x - disco.g.position.x) * (1 - Math.pow(0.2, dt));
+  disco.g.position.z += (Player.pos.z - disco.g.position.z) * (1 - Math.pow(0.2, dt));
+  disco.g.position.y = disco.y;
+  const lit = THREE.MathUtils.clamp((20.5 - disco.y) / 12, 0, 1);
+  disco.ball.rotation.y += dt * 1.1;
+  disco.ball.material.emissiveIntensity = 0.35 + 0.25 * Math.sin(clock.elapsedTime * 6);
+  disco.halo.material.opacity = 0.3 * lit;
+  for (const b of disco.beams) {
+    if (!Settings.reduceMotion) {
+      b.pivot.rotation.y += dt * b.spin;
+      b.pivot.rotation.z = 0.86 + Math.sin(clock.elapsedTime * 0.7 + b.spin * 3) * 0.16;
+    }
+    b.cone.material.opacity = (0.018 + 0.016 * tier) * lit;
+    // park the pool where this spoke strikes the deck
+    const reach = disco.y * Math.tan(b.pivot.rotation.z);
+    b.pool.position.set(disco.g.position.x + Math.sin(b.pivot.rotation.y) * reach, 0.06,
+                        disco.g.position.z + Math.cos(b.pivot.rotation.y) * reach);
+    b.pool.material.opacity = (0.1 + 0.075 * tier) * lit;
+    b.pool.visible = true;
+  }
+  bloom.strength = disco.bloomBase + 0.14 * tier * lit; // the whole scene glows harder
 }
 
 // ---- sixth-sense ping (C / PING): the horn flashes and the nearest
@@ -4120,10 +4329,12 @@ function buildLevel() {
   const zombieSpots = [
     [0, -30], [-4, -42], [4, -50, 'runner'], [-3, -58],
     [5, -66], [-5, -72], [0, -78, 'runner'], [3, -84],
-    [-7, -98], [6, -112, 'runner'], [-8, -130], [4, -148],
-    [-3, -168, 'runner'], [7, -188],
+    [-7, -98], [6, -112, 'runner'], [-8, -130, 'brute'], [4, -148],
+    [-3, -168, 'runner'], [7, -188, 'brute'],
   ];
-  for (const [x, z, kind] of zombieSpots) zombies.push(new Zombie(x, z, { runner: kind === 'runner' }));
+  for (const [x, z, kind] of zombieSpots) {
+    zombies.push(new Zombie(x, z, { runner: kind === 'runner', brute: kind === 'brute' }));
+  }
   Game.totalZombies = zombies.length;
 
   updateObjectiveHUD();
@@ -4242,7 +4453,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
-    updateCompass(); updateThreatMusic(dt);
+    updateCompass(); updateThreatMusic(dt); updateHype(dt);
+    if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
   },
   physBodies, cars, civilians2: civilians, setWideNozzle: v => { WIDE_NOZZLE = v; },
   // wharf-toys hooks (BUILD 2): the interactive layer, reachable by playtests
@@ -4252,6 +4464,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   camBlockers, DIFF, DIFFICULTIES, updateCompass, compassPool, dmgArcs,
   screenBearing, showDamageFrom, updateDamageArcs, damagePlayer,
   getThreat: () => threatLevel, vignette, updateZombies,
+  Hype, HYPE_TIERS, updateHype, getDisco: () => disco, bloom,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -4313,6 +4526,7 @@ function tick() {
     updateWharfToys(dt);
     updateCompass();
     updateThreatMusic(dt);
+    updateHype(dt);
     updateShard(dt, t);
     updateStreetlights(dt);
     updateAudioCues(dt);
