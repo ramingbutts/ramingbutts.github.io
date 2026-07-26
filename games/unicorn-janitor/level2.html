@@ -153,6 +153,25 @@
   @keyframes wavepop { 0% { opacity:0; transform:translate(-50%,-50%) scale(2.2); }
                        18% { opacity:1; transform:translate(-50%,-50%) scale(1); }
                        75% { opacity:1; } 100% { opacity:0; } }
+  /* ---- perk picker between waves (BUILD 9) ---- */
+  #perkPick { position:fixed; inset:0; z-index:19; display:none; flex-direction:column;
+              align-items:center; justify-content:center; gap:16px;
+              background:radial-gradient(ellipse at center, rgba(30,20,50,.72), rgba(10,8,20,.9)); }
+  #perkPick.show { display:flex; }
+  #perkTitle { color:#ffd94f; font-size:clamp(18px,3.4vw,30px); font-weight:800; letter-spacing:5px;
+               text-shadow:0 0 20px rgba(255,217,79,.6); }
+  #perkSub { color:#aeb8d8; font-size:12px; letter-spacing:2px; margin-top:-8px; }
+  #perkRow { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; }
+  .perkCard { width:min(230px,80vw); background:rgba(28,18,52,.94); border:1px solid rgba(255,255,255,.2);
+              border-radius:16px; padding:16px; cursor:pointer; text-align:center;
+              transition:transform .12s, border-color .12s; }
+  .perkCard:hover { transform:translateY(-5px); border-color:#ffd94f; }
+  .perkCard .ico { font-size:34px; }
+  .perkCard h3 { margin:6px 0 4px; font-size:16px; color:#fff; letter-spacing:1px; }
+  .perkCard p { margin:0; font-size:12px; color:#aeb8d8; line-height:1.5; }
+  .perkCard .key { display:inline-block; margin-top:9px; font-size:10px; letter-spacing:2px;
+                   color:#ffd94f; border:1px solid rgba(255,217,79,.5); border-radius:10px; padding:2px 9px; }
+  #perkOwned { color:#8e9bbd; font-size:11px; letter-spacing:1px; max-width:min(560px,86vw); text-align:center; }
   /* ---- boss bar: the Gunk Kraken's core ---- */
   #bossBar { position:absolute; left:50%; bottom:96px; transform:translateX(-50%);
              width:min(560px,80vw); text-align:center; }
@@ -281,7 +300,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 8</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 9</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -330,6 +349,13 @@
   <div class="setRow"><span>CHARACTERS</span><button class="tog" id="setModels">3D</button></div>
   <button id="pauseResume" style="margin-top:20px;">RESUME</button>
   <button id="pauseRestart" style="margin-top:10px; font-size:14px; padding:9px 24px; background:rgba(255,255,255,.14); color:#fff; box-shadow:none; animation:none;">RESTART LEVEL</button>
+</div>
+
+<div id="perkPick">
+  <div id="perkTitle">CHOOSE AN UPGRADE</div>
+  <div id="perkSub">1 · 2 · 3 or click</div>
+  <div id="perkRow"></div>
+  <div id="perkOwned"></div>
 </div>
 
 <div id="deadOverlay" class="overlay hidden">

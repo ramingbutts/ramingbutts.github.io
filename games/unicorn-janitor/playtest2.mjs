@@ -364,8 +364,8 @@ ok('talents/allocation panel opens and closes', panel.found && panel.opened && p
 await page.evaluate(() => window.__QA_CLEAN());
 // L2a. WHARF — the 3x pier: 5 sea lions, 20 piles, 14 zombies, 2 bells
 const wharf = await page.evaluate(() => ({
-  civs: window.UJ.civilians.length,
-  piles: window.UJ.piles.length,
+  civs: window.UJ.Game.layoutStats.civs,
+  piles: window.UJ.Game.layoutStats.piles,
   zombies: window.UJ.CFG.zombie.count,
   bells: window.UJ.bells.length,
   playLen: window.UJ.CFG.bridge.zStart - window.UJ.CFG.bridge.playZEnd,
@@ -587,7 +587,7 @@ ok('beam graze: an off-aim beam bends into the nearby zombie and stuns it',
 // B3c. RUNNERS — layout ships 2 red-eyed runners; a runner outpaces a normal zombie
 const runners = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
-  const layoutRunners = UJ.getZombies().filter(z => z.runner);
+  const layoutRunners = { length: UJ.Game.layoutStats.runners };
   const zN = UJ.spawnZombieAt(P.pos.x - 2, P.pos.z - 12);
   const zR = UJ.spawnZombieAt(P.pos.x + 2, P.pos.z - 12, { runner: true });
   const n0 = zN.group.position.clone(), r0 = zR.group.position.clone();
@@ -989,7 +989,7 @@ await page.evaluate(() => window.__QA_CLEAN());
 // B6e. BRUTE — a heavy that shrugs off the jet entirely
 const brute = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
-  const layout = UJ.getZombies().filter(z => z.brute);
+  const layout = { length: UJ.Game.layoutStats.brutes };
   const b = UJ.spawnZombieAt(P.pos.x, P.pos.z - 8, { brute: true });
   const n = UJ.spawnZombieAt(P.pos.x + 4, P.pos.z - 8);
   const bz = b.group.position.z, nz = n.group.position.z;
@@ -1008,6 +1008,79 @@ ok('brute: bigger, tougher, slower, and too heavy for the jet to shove',
    brute.layout === brute.cfgBrutes && brute.goo === brute.cfgGoo && brute.scale > 1.3 &&
    brute.slower && brute.bruteShoved === 0 && brute.normalShoved > 0.5,
    `${brute.layout} in the layout · ${brute.goo} goo · ${brute.scale}× scale · knockback ${brute.bruteShoved.toFixed(2)}m vs a normal zombie's ${brute.normalShoved.toFixed(2)}m`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B9a. TERRAIN — cargo containers are solid ground you can stand on
+const terrain = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const c = UJ.platforms.find(p => p.y > 2);
+  const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2;
+  const onTop = UJ.groundHeightAt(cx, cz, 10);        // falling from above
+  const beside = UJ.groundHeightAt(cx + 9, cz, 10);   // off to the side
+  const fromBelow = UJ.groundHeightAt(cx, cz, 0.2);   // jumping up through it
+  // and actually land on it
+  P.pos.set(cx, c.y + 4, cz); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const rest = { y: +P.pos.y.toFixed(2), onGround: P.onGround };
+  P.pos.set(0, 0, -30);
+  return { count: UJ.platforms.length, top: c.y, onTop, beside, fromBelow, rest };
+});
+ok('cargo containers are standable terrain, and you pass up through them',
+   terrain.count >= 12 && terrain.onTop === terrain.top && terrain.beside === 0 &&
+   terrain.fromBelow === 0 && Math.abs(terrain.rest.y - terrain.top) < 0.05 && terrain.rest.onGround,
+   `${terrain.count} platforms · ground on top ${terrain.onTop}m, beside ${terrain.beside}m, from below ${terrain.fromBelow}m · Jax settles at ${terrain.rest.y}m`);
+
+// B9b. BOUNCE PADS — landing on one throws you well above a plain jump
+const bounce = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const pad = UJ.bouncePads[0];
+  const apex = (onPad) => {
+    // any leftover movement input would drift Jax off a 1.9m pad during the
+    // fall, so silence the controls before dropping him
+    UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+    UJ.Input.gpX = 0; UJ.Input.gpY = 0;
+    P.pos.set(onPad ? pad.x : pad.x + 9, 1.6, pad.z);
+    P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+    // don't gate on seeing onGround — a pad clears that flag in the same
+    // frame it fires, so the rebound would never be recorded
+    for (let i = 0; i < 14; i++) UJ.step(0.03);   // fall and make contact
+    let peak = 0;
+    for (let i = 0; i < 80; i++) { UJ.step(0.03); peak = Math.max(peak, P.pos.y); }
+    return { peak, drift: +Math.hypot(P.pos.x - pad.x, P.pos.z - pad.z).toFixed(2) };
+  };
+  const off = apex(false), on = apex(true);
+  P.pos.set(0, 0, -30);
+  return { off, on, squashed: pad.t > 0 };
+});
+ok('bounce pads launch Jax far higher than the deck does',
+   bounce.on.peak > bounce.off.peak + 3 && bounce.on.peak > 4,
+   `rebound apex — plain deck ${bounce.off.peak.toFixed(2)}m vs pad ${bounce.on.peak.toFixed(2)}m (drift on pad ${bounce.on.drift}m)`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B9c. PERKS — upgrades compound and are read at the call site
+const perks = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Perks.reset();
+  const base = { hose: UJ.Perks.hoseMul(), jump: UJ.Perks.jumpMul(), drain: UJ.Perks.drainMul() };
+  UJ.Perks.taken = { power: 2, boots: 1, tank: 1 };
+  const buffed = { hose: UJ.Perks.hoseMul(), jump: UJ.Perks.jumpMul(), drain: UJ.Perks.drainMul() };
+  // and prove the jump one actually reaches higher in the sim
+  const apex = () => {
+    P.pos.set(0, 0, -30); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+    UJ.Input.jumpPressed = true;
+    let peak = 0;
+    for (let i = 0; i < 60; i++) { UJ.step(0.03); peak = Math.max(peak, P.pos.y); }
+    return peak;
+  };
+  const highJump = apex();
+  UJ.Perks.reset();
+  const plainJump = apex();
+  return { base, buffed, highJump, plainJump };
+});
+ok('perks stack and take effect at the call site',
+   perks.base.hose === 1 && Math.abs(perks.buffed.hose - 1.44) < 0.001 &&
+   perks.buffed.jump > 1 && perks.buffed.drain < 1 && perks.highJump > perks.plainJump + 0.2,
+   `hose ×${perks.base.hose} → ×${perks.buffed.hose.toFixed(2)} with 2 stacks · jump apex ${perks.plainJump.toFixed(2)}m → ${perks.highJump.toFixed(2)}m with SPRING BOOTS`);
 
 await page.evaluate(() => window.__QA_CLEAN());
 // B8a. NOZZLES — R cycles three genuinely different tools
@@ -1133,14 +1206,24 @@ const wave = await page.evaluate(() => {
   UJ.piles.forEach(p => { p.alive = false; });
   const before = UJ.Rush.score, hpBefore = UJ.Player.hp;
   UJ.step(0.03);
+  // clearing a wave hands you an upgrade pick, which freezes the world
+  const picker = { shown: document.getElementById('perkPick').classList.contains('show'),
+                   offered: UJ.getPerkOffer().length, frozen: UJ.Game.state === 'perks' };
+  const chosen = UJ.getPerkOffer()[0];
+  UJ.takePerk(0);
+  const after = { rank: UJ.Perks.rank(chosen.key), state: UJ.Game.state,
+                  hidden: !document.getElementById('perkPick').classList.contains('show') };
   return { w1, w7, cleared: UJ.Rush.cleared, breather: UJ.Rush.breather,
-           bonus: UJ.Rush.score - before, healed: UJ.Player.hp > hpBefore };
+           bonus: UJ.Rush.score - before, healed: UJ.Player.hp > hpBefore,
+           picker, after, name: chosen.name };
 });
-ok('waves scale with depth and clearing one pays a bonus and a breather',
+ok('waves scale with depth and clearing one pays a bonus, a breather and an upgrade',
    wave.w1.wave === 1 && wave.w1.spawned >= 4 && wave.w1.piles >= 2 &&
    wave.w7.spawned > wave.w1.spawned && (wave.w7.brutes + wave.w7.runners) > 0 &&
-   wave.cleared && wave.breather > 4 && wave.bonus > 0 && wave.healed,
-   `wave 1: ${wave.w1.spawned} enemies → wave 7: ${wave.w7.spawned} (${wave.w7.runners} runners, ${wave.w7.brutes} brutes) · clear bonus +${wave.bonus}, ${wave.breather.toFixed(0)}s breather`);
+   wave.cleared && wave.breather > 4 && wave.bonus > 0 && wave.healed &&
+   wave.picker.shown && wave.picker.offered === 3 && wave.picker.frozen &&
+   wave.after.rank === 1 && wave.after.state === 'playing' && wave.after.hidden,
+   `wave 1: ${wave.w1.spawned} enemies → wave 7: ${wave.w7.spawned} (${wave.w7.runners} runners, ${wave.w7.brutes} brutes) · +${wave.bonus} and 3 upgrades offered → took ${wave.name}`);
 
 // B8f. Score is multiplied by the hype tier — style literally pays
 const scoring = await page.evaluate(() => {

@@ -799,3 +799,63 @@ Two things this hid, and both are the real lesson:
 
 `HoseFX.lastHits` / `lastMode` are now written every spraying frame
 precisely so this is one `evaluate()` away next time.
+
+## Performance, terrain and perks (BUILD 9)
+
+The player reported the game "not working well". Eight builds of content
+had gone in with no cost measurement, so the first job was numbers, not
+features. Deterministic probe (fixed viewpoint, fixed entity state):
+
+| | BUILD 8 | after |
+|---|---|---|
+| draw calls, story | 1408 | 959 |
+| draw calls, rush wave 15 | 2677 | 1591 |
+| triangles, rush | 125k | 82k |
+| `zombies` array after 15 waves | 164 entries | 0 |
+| sim cost, long session | 4.4 ms/frame | 1.9 ms/frame |
+
+What was actually wrong, in order of severity:
+1. **Nothing was ever reaped.** `zombies` and `piles` only grew. Every
+   consumer — `updateZombies`, the compass, the threat scan, and the
+   **O(n²) crowd separation** — paid for every corpse ever created, so a
+   long run got progressively slower. `reapEntities()` sweeps once a
+   frame, deliberately *outside* any loop that might mutate mid-iteration.
+2. **No distance culling.** A zombie is ~30 meshes and the fog eats
+   everything past ~50 m anyway. `CULL2` hides them (and distant piles,
+   which also skip their jelly springs). Note hiding a *group* does not
+   stop raycasts — that reads `material.visible` — and the cull distance
+   sits well beyond the longest nozzle reach, so cleaning is unaffected.
+3. **Unbounded bursts.** A wiped swarm dumped ~600 ragdoll bodies into
+   one frame; `spawnChunkBurst` now tapers and then refuses past a cap.
+4. **Rush spawned without a live cap**, so deep waves were a framerate
+   test rather than a threat. Capped at 26 concurrent; depth now buys
+   *composition* (more brutes/runners) instead of raw count.
+
+**Instancing has a trap worth recording.** ~230 rail posts, ropes and
+pilings looked like an obvious InstancedMesh win. One instanced mesh per
+family made things *worse*: an InstancedMesh spanning 243 m has one
+bounding volume, so it can never frustum-cull, and the whole pier drew
+even facing away. Chunking by z (`CHUNK = 55`) gets both — one call per
+chunk, and chunks cull individually.
+
+**Terrain.** The pier was a flat corridor, which is why the jet boost had
+nowhere to go. `platforms` is a flat list of AABB tops with
+`groundHeightAt(x, z, fromY)`; `fromY` is the pre-fall height, which is
+what lets you jump up *through* a container instead of snapping onto its
+roof. Bounce pads convert a landing straight back into height, and chain
+with the jet into a rooftop route.
+
+**Perks** are the run-scoped upgrade layer (talents are the slow drip;
+this is the fast one). Three offered per wave clear, read at the call
+site exactly like the talent multipliers. `offerPerks()` sets
+`Game.state = 'perks'` to freeze the world — which is correct, and which
+immediately broke every later test in the suite, because a frozen game
+no-ops `step()`. Any modal state has to be dismissed by the harness.
+
+Two harness lessons from this build:
+- **Assertions about the *layout* can't read live arrays** once those
+  arrays shed dead entries. `Game.layoutStats` snapshots the level as
+  built; layout checks read that.
+- A check that waits to observe `onGround` before measuring a rebound
+  will never fire on a bounce pad — the pad clears that flag in the same
+  frame it launches. The pad worked; the test's gate didn't.
