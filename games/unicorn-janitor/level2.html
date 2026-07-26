@@ -135,6 +135,24 @@
              border:1px solid rgba(255,255,255,.28); overflow:hidden; }
   #hypeFill { height:100%; width:0%; border-radius:4px; transition:width .12s;
               background:linear-gradient(90deg,#5fc8ff,#ff8fd0,#ffd94f); }
+  /* ---- nozzle selector + endless-mode HUD (BUILD 8) ---- */
+  #nozzleRow { margin-top:6px; display:flex; align-items:center; gap:7px; }
+  #nozzleName { font-size:11px; font-weight:800; letter-spacing:2px; color:#9fdcff;
+                text-shadow:0 1px 3px #000; }
+  #nozzleHint { font-size:9px; letter-spacing:1px; color:#8e9bbd; text-shadow:0 1px 3px #000; }
+  #rushHud { position:absolute; top:14px; right:14px; text-align:right; color:#fff;
+             text-shadow:0 1px 3px #000; line-height:1.5; }
+  #rushWave { font-size:15px; font-weight:800; letter-spacing:3px; color:#ffd94f; }
+  #rushScore { font-size:22px; font-weight:800; font-variant-numeric:tabular-nums; }
+  #rushBest { font-size:10px; letter-spacing:1px; color:#aeb8d8; }
+  #waveBanner { position:absolute; left:50%; top:34%; transform:translate(-50%,-50%);
+                font-size:clamp(26px,6vw,56px); font-weight:800; letter-spacing:6px;
+                color:#ffd94f; text-shadow:0 0 26px rgba(255,217,79,.75), 0 3px 12px #000;
+                opacity:0; pointer-events:none; }
+  #waveBanner.show { animation:wavepop 1.9s ease-out; }
+  @keyframes wavepop { 0% { opacity:0; transform:translate(-50%,-50%) scale(2.2); }
+                       18% { opacity:1; transform:translate(-50%,-50%) scale(1); }
+                       75% { opacity:1; } 100% { opacity:0; } }
   /* ---- boss bar: the Gunk Kraken's core ---- */
   #bossBar { position:absolute; left:50%; bottom:96px; transform:translateX(-50%);
              width:min(560px,80vw); text-align:center; }
@@ -213,7 +231,14 @@
     <div id="xpWrap"><div id="xpBar"><div id="xpFill"></div></div><div id="lvBadge">LV 1</div></div>
     <div class="meterRow"><span class="mLabel">PSI</span><div class="mBar"><div id="pressureFill" style="background:linear-gradient(90deg,#5fc8ff,#bfe8ff); width:100%"></div></div></div>
     <div class="meterRow"><span class="mLabel">RBW</span><div class="mBar"><div id="rainbowFill" style="background:linear-gradient(90deg,#ff5fa2,#ffd94f,#5fffb0,#5fc8ff); width:0%"></div></div></div>
+    <div id="nozzleRow"><span id="nozzleName">JET</span><span id="nozzleHint">[R] nozzle</span></div>
   </div>
+  <div id="rushHud" class="hidden">
+    <div id="rushWave">WAVE 1</div>
+    <div id="rushScore">0</div>
+    <div id="rushBest">BEST 0</div>
+  </div>
+  <div id="waveBanner"></div>
   <div id="skillBtn">⭐ TALENTS</div>
   <div id="gearBtn">⚙ MENU</div>
   <div id="objectives">
@@ -248,6 +273,7 @@
   <div class="tbtn" id="btnBeam">BEAM</div>
   <div class="tbtn" id="btnNova" style="right:23vw; bottom:calc(10vh + 84px); width:56px; height:56px; background:rgba(255,217,79,.3); display:none;">NOVA</div>
   <div class="tbtn" id="btnPing" style="right:8vw; bottom:calc(8vh + 176px); width:48px; height:48px; background:rgba(159,220,255,.25); font-size:11px;">PING</div>
+  <div class="tbtn" id="btnNozzle" style="right:23vw; bottom:calc(8vh + 176px); width:48px; height:48px; background:rgba(197,143,255,.25); font-size:10px;">NOZ</div>
   <div class="tbtn" id="btnSpray">SPRAY</div>
 </div>
 
@@ -255,7 +281,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 7</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 8</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -268,6 +294,8 @@
     <button class="tog" id="startDiff">NORMAL</button>
   </div>
   <button id="startBtn" disabled>LOADING…</button>
+  <button id="rushBtn" style="margin-top:12px; font-size:clamp(13px,2.2vw,16px); padding:10px 26px;
+    background:linear-gradient(90deg,#5fc8ff,#c58fff); animation:none;">🌊 WHARF RUSH — ENDLESS</button>
 </div>
 
 <div id="winOverlay" class="overlay hidden">
@@ -307,6 +335,7 @@
 <div id="deadOverlay" class="overlay hidden">
   <h1 style="filter:none;background:none;color:#ff6f8a;">SLIMED…</h1>
   <h2>The poop zombies hugged you a little too hard.</h2>
+  <div class="stats" id="rushResult" style="margin-bottom:14px;"></div>
   <button id="retryBtn">TRY AGAIN</button>
 </div>
 

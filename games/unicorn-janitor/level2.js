@@ -51,6 +51,33 @@ const DIFF = {
 
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
+// BUILD 8 — three ways to point the same water. Every field is a multiplier
+// on the base hose numbers so tuning stays in one place, and the modes are
+// genuinely different verbs rather than damage tiers: JET is the precise
+// default, BLAST is a short shotgun cone for crowds, LANCE is a long
+// piercing stream that hits everything lined up behind the first target.
+const NOZZLES = [
+  { key: 'jet',   name: 'JET',   dps: 1,    range: 20, drain: 1,    spread: 0.9,  speed: 34, rate: 1,    color: '#9fdcff' },
+  { key: 'blast', name: 'BLAST', dps: 0.6,  range: 9,  drain: 1.55, spread: 6.5,  speed: 19, rate: 1.25, color: '#ffd94f' },
+  { key: 'lance', name: 'LANCE', dps: 1.3,  range: 30, drain: 1.9,  spread: 0.22, speed: 54, rate: 0.8,  color: '#c58fff' },
+];
+let nozzleIdx = 0;
+const Nozzle = () => NOZZLES[nozzleIdx];
+const BLAST_COS = Math.cos(0.75); // ~43° half-angle, measured from the chest (see updateHose)
+function applyNozzleUI() {
+  const n = Nozzle();
+  const el = document.getElementById('nozzleName');
+  if (el) { el.textContent = n.name; el.style.color = n.color; }
+}
+function cycleNozzle(dir = 1) {
+  nozzleIdx = (nozzleIdx + dir + NOZZLES.length) % NOZZLES.length;
+  const n = Nozzle();
+  applyNozzleUI();
+  SFX.step(0);
+  showToast(`💦 Nozzle: ${n.name}` + (n.key === 'blast' ? ' — short, wide, shoves hard'
+    : n.key === 'lance' ? ' — long range, pierces everything in line' : ' — balanced'));
+}
+
 // Level-2 reward, persisted across sessions: once the wharf has been cleared
 // the hose fan widens (see updateHose) — near-misses along the jet still clean.
 let WIDE_NOZZLE = false;
@@ -412,6 +439,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyC') Input.pingPressed = true;
   if (e.code === 'KeyT') toggleSkillPanel();
   if (e.code === 'KeyR' && e.shiftKey) cycleModelYaw();
+  else if (e.code === 'KeyR') cycleNozzle(1);
   // live muzzle placement: [ ] move the jet origin back/forward, ; ' down/up
   if (e.code === 'BracketRight') nudgeNozzle('fwd', 0.15);
   if (e.code === 'BracketLeft') nudgeNozzle('fwd', -0.15);
@@ -1278,6 +1306,7 @@ class PoopPile {
     Game.pilesCleaned++;
     Meters.rainbow = Math.min(100, Meters.rainbow + 25); // big charge per pile
     gainXP(25, this.group.position);
+    Rush.award(40, this.group.position);
     Tutorial.fire('pileCleaned');
     updateObjectiveHUD();
     maybeTriggerClimax();
@@ -1422,6 +1451,7 @@ class Grime {
     spawnWetPatch(this.mesh.position);
     SFX.chime(0.9);
     gainXP(10, this.mesh.position);
+    Rush.award(25, this.mesh.position);
     const i = cleanTargets.indexOf(this.mesh);
     if (i >= 0) cleanTargets.splice(i, 1);
     scene.remove(this.mesh);
@@ -1911,6 +1941,7 @@ class Zombie {
     Game.zombiesDefeated++;
     RPG.kills++;
     gainXP(this.brute ? 110 : 50, this.group.position);
+    Rush.award(this.brute ? 250 : this.runner ? 140 : 100, this.group.position);
     Tutorial.fire('zombieDefeated');
     updateObjectiveHUD();
     checkWin();
@@ -2659,6 +2690,131 @@ class GunkKraken {
     }
     bossFillEl.style.width = Math.max(0, this.goo / BOSS.coreGoo * 100) + '%';
     bossStateEl.textContent = this.exposed > 0 ? 'CORE EXPOSED' : 'ARMOURED — BREAK A TENTACLE';
+  }
+}
+
+/* =====================================================================
+   9.95 WHARF RUSH (BUILD 8) — the endless mode. The story run is one and
+        done; this is the reason to come back. Same pier, no objectives,
+        escalating waves, and a score that only climbs while you keep the
+        hype alive. Dying ends the run and banks a high score.
+   ===================================================================== */
+const rushHudEl = document.getElementById('rushHud');
+const rushWaveEl = document.getElementById('rushWave');
+const rushScoreEl = document.getElementById('rushScore');
+const rushBestEl = document.getElementById('rushBest');
+const waveBannerEl = document.getElementById('waveBanner');
+
+const Rush = {
+  on: false, wave: 0, score: 0, best: 0, breather: 0, cleared: false,
+  load() { try { this.best = Number(localStorage.getItem('uj_l2_rush_best')) || 0; } catch (e) {} },
+  save() { try { localStorage.setItem('uj_l2_rush_best', String(Math.max(this.best, this.score))); } catch (e) {} },
+  // score is multiplied by the hype tier, so playing stylishly is worth more
+  // than playing safely — the two systems are meant to feed each other
+  award(points, pos) {
+    if (!this.on) return;
+    const mult = 1 + Hype.tier * 0.5;
+    const got = Math.round(points * mult);
+    this.score += got;
+    rushScoreEl.textContent = this.score.toLocaleString();
+    if (pos && Hype.tier > 0) spawnFloatText(pos.clone().setY(pos.y + 2.2), `+${got}`, HYPE_TIERS[Hype.tier].color);
+  },
+};
+Rush.load();
+
+function banner(text) {
+  waveBannerEl.textContent = text;
+  waveBannerEl.classList.remove('show'); void waveBannerEl.offsetWidth;
+  waveBannerEl.classList.add('show');
+}
+
+// strip the story layer out so the pier becomes a pure arena
+function clearStoryContent() {
+  for (const p of piles) if (p.alive) { p.alive = false; removeCleanTargets(p.group); scene.remove(p.group); }
+  piles.length = 0;
+  for (const z of zombies) if (z.alive) { z.alive = false; removeCleanTargets(z.group); scene.remove(z.group); }
+  zombies.length = 0;
+  for (const c of civilians) if (!c.resolved) { c.resolved = true; removeCleanTargets(c.group); scene.remove(c.group); }
+  civilians.length = 0;
+  Game.totalPiles = 0; Game.totalZombies = 0; Game.civTotal = 0;
+  Game.pilesCleaned = 0; Game.zombiesDefeated = 0; Game.civResolved = 0;
+}
+
+function startRush() {
+  Rush.on = true;
+  Rush.wave = 0; Rush.score = 0; Rush.breather = 3.5; Rush.cleared = false;
+  clearStoryContent();
+  Player.hasHorn = true;
+  Player.horn && (Player.horn.visible = true);
+  Player.hornGlow && (Player.hornGlow.visible = true);
+  if (Player.hornLight) Player.hornLight.intensity = 3;
+  if (hornPickup) { scene.remove(hornPickup); hornPickup = null; }
+  document.getElementById('objectives').classList.add('hidden');
+  rushHudEl.classList.remove('hidden');
+  rushScoreEl.textContent = '0';
+  rushBestEl.textContent = 'BEST ' + Rush.best.toLocaleString();
+  rushWaveEl.textContent = 'GET READY';
+  SFX.setMusicMood('hero');
+  showToast('🌊 WHARF RUSH — survive the tide. Style pays double.');
+}
+
+// a wave is a mix that shifts with depth: shamblers, then runners, then
+// brutes, with a swarm every fifth wave
+function startWave() {
+  Rush.wave++;
+  Rush.cleared = false;
+  const w = Rush.wave;
+  const swarm = w % 5 === 0;
+  const count = Math.min(22, 3 + Math.floor(w * 1.35)) * (swarm ? 2 : 1);
+  const runnerFrom = 2, bruteFrom = 4;
+  for (let i = 0; i < count; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 24 + Math.random() * 20;
+    const x = THREE.MathUtils.clamp(Player.pos.x + Math.sin(ang) * dist,
+      -(CFG.bridge.playHalfW - 1.5), CFG.bridge.playHalfW - 1.5);
+    const z = THREE.MathUtils.clamp(Player.pos.z + Math.cos(ang) * dist,
+      CFG.bridge.playZEnd + 2, CFG.bridge.zStart - 4);
+    const roll = Math.random();
+    const brute = w >= bruteFrom && roll < 0.12 + w * 0.012;
+    const runner = !brute && w >= runnerFrom && roll < 0.45;
+    const z2 = new Zombie(x, z, { runner, brute });
+    z2.setState('chase');
+    z2.heading = Math.atan2(Player.pos.x - x, Player.pos.z - z);
+    zombies.push(z2);
+  }
+  // a little filth to scrub for points and hype fuel
+  for (let i = 0; i < 2 + Math.floor(w / 2); i++) {
+    const x = (Math.random() - 0.5) * (CFG.bridge.playHalfW * 1.7);
+    const z = THREE.MathUtils.clamp(Player.pos.z + (Math.random() - 0.5) * 44,
+      CFG.bridge.playZEnd + 2, CFG.bridge.zStart - 4);
+    piles.push(new PoopPile(x, z, 0.85 + Math.random() * 0.5));
+  }
+  rushWaveEl.textContent = 'WAVE ' + w;
+  rushScoreEl.textContent = Rush.score.toLocaleString(); // keep the readout honest between awards
+  banner(swarm ? `WAVE ${w} · SWARM!` : `WAVE ${w}`);
+  SFX.fanfare();
+  Player.shake = Math.max(Player.shake, swarm ? 0.4 : 0.2);
+}
+
+function updateRush(dt) {
+  if (!Rush.on || Game.state !== 'playing') return;
+  if (Rush.breather > 0) {
+    Rush.breather -= dt;
+    if (Rush.breather <= 0) startWave();
+    return;
+  }
+  const liveZ = zombies.some(z => z.alive);
+  const livePiles = piles.some(p => p.alive);
+  if (!liveZ && !livePiles && !Rush.cleared) {
+    Rush.cleared = true;
+    Rush.breather = 5;
+    Rush.award(200 * Rush.wave, Player.pos.clone().setY(1.5));
+    Player.hp = Math.min(100, Player.hp + 14); // a breath, not a full heal
+    hpFill.style.width = Player.hp + '%';
+    Meters.pressure = 100;
+    rushWaveEl.textContent = 'WAVE ' + Rush.wave + ' CLEAR';
+    banner('WAVE CLEAR');
+    showToast(`✅ Wave ${Rush.wave} down · +${200 * Rush.wave} · next tide in 5s`);
   }
 }
 
@@ -3517,7 +3673,7 @@ function updateHose(dt) {
   if (pressureLocked && Meters.pressure > 25) pressureLocked = false;
   const spraying = wantSpray && !pressureLocked && Meters.pressure > 0;
   if (spraying) {
-    Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * (1 - 0.08 * RPG.ranks.power) * dt);
+    Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * Nozzle().drain * (1 - 0.08 * RPG.ranks.power) * dt);
     if (Meters.pressure <= 0) { pressureLocked = true; Tutorial.fire('pressureEmpty'); }
   } else {
     Meters.pressure = Math.min(100, Meters.pressure + PRESSURE_REGEN * dt);
@@ -3537,7 +3693,7 @@ function updateHose(dt) {
     HoseFX.muzzle.position.copy(nozzle);
     HoseFX.muzzle.material.opacity = 0.5 + 0.4 * Math.random(); // flicker at the barrel
     HoseFX.muzzle.scale.setScalar(0.6 + 0.25 * Math.random());
-    sprayAccum += CFG.hose.spawnRate * dt;
+    sprayAccum += CFG.hose.spawnRate * Nozzle().rate * dt;
     while (sprayAccum >= 1) {
       sprayAccum -= 1;
       const i = HoseFX.idx = (HoseFX.idx + 1) % HoseFX.N;
@@ -3545,8 +3701,8 @@ function updateHose(dt) {
       HoseFX.pos[i * 3] = nozzle.x + Player.aim.x * 0.2;
       HoseFX.pos[i * 3 + 1] = nozzle.y + Player.aim.y * 0.2;
       HoseFX.pos[i * 3 + 2] = nozzle.z + Player.aim.z * 0.2;
-      const spread = 0.9; // tight cone → high pressure
-      HoseFX.vel[i].copy(Player.aim).multiplyScalar(CFG.hose.jetSpeed)
+      const spread = Nozzle().spread; // tight for JET/LANCE, blooming for BLAST
+      HoseFX.vel[i].copy(Player.aim).multiplyScalar(Nozzle().speed)
         .add(_v2.set((Math.random() - 0.5) * spread, (Math.random() - 0.4) * spread, (Math.random() - 0.5) * spread));
       HoseFX.life[i] = 0.6;
     }
@@ -3567,31 +3723,77 @@ function updateHose(dt) {
     Player._boosting = Math.max(0, (Player._boosting || 0) - dt);
 
     // the actual cleaning: ray from the camera through the crosshair
+    const NZ = Nozzle();
+    const power = CFG.hose.dps * NZ.dps * RPG.hoseMul() * Hype.dmgMul();
     raycaster.set(camera.position, Player.aim);
-    raycaster.far = CFG.hose.range + 6; // camera sits ~5.4 behind the player
+    raycaster.far = NZ.range + 6; // camera sits ~5.4 behind the player
     const hits = raycaster.intersectObjects(cleanTargets, false);
+    HoseFX.lastHits = hits.length; HoseFX.lastMode = NZ.key; // debug readout
     // ride the jet light out to whatever the water is hitting (or ~3m ahead)
     HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(Player.aim, 3));
     HoseFX.light.intensity = 1.7 + (Settings.reduceMotion ? 0 : Math.random() * 0.5);
-    if (hits.length) {
+
+    if (NZ.key === 'blast') {
+      // BLAST: a short wide cone. Everything inside it gets scrubbed and
+      // shoved — weak per target, devastating against a pack.
+      let any = false;
+      for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
+        for (const tgt of list) {
+          if (!tgt || tgt.resolved || tgt.alive === false || tgt.falling) continue;
+          // from the chest, not the barrel: the muzzle's forward/right offset
+          // skews the cone enough to drop one flank of a pack
+          _v2.subVectors(tgt.group.position, Player.pos);
+          _v2.y += (tgt.aimY ?? 0.9) - 1.2;
+          const d = _v2.length();
+          if (d > NZ.range || d < 0.01) continue;
+          if (_v2.dot(Player.aim) / d < BLAST_COS) continue;
+          const falloff = 1 - 0.5 * (d / NZ.range);
+          tgt.clean(power * falloff * dt, tgt.group.position);
+          if (tgt.push) { tgt.push(dt * 1.35); if (tgt.stun && Math.random() < dt * 1.6) tgt.stun(0.35); }
+          any = true;
+          if (Math.random() < dt * 7) spawnSplash(tgt.group.position.clone().setY(0.9));
+        }
+      }
+      if (boss && boss.alive) { // the beast is one big target, not in those lists
+        for (const tn of boss.tentacles) {
+          _v2.subVectors(tn.tip, nozzle); const d = _v2.length();
+          if (d < NZ.range && d > 0.01 && _v2.dot(Player.aim) / d >= BLAST_COS) { tn.clean(power * dt, tn.tip); any = true; }
+        }
+      }
+      if (any) { Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); hitPulse = 1; }
+    } else if (NZ.key === 'lance') {
+      // LANCE: pierces. Every distinct entity along the ray takes the hit,
+      // so lining targets up is the skill.
+      const seen = new Set();
+      for (const h of hits) {
+        const e = h.object.userData.entity;
+        if (!e || seen.has(e)) continue;
+        seen.add(e);
+        e.clean(power * dt, h.point);
+        if (Math.random() < dt * 10) spawnSplash(h.point);
+      }
+      if (seen.size) {
+        Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt);
+        hitPulse = 1;
+        if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
+      }
+    } else if (hits.length) {
       const e = hits[0].object.userData.entity;
       if (e) {
-        e.clean(CFG.hose.dps * RPG.hoseMul() * Hype.dmgMul() * dt, hits[0].point);
+        e.clean(power * dt, hits[0].point);
         if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
         if (Math.random() < dt * 14) spawnSplash(hits[0].point);
         if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
       }
-    } else if (Player.aim.y < -0.05) {
-      /* handled below */
     }
     // SOFT AIM ASSIST (BUILD 3): when the ray misses everything, the single
     // nearest target hugging the jet axis (≤ ~0.7m off) still gets scrubbed
     // at 35% power — near-misses feel wet, not dead. Much tighter and weaker
     // than the earned wide-nozzle fan below, which stays the real prize.
     let assisted = null;
-    if (!hits.length) {
+    if (!hits.length && NZ.key === 'jet') {
       let bestOff = CFG.hose.assistOff2;
       for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
         for (const tgt of list) {
@@ -3600,7 +3802,7 @@ function updateHose(dt) {
           _v2.subVectors(gp, camera.position);
           _v2.y += tgt.aimY ?? 0.9; // flat targets (grime, splats) aim at deck level
           const along = _v2.dot(Player.aim);
-          if (along < 1 || along > CFG.hose.range + 4) continue;
+          if (along < 1 || along > NZ.range + 4) continue;
           const off2 = _v2.lengthSq() - along * along;
           if (off2 < bestOff) { bestOff = off2; assisted = tgt; }
         }
@@ -3615,7 +3817,7 @@ function updateHose(dt) {
     // WIDE SPRAY NOZZLE (this level's reward, active once earned): the fan of
     // water also scrubs anything close to the jet axis at 55% power — near
     // misses still clean, and grouped piles melt together.
-    if (WIDE_NOZZLE) {
+    if (WIDE_NOZZLE && NZ.key === 'jet') {
       const seen = hits.length ? hits[0].object.userData.entity : null;
       for (const list of [piles, zombies, civilians, grimes, barrels, gullSplats]) {
         for (const tgt of list) {
@@ -3624,7 +3826,7 @@ function updateHose(dt) {
           _v2.subVectors(gp, camera.position);
           _v2.y += tgt.aimY ?? 0.9; // aim at the target's body, not its feet
           const along = _v2.dot(Player.aim);
-          if (along < 1 || along > CFG.hose.range + 4) continue;
+          if (along < 1 || along > NZ.range + 4) continue;
           if (_v2.lengthSq() - along * along > 3.2) continue; // ~1.8m off-axis fan
           tgt.clean(CFG.hose.dps * RPG.hoseMul() * Hype.dmgMul() * 0.55 * dt, gp);
           if (Math.random() < dt * 6) spawnSplash(gp.clone().setY(0.8));
@@ -3635,7 +3837,7 @@ function updateHose(dt) {
       // no target: the water hits the planks — splash, and leave them slick
       // (wet patches are the zombie slip-trap, see the wharf-toys section)
       const tGround = (camera.position.y - 0.05) / -Player.aim.y;
-      if (tGround < CFG.hose.range + 6) {
+      if (tGround < NZ.range + 6) {
         _v2.copy(camera.position).addScaledVector(Player.aim, tGround);
         if (Math.random() < dt * 10) spawnSplash(_v2);
         if (Math.random() < dt * 5) spawnWetPatch(_v2);
@@ -3647,10 +3849,10 @@ function updateHose(dt) {
       _v2.subVectors(b.g.position, nozzle);
       _v2.y += b.aimY; // offset to the prop's middle (0 for center-origin bodies)
       const along = _v2.dot(Player.aim);
-      if (along < 0.5 || along > CFG.hose.range) continue;
+      if (along < 0.5 || along > NZ.range) continue;
       const off2 = _v2.lengthSq() - along * along; // squared distance off the jet axis
       if (off2 > 0.55) continue;
-      const kick = 30 * (1 - along / CFG.hose.range) * dt / b.mass;
+      const kick = 30 * (1 - along / NZ.range) * dt / b.mass;
       b.vel.addScaledVector(Player.aim, kick);
       b.vel.y += kick * 0.45; // pressure lifts as it shoves
       b.angVel.x += (Math.random() - 0.5) * kick * 6;
@@ -3661,7 +3863,7 @@ function updateHose(dt) {
     for (const c of cars) {
       _v2.subVectors(c.mesh.position, nozzle);
       const along = _v2.dot(Player.aim);
-      if (along < 0.5 || along > CFG.hose.range) continue;
+      if (along < 0.5 || along > NZ.range) continue;
       if (_v2.lengthSq() - along * along > 2.6) continue;
       c.rockV += 4.5 * dt * Math.sign(Math.random() - 0.3);
       if (Math.random() < dt * 8) spawnSplash(c.mesh.position.clone().setY(1));
@@ -4513,6 +4715,7 @@ const Tutorial = {
   },
 
   fire(event) {
+    if (Rush.on) return; // endless mode isn't the tutorial's story
     if (this.fired[event]) return;
     this.fired[event] = true;
     switch (event) {
@@ -4588,7 +4791,7 @@ function updateObjectiveHUD() {
 }
 
 function checkWin() {
-  if (Game.state !== 'playing') return;
+  if (Game.state !== 'playing' || Rush.on) return; // endless mode has no win, only a high score
   if (Game.pilesCleaned >= Game.totalPiles && Game.zombiesDefeated >= Game.totalZombies
       && Game.civResolved >= Game.civTotal) {
     // BUILD 7: a clean wharf is no longer the end of it — it's what wakes
@@ -4648,6 +4851,13 @@ function gameOver() {
   Game.state = 'dead';
   SFX.setSpray(false);
   tutorialEl.style.opacity = 0;
+  if (Rush.on) {
+    const isBest = Rush.score > Rush.best;
+    Rush.save();
+    document.getElementById('rushResult').innerHTML =
+      `Wave ${Rush.wave} · Score <b>${Rush.score.toLocaleString()}</b>` +
+      (isBest ? ' — 🏆 NEW BEST!' : ` · Best ${Rush.best.toLocaleString()}`);
+  }
   document.getElementById('deadOverlay').classList.remove('hidden');
   if (document.exitPointerLock) document.exitPointerLock();
 }
@@ -4714,8 +4924,9 @@ function buildLevel() {
   updateObjectiveHUD();
 }
 
-function startGame() {
+function startGame(mode) {
   SFX.init();
+  if (mode === 'rush') startRush();
   applySettings(); // saved volume/music/quality take effect immediately
   document.getElementById('startOverlay').classList.add('hidden');
   // cinematic fly-in first; crosshair/HUD and the tutorial arrive at its end.
@@ -4728,7 +4939,9 @@ function startGame() {
   if (!IS_TOUCH) canvas.requestPointerLock();
 }
 
-document.getElementById('startBtn').addEventListener('click', startGame);
+document.getElementById('startBtn').addEventListener('click', () => startGame());
+document.getElementById('rushBtn').addEventListener('click', () => startGame('rush'));
+document.getElementById('btnNozzle').addEventListener('click', () => cycleNozzle(1));
 document.getElementById('againBtn').addEventListener('click', () => location.reload());
 document.getElementById('retryBtn').addEventListener('click', () => location.reload());
 skillBtn.addEventListener('click', () => toggleSkillPanel());
@@ -4827,9 +5040,15 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
     updateBoss(dt, t);
+    updateRush(dt);
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
     updateCompass(); updateThreatMusic(dt); updateHype(dt);
     if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
+    // A real frame ends in composer.render(), which is what refreshes every
+    // child's matrixWorld. Without it a headless step() loop raycasts against
+    // stale matrices — freshly spawned meshes simply aren't where they claim
+    // to be, and every ray misses. Mirror the render's side effect.
+    scene.updateMatrixWorld(true);
   },
   physBodies, cars, civilians2: civilians, setWideNozzle: v => { WIDE_NOZZLE = v; },
   // wharf-toys hooks (BUILD 2): the interactive layer, reachable by playtests
@@ -4841,6 +5060,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   getThreat: () => threatLevel, vignette, updateZombies,
   Hype, HYPE_TIERS, updateHype, getDisco: () => disco, bloom,
   BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool,
+  NOZZLES, cycleNozzle, Nozzle, getNozzleIdx: () => nozzleIdx, setNozzle: (i) => { nozzleIdx = i; applyNozzleUI(); },
+  Rush, startRush, startWave, updateRush, clearStoryContent,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -4901,6 +5122,7 @@ function tick() {
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
     updateBoss(dt, t);
+    updateRush(dt);
     updateCompass();
     updateThreatMusic(dt);
     updateHype(dt);

@@ -745,3 +745,57 @@ Testing: the boss checks run **last**, because the final one wins the
 level and `step()` deliberately stops advancing afterwards. And the win
 overlay is revealed on a 1.4 s `setTimeout` so the kill can play out —
 assert it with `waitForFunction`, not synchronously.
+
+## Nozzles + endless mode (BUILD 8)
+
+Two additions aimed at the game's remaining shape problems: the hose only
+ever did one thing, and the run was strictly one-and-done.
+
+**Three nozzles** (`NOZZLES`, cycled with R / the NOZ touch button). Every
+field is a multiplier on the base hose numbers so tuning stays in one
+place, and they're different *verbs*, not damage tiers: **JET** is the
+precise default (and the only one that gets the aim assist and the earned
+wide-nozzle fan — those are jet-flavoured, so gating them keeps each mode
+distinct), **BLAST** is a short wide cone for packs, **LANCE** is a long
+piercing stream that damages every distinct entity along the ray.
+
+Two tuning lessons, both found by a check failing rather than by reading:
+- BLAST's cone was measured **from the muzzle**, which sits forward and
+  right of the player — enough asymmetry to drop one flank of a pack.
+  Measure crowd-effect cones from the chest.
+- Its knockback (`push(dt * 2.2)`) **out-ran its own cone**: targets were
+  shoved past the 8 m range before they'd taken meaningful damage, so the
+  shotgun pushed everything away and killed nothing. Any effect that both
+  damages and displaces has to displace slower than it kills.
+
+**Wharf Rush** (`Rush`) is the endless mode: `clearStoryContent()` strips
+piles/zombies/sea lions so the pier becomes a pure arena, then a wave
+director escalates count and composition (runners from wave 2, brutes
+from 4, a doubled SWARM every 5th), pays a bonus and a partial heal per
+clear, and banks a high score on death. Score is multiplied by the hype
+tier, which is the join that makes the two systems feed each other:
+playing stylishly literally pays. `checkWin()` early-returns while
+`Rush.on`, so endless mode can never trip the story ending or summon the
+Kraken.
+
+### The bug worth remembering: step() must render-equivalent
+
+The nozzle checks failed with **zero raycast hits** against a zombie
+standing 11 m dead ahead. The cause: `scene.updateMatrixWorld()` is a
+side effect of `composer.render()`, and a headless `UJ.step()` loop never
+renders. Freshly spawned meshes therefore kept stale/identity world
+matrices and every ray sailed straight through them. `step()` now ends
+with `scene.updateMatrixWorld(true)`, mirroring the real frame.
+
+Two things this hid, and both are the real lesson:
+1. **JET appeared to work the whole time** — the aim assist was quietly
+   covering for a raycast that never hit anything. A fallback path can
+   mask the failure of the primary one; when a mode with no fallback
+   (LANCE) reported zero, that's what exposed it.
+2. It is the third instance of the same class of bug (`updatePileJelly`,
+   then combo expiry, now matrix updates). **Anything the real frame does
+   — including side effects of rendering — has to be mirrored in the
+   stepper**, or the harness is measuring a different game.
+
+`HoseFX.lastHits` / `lastMode` are now written every spraying frame
+precisely so this is one `evaluate()` away next time.

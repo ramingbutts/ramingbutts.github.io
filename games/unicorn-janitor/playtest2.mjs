@@ -1010,6 +1010,179 @@ ok('brute: bigger, tougher, slower, and too heavy for the jet to shove',
    `${brute.layout} in the layout · ${brute.goo} goo · ${brute.scale}× scale · knockback ${brute.bruteShoved.toFixed(2)}m vs a normal zombie's ${brute.normalShoved.toFixed(2)}m`);
 
 await page.evaluate(() => window.__QA_CLEAN());
+// B8a. NOZZLES — R cycles three genuinely different tools
+const nozzles = await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.setNozzle(0);
+  const seq = [];
+  for (let i = 0; i < 4; i++) { seq.push(UJ.Nozzle().key); UJ.cycleNozzle(1); }
+  UJ.setNozzle(0);
+  const [jet, blast, lance] = UJ.NOZZLES;
+  return { seq, label: document.getElementById('nozzleName').textContent,
+    ranges: [jet.range, blast.range, lance.range], drains: [jet.drain, blast.drain, lance.drain] };
+});
+ok('three nozzles cycle and differ in reach and thirst',
+   nozzles.seq.join(',') === 'jet,blast,lance,jet' &&
+   nozzles.ranges[1] < nozzles.ranges[0] && nozzles.ranges[2] > nozzles.ranges[0] &&
+   nozzles.drains[1] > nozzles.drains[0] && nozzles.drains[2] > nozzles.drains[1],
+   `cycle ${nozzles.seq.join('→')} · ranges ${nozzles.ranges.join('/')}m · drain ×${nozzles.drains.join('/×')}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B8b. BLAST — a short wide cone scrubs a whole pack; JET only bites one
+const blast = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -40); P.yaw = Math.PI; P.pitch = 0;
+  const pack = () => {
+    window.__QA_CLEAN(); // also purges dead zombies' meshes from cleanTargets
+    return [-2.2, 0, 2.2].map(dx => UJ.spawnZombieAt(P.pos.x + dx, P.pos.z - 5));
+  };
+  const spray = (mode) => {
+    UJ.setNozzle(mode);
+    UJ.Meters.pressure = 100; // a drained tank locks the trigger and reads as "no damage"
+    const zs = pack();
+    zs.forEach(z => { z.stun(30); });          // hold the pack still
+    const g0 = zs.map(z => z.goo);
+    UJ.Input.spray = true;
+    for (let i = 0; i < 25; i++) { UJ.aimAt(P.pos.x, 1.1, P.pos.z - 5); UJ.step(0.03); }
+    UJ.Input.spray = false;
+    const dmg = zs.map((z, i) => +(g0[i] - z.goo).toFixed(1));
+    zs.forEach(z => { z.alive = false; z.group.visible = false; });
+    return { hit: dmg.filter(d => d > 1).length, dmg };
+  };
+  const jetHits = spray(0);
+  const blastHits = spray(1);
+  UJ.setNozzle(0);
+  return { jetHits, blastHits };
+});
+ok('BLAST scrubs the whole pack in its cone where JET bites one',
+   blast.blastHits.hit === 3 && blast.jetHits.hit <= 1,
+   `zombies damaged — JET ${blast.jetHits.hit}/3 [${blast.jetHits.dmg}] vs BLAST ${blast.blastHits.hit}/3 [${blast.blastHits.dmg}]`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B8c. LANCE — pierces through the front target into the one behind it.
+// Uses piles, not zombies: a pile is a ~2.6m blob, so the check measures
+// piercing rather than whether a 0.55m belly happened to line up with a
+// slightly diagonal ray.
+const lance = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -60); P.yaw = Math.PI; P.pitch = 0;
+  const pair = () => {
+    for (const p of UJ.piles) if (p.alive && Math.abs(p.group.position.z + 68) < 12) {
+      p.alive = false; p.group.visible = false;
+    }
+    const a = new (UJ.piles[0].constructor)(P.pos.x, P.pos.z - 8, 1);
+    const b = new (UJ.piles[0].constructor)(P.pos.x, P.pos.z - 13, 1);
+    UJ.piles.push(a, b);
+    return [a, b];
+  };
+  const spray = (mode) => {
+    UJ.setNozzle(mode);
+    UJ.Meters.pressure = 100;
+    const [a, b] = pair();
+    const d0 = [a.dirt, b.dirt];
+    UJ.Input.spray = true;
+    for (let i = 0; i < 22; i++) { UJ.aimAt(P.pos.x, 0.8, P.pos.z - 8); UJ.step(0.03); }
+    UJ.Input.spray = false;
+    const out = { front: +(d0[0] - a.dirt).toFixed(1), behind: +(d0[1] - b.dirt).toFixed(1) };
+    a.alive = false; a.group.visible = false; b.alive = false; b.group.visible = false;
+    return out;
+  };
+  const jet = spray(0);
+  const lan = spray(2);
+  UJ.setNozzle(0);
+  return { jet, lan };
+});
+ok('LANCE punches through the front pile into the one behind',
+   lance.jet.front > 1 && lance.jet.behind < 1 && lance.lan.front > 1 && lance.lan.behind > 1,
+   `dirt removed front/behind — JET ${lance.jet.front}/${lance.jet.behind} vs LANCE ${lance.lan.front}/${lance.lan.behind}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
+// B8d. WHARF RUSH — starting it strips the story layer and arms the waves
+const rushStart = await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.startRush();
+  return { on: UJ.Rush.on, wave: UJ.Rush.wave, score: UJ.Rush.score,
+    piles: UJ.piles.length, zombies: UJ.getZombies().filter(z => z.alive).length,
+    civs: UJ.civilians.length, horn: UJ.Player.hasHorn,
+    hud: !document.getElementById('rushHud').classList.contains('hidden'),
+    objectivesHidden: document.getElementById('objectives').classList.contains('hidden') };
+});
+ok('Wharf Rush clears the story layer and arms the wave director',
+   rushStart.on && rushStart.wave === 0 && rushStart.piles === 0 && rushStart.zombies === 0 &&
+   rushStart.civs === 0 && rushStart.horn && rushStart.hud && rushStart.objectivesHidden,
+   `pier stripped (0 piles / 0 zombies / 0 sea lions) · horn granted · rush HUD up`);
+
+// B8e. Waves spawn, scale, and pay out when cleared
+const wave = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -60); P.hp = 60;
+  UJ.Rush.breather = 0.01;
+  UJ.step(0.03);                                  // trips startWave
+  const w1 = { wave: UJ.Rush.wave, spawned: UJ.getZombies().filter(z => z.alive).length,
+               piles: UJ.piles.filter(p => p.alive).length,
+               banner: document.getElementById('waveBanner').textContent };
+  UJ.Rush.wave = 6; UJ.Rush.breather = 0.01;      // deeper wave = bigger tide
+  UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
+  UJ.piles.forEach(p => { p.alive = false; });
+  UJ.step(0.03);
+  const w7 = { spawned: UJ.getZombies().filter(z => z.alive).length,
+               brutes: UJ.getZombies().filter(z => z.alive && z.brute).length,
+               runners: UJ.getZombies().filter(z => z.alive && z.runner).length };
+  // clear the field and let the director notice
+  UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
+  UJ.piles.forEach(p => { p.alive = false; });
+  const before = UJ.Rush.score, hpBefore = UJ.Player.hp;
+  UJ.step(0.03);
+  return { w1, w7, cleared: UJ.Rush.cleared, breather: UJ.Rush.breather,
+           bonus: UJ.Rush.score - before, healed: UJ.Player.hp > hpBefore };
+});
+ok('waves scale with depth and clearing one pays a bonus and a breather',
+   wave.w1.wave === 1 && wave.w1.spawned >= 4 && wave.w1.piles >= 2 &&
+   wave.w7.spawned > wave.w1.spawned && (wave.w7.brutes + wave.w7.runners) > 0 &&
+   wave.cleared && wave.breather > 4 && wave.bonus > 0 && wave.healed,
+   `wave 1: ${wave.w1.spawned} enemies → wave 7: ${wave.w7.spawned} (${wave.w7.runners} runners, ${wave.w7.brutes} brutes) · clear bonus +${wave.bonus}, ${wave.breather.toFixed(0)}s breather`);
+
+// B8f. Score is multiplied by the hype tier — style literally pays
+const scoring = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const at = (heat) => {
+    UJ.Hype.heat = heat; UJ.updateHype(0.001);
+    const before = UJ.Rush.score;
+    UJ.Rush.award(100, null);
+    return UJ.Rush.score - before;
+  };
+  const cold = at(0), hot = at(1);
+  UJ.Hype.heat = 0; UJ.updateHype(0.001);
+  return { cold, hot };
+});
+ok('rush score is multiplied by the hype tier', scoring.cold === 100 && scoring.hot === 250,
+   `a 100-point clean pays ${scoring.cold} cold and ${scoring.hot} at LEGENDARY`);
+
+// B8g. Dying banks the run, and rush never triggers the story win
+const rushEnd = await page.evaluate(() => {
+  const UJ = window.UJ, G = UJ.Game;
+  G.pilesCleaned = G.totalPiles; G.zombiesDefeated = G.totalZombies; G.civResolved = G.civTotal;
+  UJ.checkWin();                       // must NOT win or summon in endless mode
+  const stillPlaying = G.state === 'playing' && !UJ.getBoss();
+  UJ.Rush.score = 12345; UJ.Rush.best = 0;
+  UJ.Player.hp = 0;
+  UJ.damagePlayer(50, { x: 0, y: 0, z: 1 });
+  const txt = document.getElementById('rushResult').textContent;
+  let stored = null;
+  try { stored = localStorage.getItem('uj_l2_rush_best'); } catch (e) {}
+  // hand the world back to the story-mode checks that follow
+  UJ.Rush.on = false;
+  G.state = 'playing';
+  document.getElementById('deadOverlay').classList.add('hidden');
+  document.getElementById('rushHud').classList.add('hidden');
+  UJ.Player.hp = 100;
+  window.__QA_CLEAN();
+  return { stillPlaying, txt, stored };
+});
+ok('endless mode never "wins", and dying banks the score',
+   rushEnd.stillPlaying && /12,345/.test(rushEnd.txt) && /NEW BEST/.test(rushEnd.txt) && rushEnd.stored === '12345',
+   `checkWin was a no-op in rush · result "${rushEnd.txt}" · persisted best ${rushEnd.stored}`);
+
 // ---- BUILD 7: THE GUNK KRAKEN. These run last: the final check wins the
 // level outright, after which step() deliberately stops advancing.
 // B7a. Clearing the wharf summons the boss instead of ending the level
