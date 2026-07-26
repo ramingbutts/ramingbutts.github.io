@@ -1397,6 +1397,201 @@ function spawnRagdoll(center) {
 const cleanTargets = [];   // meshes the hose/beam raycast against
 const piles = [];
 
+/* ---------------------------------------------------------------------
+   WEAK POINTS (BUILD 12) — the missing skill layer.
+
+   Up to BUILD 11 the core verb was "hold the trigger until a number
+   reaches zero": *that* you aimed mattered, *where* you aimed did not.
+   Every pile and zombie now carries a gunk core — a hot orb riding
+   proud of the body. Land the jet on it and the hit crits for 3x,
+   refunds pressure and heats the hype meter; then the core bolts
+   somewhere else, so crit uptime is an active tracking skill instead of
+   a one-time aim. Kill something while its core is still lit and it
+   detonates, splashing damage into everything nearby — and that splash
+   can pop a weakened neighbour, which detonates in turn. Aim well and a
+   pack unzips itself.
+
+   BLAST deliberately cannot crit. The wide cone trades precision for
+   coverage, which is what keeps the three nozzles genuinely different
+   verbs rather than damage tiers.
+   --------------------------------------------------------------------- */
+const CRIT = {
+  mul: 3,            // damage multiplier on a core hit
+  refund: 22,        // pressure/sec refunded while you hold the core
+  hype: 0.5,         // hype/sec while critting
+  hold: 0.5,         // how long a core stays "lit" after the last crit
+  pop: 0.45,         // sustained crit contact before the core bolts
+  moveMin: 2.1, moveMax: 3.6, // idle seconds between relocations
+  slide: 3.2,        // relocation speed (1/sec) — it slides, you track it
+  burstR: 5.5,       // chain-burst radius
+  burstDmg: 34,      // damage dealt to each neighbour caught in a burst — about
+                     // a third of a zombie, so a cascade needs a pack that's
+                     // already been worked over, not one healthy core kill
+  burstMax: 6,       // cascade depth cap, so a chain always terminates
+};
+const CORE_GEO = new THREE.SphereGeometry(0.17, 10, 8); // shared — never disposed per entity
+const _critV = new THREE.Vector3();
+
+// Give an entity a weak point. `host` is the group it rides, `r` the orbit
+// radius around the body axis and `ySpan` how far it roams vertically.
+function attachWeakPoint(ent, { host, y = 1, r = 0.72, ySpan = 0.5, scale = 1 } = {}) {
+  const pivot = new THREE.Group();
+  pivot.position.y = y;
+  host.add(pivot);
+  const orb = new THREE.Group();
+  pivot.add(orb);
+  const mesh = new THREE.Mesh(CORE_GEO, new THREE.MeshBasicMaterial({ color: 0x9ffcff }));
+  mesh.scale.setScalar(scale);
+  mesh.userData.entity = ent;
+  mesh.userData.core = true;      // the flag updateHose looks for
+  orb.add(mesh);
+  cleanTargets.push(mesh);
+  const halo = glowSprite(0x9ffcff, 1.4 * scale, 0.7);
+  orb.add(halo);
+  ent.weak = { host, pivot, orb, mesh, halo, r, ySpan, scale, haloBase: 1.4 * scale,
+               lit: 0, hold: 0, t: 0, move: 1, moves: 0, phase: Math.random() * 7,
+               from: new THREE.Vector3(), to: new THREE.Vector3() };
+  moveWeakPoint(ent.weak, true);
+  return ent.weak;
+}
+
+const _weakV = new THREE.Vector3();
+function moveWeakPoint(w, instant) {
+  // Bias the new spot into the hemisphere facing the player. A core parked
+  // on the far side of the body isn't a skill test, it's a coin flip — you
+  // can't see it and the ray can't reach it. Circle around and it stays
+  // hidden until it next moves, so flanking still matters; you just never
+  // get handed an unhittable target.
+  let base = Math.random() * Math.PI * 2;
+  if (w.host) {
+    w.host.getWorldPosition(_weakV);
+    const dx = Player.pos.x - _weakV.x, dz = Player.pos.z - _weakV.z;
+    if (dx * dx + dz * dz > 1e-4) base = Math.atan2(dx, dz) - w.host.rotation.y;
+  }
+  const a = base + (Math.random() - 0.5) * 2.0; // ±57° of the player's bearing
+  w.from.copy(w.orb.position);
+  w.to.set(Math.sin(a) * w.r, (Math.random() - 0.5) * w.ySpan, Math.cos(a) * w.r);
+  w.t = CRIT.moveMin + Math.random() * (CRIT.moveMax - CRIT.moveMin);
+  w.move = instant ? 1 : 0;
+  w.moves++;
+  if (instant) w.orb.position.copy(w.to);
+}
+
+// pulse, drift and relocate every live weak point. Called from both tick()
+// and UJ.step() — a stepper that skips this leaves cores frozen mid-slide.
+function updateWeakPoints(dt, t) {
+  for (const list of [piles, zombies]) {
+    for (const e of list) {
+      const w = e.weak;
+      if (!w || !e.alive) continue;
+      w.lit = Math.max(0, w.lit - dt);
+      if (w.move < 1) {
+        w.move = Math.min(1, w.move + dt * CRIT.slide);
+        const s = w.move * w.move * (3 - 2 * w.move); // smoothstep slide
+        w.orb.position.lerpVectors(w.from, w.to, s);
+      } else if ((w.t -= dt) <= 0) {
+        moveWeakPoint(w, false);
+      }
+      const pulse = 0.9 + Math.sin(t * 7 + w.phase) * 0.14 + (w.lit > 0 ? 0.45 : 0);
+      w.mesh.scale.setScalar(w.scale * pulse);
+      w.halo.scale.setScalar(w.haloBase * pulse);
+      w.halo.material.opacity = 0.45 + 0.4 * pulse;
+    }
+  }
+}
+
+// A hit that landed on the weak point. Triples the damage, pays back
+// pressure so precision buys uptime, and throttles its own feedback so a
+// held stream doesn't paper the screen with CRIT! popups.
+function applyCrit(ent, amount, point, dt) {
+  if (ent.canCrit && !ent.canCrit()) { ent.clean(amount, point); return; } // armoured: no bonus
+  ent.clean(amount * CRIT.mul, point);
+  Tutorial.fire('firstCrit');
+  Meters.pressure = Math.min(100, Meters.pressure + CRIT.refund * dt);
+  Hype.add(CRIT.hype * dt);
+  const w = ent.weak;
+  if (!w) return;
+  if (w.lit <= 0) Game.crits++; // one per acquisition, not per frame of contact
+  w.lit = CRIT.hold;
+  w.hold += dt;
+  if (w.hold >= CRIT.pop) {
+    w.hold = 0;
+    spawnGlitter(point, 9, 4);
+    if (ent.alive) spawnFloatText(_critV.copy(point).setY(point.y + 0.7), 'CRIT!', '#9ffcff', 'crit');
+    moveWeakPoint(w, false); // it bolts — crit uptime has to be re-earned
+  }
+}
+
+// Detonation. Called from die() when the kill landed on a lit core, or when
+// the victim was itself caught in a burst — that second case is what makes
+// a cascade possible.
+let critChain = 0, _burstDepth = 0;
+function chainBurst(ent, pos) {
+  if (_burstDepth >= CRIT.burstMax) return;
+  _burstDepth++; critChain++;
+  Game.bursts++;
+  Game.bestChain = Math.max(Game.bestChain, critChain);
+  spawnBurstRing(pos);
+  // taper the sparkle as a cascade deepens: five simultaneous full-fat bursts
+  // under LEGENDARY bloom wash the frame to white and you lose the fight
+  spawnGlitter(pos, _burstDepth === 1 ? 28 : 12, 6);
+  SFX.pop(panFor(pos), 0.75);
+  Player.shake = Math.max(Player.shake, 0.16);
+  // snapshot first: the loop below can kill entities and splice these arrays
+  const caught = [];
+  for (const list of [piles, zombies, grimes, barrels, gullSplats]) {
+    for (const o of list) {
+      if (!o || o === ent || o.alive === false || o.resolved) continue;
+      if (o.group.position.distanceTo(pos) < CRIT.burstR) caught.push(o);
+    }
+  }
+  for (const o of caught) {
+    if (o.alive === false) continue; // already taken out earlier in this cascade
+    o._burst = true;
+    o.clean(CRIT.burstDmg, o.group.position);
+    o._burst = false;
+  }
+  _burstDepth--;
+  if (_burstDepth === 0) {
+    if (critChain >= 3) {
+      spawnFloatText(_critV.copy(pos).setY(pos.y + 3), 'CHAIN x' + critChain, '#9ffcff', 'chain');
+      Hype.add(0.08 * critChain);
+      hitStop = Math.max(hitStop, 0.18);
+      Player._fovPunch = Math.max(Player._fovPunch, 6);
+    }
+    critChain = 0;
+  }
+}
+// did this kill earn a detonation? (lit core, or caught in someone else's)
+function burstOnDeath(ent) { return !!(ent._burst || (ent.weak && ent.weak.lit > 0)); }
+
+// A thin additive shockwave. Deliberately restrained: it is drawn on top of
+// glitter, splash and (at LEGENDARY) a very hot bloom, and five of these at
+// once is a normal outcome of a good chain.
+const BURST_GEO = new THREE.RingGeometry(0.34, 0.42, 28);
+const burstRings = [];
+function spawnBurstRing(pos) {
+  if (Settings.reduceMotion) return;
+  const m = new THREE.Mesh(BURST_GEO, new THREE.MeshBasicMaterial({ color: 0x9ffcff,
+    transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false,
+    blending: THREE.AdditiveBlending }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(pos.x, Math.max(0.25, pos.y), pos.z);
+  scene.add(m);
+  burstRings.push({ m, t: 0 });
+  if (burstRings.length > 6) { const o = burstRings.shift(); scene.remove(o.m); o.m.material.dispose(); }
+}
+function updateBurstRings(dt) {
+  for (let i = burstRings.length - 1; i >= 0; i--) {
+    const b = burstRings[i];
+    b.t += dt;
+    const s = 1 + b.t * 16;
+    b.m.scale.set(s, s, s);
+    b.m.material.opacity = Math.max(0, 0.55 - b.t * 1.5);
+    if (b.t > 0.4) { scene.remove(b.m); b.m.material.dispose(); burstRings.splice(i, 1); }
+  }
+}
+
 class PoopPile {
   constructor(x, z, size = 1) {
     this.dirt = CFG.pile.dirt;
@@ -1427,6 +1622,10 @@ class PoopPile {
     this.glow = glowSprite(new THREE.Color().setHSL(hue, 0.9, 0.6).getHex(), 2.5 * size, 0.35);
     this.glow.position.y = 1;
     this.group.add(this.glow);
+    // the hot spot: a pile is a static target, so its core is what makes
+    // scrubbing one an act of aim rather than a stopwatch
+    attachWeakPoint(this, { host: this.group, y: 0.75 * size, r: 0.85 * size,
+                            ySpan: 0.6 * size, scale: 1.05 });
     scene.add(this.group);
   }
 
@@ -1447,6 +1646,7 @@ class PoopPile {
     const c = this.group.position.clone(); c.y += 1;
     spawnGlitter(c, Math.round(90 * Hype.glitterMul()), 6);
     Hype.add(0.16);
+    if (burstOnDeath(this)) chainBurst(this, c); // popped on the core: it detonates
     // the pile bursts into physical gobs in its own glowing color
     spawnChunkBurst(this.group.position, { count: 5, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 0.9 });
     spawnWetPatch(this.group.position); // a burst pile leaves the planks slick
@@ -2043,6 +2243,12 @@ class Zombie {
     g.add(this.rig);
 
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    // the weak point goes on AFTER the rig partition so it survives the
+    // swap to the GLB body — it's gameplay, not cosmetics. Brutes carry a
+    // fatter one because their body scale widens the orbit with them.
+    attachWeakPoint(this, { host: g, y: 1.15, r: 0.72, ySpan: 0.7,
+                            scale: this.brute ? 1.25 : this.runner ? 0.85 : 1 });
+    this.weak.mesh.castShadow = false;
     scene.add(g);
     this.applyModel(); // if the GLB prototype is already loaded, wear it now
   }
@@ -2081,7 +2287,8 @@ class Zombie {
     spawnGlitter(c, Math.round(130 * Hype.glitterMul()), 7);
     // STYLE KILLS: how you finished it matters. Each one slams the brakes
     // for a beat, punches the lens and pays into the hype meter.
-    const style = !Player.onGround ? 'AIRBORNE PURIFY!'
+    const style = this.weak && this.weak.lit > 0 ? 'CORE POP!'
+      : !Player.onGround ? 'AIRBORNE PURIFY!'
       : this._propStun > 0 ? 'STRIKE!'
       : this.brute ? 'BRUTE DOWN!'
       : comboCount >= 3 ? 'PURIFY CHAIN!' : null;
@@ -2090,9 +2297,10 @@ class Zombie {
       Player._fovPunch = Math.max(Player._fovPunch, 7);
       Player.shake = Math.max(Player.shake, 0.3);
       Hype.add(0.2);
-      spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f');
+      spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f', 'style');
     }
     Hype.add(this.brute ? 0.34 : 0.22);
+    if (burstOnDeath(this)) chainBurst(this, c); // core kill: the goo goes off
     spawnRagdoll(this.group.position); // physics chunks bounce off the deck
     SFX.pop(panFor(this.group.position), 1);
     registerCombo(this.group.position);
@@ -2744,6 +2952,7 @@ class GunkKraken {
     this.core = new THREE.Mesh(new THREE.SphereGeometry(1.25, 16, 12), this.coreMat);
     this.core.position.set(0, 2.2, 3.2);
     this.core.userData.entity = this;
+    this.core.userData.core = true; // the whole boss fight is a weak-point fight
     g.add(this.core);
     cleanTargets.push(this.core);
     this.coreGlow = glowSprite(0xffc46a, 6, 0);
@@ -2766,6 +2975,10 @@ class GunkKraken {
     this.tentacles = [];
     [-6.5, 6.5, -2.4, 2.4].forEach((x, i) => this.tentacles.push(new BossTentacle(this, i, x)));
   }
+
+  // armoured between limb breaks: the core is there, but it can't be crit
+  // (or damaged) until a tentacle goes down and bares it
+  canCrit() { return this.exposed > 0; }
 
   // phase 1 while the core is fat, 3 once it's nearly done
   phase() { const f = this.goo / BOSS.coreGoo; return f > 0.66 ? 1 : f > 0.33 ? 2 : 3; }
@@ -2955,7 +3168,7 @@ const Rush = {
     const got = Math.round(points * mult);
     this.score += got;
     rushScoreEl.textContent = this.score.toLocaleString();
-    if (pos && Hype.tier > 0) spawnFloatText(pos.clone().setY(pos.y + 2.2), `+${got}`, HYPE_TIERS[Hype.tier].color);
+    if (pos && Hype.tier > 0) spawnFloatText(pos.clone().setY(pos.y + 2.2), `+${got}`, HYPE_TIERS[Hype.tier].color, 'score');
   },
 };
 Rush.load();
@@ -3975,7 +4188,7 @@ function nozzleWorldPos(out) {
 
 let sprayAccum = 0, sprayWasOn = false, sprayHeldTime = 0, hitPulse = 0;
 const crosshairEl = document.getElementById('crosshair');
-let targetSenseT = 0, crosshairOnTarget = false; // BUILD 3 aim confirmation
+let targetSenseT = 0, crosshairOnTarget = false, crosshairOnCore = false; // BUILD 3 aim confirmation, BUILD 12 crit sense
 const pressureFill = document.getElementById('pressureFill');
 const rainbowFill = document.getElementById('rainbowFill');
 function updateHose(dt) {
@@ -4047,6 +4260,7 @@ function updateHose(dt) {
     HoseFX.lastHits = hits.length; HoseFX.lastMode = NZ.key; // debug readout
     HoseFX.lastEntity = hits.length ? ((hits[0].object.userData.entity || {}).constructor || {}).name || 'none' : null;
     HoseFX.lastHitDist = hits.length ? +hits[0].distance.toFixed(1) : -1;
+    HoseFX.lastCore = hits.length ? !!hits[0].object.userData.core : false;
     // ride the jet light out to whatever the water is hitting (or ~3m ahead)
     HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(Player.aim, 3));
     HoseFX.light.intensity = 1.7 + (Settings.reduceMotion ? 0 : Math.random() * 0.5);
@@ -4083,12 +4297,21 @@ function updateHose(dt) {
     } else if (NZ.key === 'lance') {
       // LANCE: pierces. Every distinct entity along the ray takes the hit,
       // so lining targets up is the skill.
-      const seen = new Set();
+      // one hit per entity, but a core anywhere along the ray wins over a
+      // body hit on the same target — the skewer should reward threading
+      // the cores, not whichever mesh happened to be nearest
+      const seen = new Map();
       for (const h of hits) {
         const e = h.object.userData.entity;
-        if (!e || seen.has(e)) continue;
-        seen.add(e);
-        e.clean(power * dt, h.point);
+        if (!e || e.alive === false || e.resolved) continue;
+        const core = !!h.object.userData.core;
+        const prev = seen.get(e);
+        if (!prev) seen.set(e, { point: h.point, core });
+        else if (core && !prev.core) { prev.point = h.point; prev.core = true; }
+      }
+      for (const [e, h] of seen) {
+        if (h.core) applyCrit(e, power * dt, h.point, dt);
+        else e.clean(power * dt, h.point);
         if (Math.random() < dt * 10) spawnSplash(h.point);
       }
       if (seen.size) {
@@ -4099,14 +4322,15 @@ function updateHose(dt) {
     } else if (hits.length) {
       // skip anything that can't take damage — a corpse still in cleanTargets
       // or a sea lion you already saved would otherwise swallow the whole jet
-      let e = null, point = null;
+      let e = null, point = null, onCore = false;
       for (const h of hits) {
         const c = h.object.userData.entity;
         if (!c || c.alive === false || c.resolved) continue;
-        e = c; point = h.point; break;
+        e = c; point = h.point; onCore = !!h.object.userData.core; break;
       }
       if (e) {
-        e.clean(power * dt, point);
+        if (onCore) applyCrit(e, power * dt, point, dt);
+        else e.clean(power * dt, point);
         if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
@@ -4202,15 +4426,24 @@ function updateHose(dt) {
   // TARGET SENSE (BUILD 3): the crosshair warms up gold whenever the jet
   // WOULD land on something cleanable — aim confirmation before you spend
   // pressure. Cheap: one raycast at ~12Hz, not per frame.
+  // BUILD 12 adds a second state: sitting on a weak point snaps it cyan and
+  // wide, so you know a crit is there before you commit the trigger.
   targetSenseT -= dt;
   if (targetSenseT <= 0) {
     targetSenseT = 0.08;
     raycaster.set(camera.position, Player.aim);
     raycaster.far = CFG.hose.range + 6;
-    const on = Game.state === 'playing' && raycaster.intersectObjects(cleanTargets, false).length > 0;
-    if (on !== crosshairOnTarget) {
-      crosshairOnTarget = on;
-      crosshairEl.classList.toggle('onTarget', on);
+    const ts = Game.state === 'playing' ? raycaster.intersectObjects(cleanTargets, false) : [];
+    let on = false, core = false;
+    for (const h of ts) {
+      const e = h.object.userData.entity;
+      if (!e || e.alive === false || e.resolved) continue;
+      on = true; core = !!h.object.userData.core; break;
+    }
+    if (on !== crosshairOnTarget || core !== crosshairOnCore) {
+      crosshairOnTarget = on; crosshairOnCore = core;
+      crosshairEl.classList.toggle('onTarget', on && !core);
+      crosshairEl.classList.toggle('onCore', core);
     }
   }
 
@@ -4386,11 +4619,16 @@ function showToast(text) {
   toastT = 3.4;
 }
 
+// XP awarded while the '+N XP' popup is still on screen accumulates into it
+// rather than printing a fresh number over the top of the last one
+let xpRun = 0, xpRunT = 0;
 function gainXP(amount, worldPos) {
   RPG.xp += amount;
   if (worldPos) {
+    if (xpRunT <= 0) xpRun = 0;
+    xpRun += amount; xpRunT = 1.15;
     spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
-    spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + amount + ' XP');
+    spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + xpRun + ' XP', '#ffd94f', 'xp');
   }
   let gained = 0;
   while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
@@ -4558,11 +4796,9 @@ function updateDying(dt) {
 
 // ---- floating world-space text (XP popups, combo callouts) ----
 const floatTexts = [];
-function spawnFloatText(pos, text, color = '#ffd94f') {
-  if (floatTexts.length > 14) { // hard cap: recycle the oldest
-    const old = floatTexts.shift();
-    scene.remove(old.s); old.s.material.map.dispose(); old.s.material.dispose();
-  }
+// Draw the label onto an existing (or new) sprite. Split out so a keyed
+// popup can be repainted in place instead of spawning a second one.
+function paintFloatText(sprite, text, color) {
   const c = document.createElement('canvas'); c.width = 256; c.height = 80;
   const g = c.getContext('2d');
   g.font = '700 42px "Segoe UI", system-ui, sans-serif';
@@ -4570,14 +4806,45 @@ function spawnFloatText(pos, text, color = '#ffd94f') {
   g.lineWidth = 8; g.strokeStyle = 'rgba(10,6,20,0.9)';
   g.strokeText(text, 128, 40);
   g.fillStyle = color; g.fillText(text, 128, 40);
-  const m = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false });
+  const tex = new THREE.CanvasTexture(c);
+  if (sprite.material.map) sprite.material.map.dispose();
+  sprite.material.map = tex;
+  sprite.material.needsUpdate = true;
+}
+
+// `key` collapses a repeating popup into ONE that updates in place. Without
+// it a good chain paints COMBO x4/x5/x6/x7 and four XP tickers on top of each
+// other and the screen becomes unreadable at exactly the moment you most
+// want to see what you did. Keyed popups also count up, which reads better
+// than a stack of near-identical numbers.
+function spawnFloatText(pos, text, color = '#ffd94f', key = null) {
+  if (key) {
+    const live = floatTexts.find(f => f.key === key && f.life > 0.3);
+    if (live) {
+      paintFloatText(live.s, text, color);
+      live.life = 1.15;
+      live.s.scale.set(3.0, 0.92, 1); // a repaint pops slightly — it re-earns the eye
+      return;
+    }
+  }
+  if (floatTexts.length > 10) { // hard cap: recycle the oldest
+    const old = floatTexts.shift();
+    scene.remove(old.s); old.s.material.map.dispose(); old.s.material.dispose();
+  }
+  const m = new THREE.SpriteMaterial({ transparent: true, depthWrite: false });
   const s = new THREE.Sprite(m);
+  paintFloatText(s, text, color);
   s.scale.set(2.6, 0.8, 1);
   s.position.copy(pos);
+  // fan simultaneous popups apart so two events in the same frame don't
+  // print on top of one another
+  s.position.x += (Math.random() - 0.5) * 1.2;
+  s.position.y += floatTexts.length * 0.12;
   scene.add(s);
-  floatTexts.push({ s, life: 1.15 });
+  floatTexts.push({ s, life: 1.15, key });
 }
 function updateFloatTexts(dt) {
+  xpRunT = Math.max(0, xpRunT - dt);
   for (let i = floatTexts.length - 1; i >= 0; i--) {
     const f = floatTexts[i];
     f.life -= dt;
@@ -4599,7 +4866,7 @@ function registerCombo(pos) {
   Hype.add(0.06 + 0.03 * Math.min(comboCount, 6)); // chaining is the point
   SFX.chime(1 + 0.08 * Math.min(comboCount - 1, 8));
   if (comboCount >= 2) {
-    spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0');
+    spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0', 'combo');
     gainXP(5 * Math.min(comboCount - 1, 6)); // bonus, no popup spam
   }
 }
@@ -5080,6 +5347,9 @@ const Tutorial = {
       case 'firstSpray':
         this.show('That’s the stuff! Now hose down the glowing poop pile ahead until it bursts into glitter.');
         break;
+      case 'firstCrit':
+        this.show('CORE HIT! That cyan orb is a gunk core — triple damage, and it pays your pressure back. It moves, so keep tracking it. Pop something while its core is lit and the goo goes off in everything nearby.');
+        break;
       case 'pileCleaned':
         this.show(IS_TOUCH
           ? 'Sparkling! Cleaning filled your RAINBOW METER — tap BEAM to unleash the Magic Beam!'
@@ -5115,6 +5385,7 @@ const resumeHint = document.getElementById('resumeHint');
 const Game = {
   state: 'menu', // menu | intro | playing | skills | won | dead
   pilesCleaned: 0, zombiesDefeated: 0,
+  crits: 0, bursts: 0, bestChain: 0, // BUILD 12 precision telemetry
   totalPiles: 0, totalZombies: 0,
   civSaved: 0, civResolved: 0, civTotal: 5,
   bossActive: false, bossDefeated: false,
@@ -5181,7 +5452,8 @@ function checkWin() {
       ['Cleaned every poop pile', true],
       [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
       [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
-      ['The Gunk Kraken purified', Game.bossDefeated],
+      [`Weak points hit: ${Game.crits} · goo detonations: ${Game.bursts}${Game.bestChain > 1 ? ` (best chain x${Game.bestChain})` : ''}`, Game.crits > 0],
+    ['The Gunk Kraken purified', Game.bossDefeated],
       ['Meteor Shard Fragment found', Game.shardFound],
     ].map(([txt, ok]) => `${ok ? '✅' : '⬜'} ${txt}`).join('<br>');
     setTimeout(() => {
@@ -5394,6 +5666,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updateRush(dt);
     reapEntities();
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
+    updateWeakPoints(dt, t); updateBurstRings(dt); updateFloatTexts(dt);
     updateCompass(); updateThreatMusic(dt); updateHype(dt);
     if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
     // A real frame ends in composer.render(), which is what refreshes every
@@ -5417,6 +5690,10 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads, removeCleanTargets,
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
+  // BUILD 12 weak points / crits / chain bursts
+  CRIT, attachWeakPoint, moveWeakPoint, updateWeakPoints, applyCrit, chainBurst,
+  burstOnDeath, burstRings, updateBurstRings,
+  getCritChain: () => critChain, onCore: () => crosshairOnCore,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -5460,6 +5737,8 @@ function tick() {
     }
   }
   updatePileJelly(dt, t);
+  updateWeakPoints(dt, t);
+  updateBurstRings(dt);
 
   // toast fade (level-ups, unlocks)
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }

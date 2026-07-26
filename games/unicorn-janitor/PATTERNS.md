@@ -939,3 +939,63 @@ noise, decorrelated per channel, low-passed at 2.6 kHz because fog eats
 highs) sits on a **parallel send**, so tails bloom while dry transients
 keep their punch. Wrapped in try/catch — if the convolver is unavailable
 the dry path still plays.
+
+## Weak points: giving the core verb a skill layer (BUILD 12)
+
+Through BUILD 11 the moment-to-moment loop was "hold the trigger until a
+number reaches zero". Eight systems sat on top of that — hype, combos,
+perks, nozzles, endless waves, a boss — but *where* you aimed had no
+consequence at all. Aim assist and the wide nozzle actively worked
+against precision. So the honest answer to "make it more fun" was not a
+ninth system; it was to make the existing verb worth being good at.
+
+**Gunk cores.** Every pile and zombie carries a small hot orb riding
+proud of the body, registered in `cleanTargets` with
+`userData.core = true`. Landing the jet on it crits for 3×, refunds
+pressure and heats hype — then the core bolts elsewhere, so uptime is a
+tracking skill rather than a one-time aim. The refund is tuned so a
+sustained crit is roughly *pressure-neutral*: precision literally buys
+you trigger time, which turns the PSI meter from a leash into a skill
+gauge.
+
+**The core must be reachable.** The first implementation picked a random
+angle on the orbit, and half the time the core spawned on the far side of
+the body where neither your eye nor the ray could reach it. A weak point
+you cannot see is not a skill test, it is a coin flip. `moveWeakPoint`
+now biases the new spot into a ±57° arc facing the player. Circle around
+and it stays hidden until it next moves, so flanking still matters — you
+just never get handed an unhittable target. *The unit suite caught this
+by failing intermittently; the fix is a design decision, not a bug fix.*
+
+**Chain bursts.** A kill landed on a lit core detonates, splashing
+`burstDmg` into everything within `burstR` — and anything that splash
+kills detonates in turn (`_burst` flag → `burstOnDeath` → recursion,
+capped by `burstMax`). Cascades snapshot the target list *before*
+damaging, because `clean()` can kill entities and splice the arrays
+mid-loop. Damage is tuned to about a third of a zombie so a cascade needs
+a pack you have already worked over — one healthy core kill should not
+delete a crowd.
+
+**BLAST deliberately cannot crit.** The wide cone trades precision for
+coverage. Without that trade the three nozzles collapse into damage
+tiers instead of being different verbs.
+
+**Feedback legibility is part of the mechanic.** The first playable
+screenshot of a five-chain was unreadable: `COMBO x4/x5/x6/x7`, four XP
+tickers, `CORE POP!` and `CHAIN x3` all printing on the same spot at the
+exact moment you most want to see what you did. `spawnFloatText` now
+takes a `key`: a keyed popup repaints and re-pops **in place** instead of
+spawning a second sprite, so a combo counts up as one label and XP
+accumulates into one running total. Unkeyed popups fan apart slightly.
+This was a bigger readability win than any of the new art.
+
+Measured worst case (pinned LEGENDARY, five-chain, muzzle in frame)
+went from 1.0% to 4.7% blown-out pixels, which is why the shockwave ring
+is thin and 0.55 opacity and cascade glitter tapers with depth. Cost:
++29 draw calls (1094 → 1123) and no measurable sim cost (0.53 ms both).
+
+**The stepper, again.** `updateFloatTexts` had only ever run in `tick()`.
+Harmless when popups were fire-and-forget; fatal once they are keyed,
+because a stale keyed entry would live forever in a headless run and
+swallow every later popup. Third instance of this bug class — anything
+with per-frame state belongs in `UJ.step()` too.
