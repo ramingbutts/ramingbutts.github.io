@@ -203,6 +203,61 @@ ok('an endless run survives six waves, pays out, and hands out upgrades',
    rush.zombieArr < 60 && rush.pileArr < 60,
    `reached wave ${rush.wave} · ${rush.score.toLocaleString()} points · ${rush.picked} upgrades taken · arrays held at ${rush.zombieArr} zombies / ${rush.pileArr} piles`);
 
+// ---- 7. precision pays: tracking cores through a real pack should clear it
+// faster than hosing the same pack centre-mass, and set off detonations.
+// Fresh page first — six waves of stacked perks make the hose strong enough
+// to delete the pack either way, which would measure nothing. ----
+await page.reload({ waitUntil: 'load' });
+await page.waitForFunction(() => window.UJ && window.UJ.step, null, { timeout: 20000 });
+await installHose();
+await page.click('#rushBtn');    // strips the story layer and grants the horn
+await page.evaluate(() => window.UJ.skipIntro());
+await page.waitForFunction(() => window.UJ.Game.state === 'playing', null, { timeout: 8000 }).catch(() => {});
+const precision = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const tmp = UJ.camera.position.clone();
+  // hose a fresh pack for a fixed budget of frames, aiming either at bodies
+  // or at whatever weak point is currently exposed. Same water, same time.
+  const run = (atCores) => {
+    for (const z of UJ.getZombies()) z.alive = false;
+    UJ.reapEntities();
+    UJ.Game.crits = 0; UJ.Game.bursts = 0; UJ.Game.bestChain = 0;
+    const kills0 = UJ.Game.zombiesDefeated;
+    const pack = [];
+    for (let i = 0; i < 6; i++) pack.push(UJ.spawnZombieAt(-3 + i * 1.2, -66));
+    P.pos.set(0, 0, -58);
+    for (let i = 0; i < 20; i++) { P.hp = 100; UJ.step(0.03); }
+    let frames = 0;
+    for (; frames < 900; frames++) {
+      const z = pack.find(z => z.alive);
+      if (!z) break;
+      P.hp = 100; UJ.Meters.pressure = 100;
+      if (atCores) z.weak.mesh.getWorldPosition(tmp);
+      else { z.group.getWorldPosition(tmp); tmp.y += 0.9; }
+      UJ.aimAt(tmp.x, tmp.y, tmp.z);
+      UJ.Input.spray = true;
+      UJ.step(0.03);
+    }
+    UJ.Input.spray = false;
+    const out = { kills: UJ.Game.zombiesDefeated - kills0, crits: UJ.Game.crits,
+                  bursts: UJ.Game.bursts, chain: UJ.Game.bestChain,
+                  secs: +(frames * 0.03).toFixed(1), left: pack.filter(z => z.alive).length };
+    for (const z of pack) z.alive = false;
+    UJ.reapEntities();
+    return out;
+  };
+  return { body: run(false), core: run(true) };
+});
+// (cascade DEPTH isn't asserted here: a fresh pack at full goo survives a
+// single detonation, so chains only compound once neighbours are softened —
+// that path is covered by B12d in the unit suite)
+ok('tracking weak points clears a pack far faster than hosing centre-mass',
+   precision.core.crits > 0 && precision.core.bursts > precision.body.bursts &&
+   precision.core.left === 0 && precision.core.secs < precision.body.secs * 0.75,
+   `same pack of 6, same hose — centre-mass took ${precision.body.secs}s (${precision.body.bursts} detonations); ` +
+   `tracking cores took ${precision.core.secs}s with ${precision.core.crits} weak-point hits, ` +
+   `${precision.core.bursts} detonations, best chain x${precision.core.chain}`);
+
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
 ok('a full playthrough raises no runtime errors', jsErrors.length === 0,
    jsErrors.slice(0, 3).join(' | ') || 'clean');

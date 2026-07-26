@@ -666,9 +666,12 @@ const senseUI = await page.evaluate(() => {
   // re-aim every step: the third-person camera swings for ~2s after a big
   // aim change, and aimAt computes from the camera's current position
   for (let i = 0; i < 70; i++) { UJ.aimAt(p.group.position.x, 0.7, p.group.position.z); UJ.step(0.03); }
-  const onTarget = el.classList.contains('onTarget');
+  // BUILD 12 split the confirmation in two: gold on a body, cyan on a weak
+  // point. Either one is "the jet would land on something".
+  const lit = () => el.classList.contains('onTarget') || el.classList.contains('onCore');
+  const onTarget = lit();
   for (let i = 0; i < 70; i++) { UJ.aimAt(UJ.Player.pos.x, 60, UJ.Player.pos.z - 2); UJ.step(0.03); } // at the sky
-  const offTarget = el.classList.contains('onTarget');
+  const offTarget = lit();
   return { onTarget, offTarget, dbg: {
     state: UJ.Game.state, hp: UJ.Player.hp, pileAlive: p.alive,
     dist: +p.group.position.distanceTo(UJ.Player.pos).toFixed(1),
@@ -1204,6 +1207,177 @@ const lance = await page.evaluate(() => {
 ok('LANCE punches through the front pile into the one behind',
    lance.jet.front > 1 && lance.jet.behind < 1 && lance.lan.front > 1 && lance.lan.behind > 1,
    `dirt removed front/behind — JET ${lance.jet.front}/${lance.jet.behind} vs LANCE ${lance.lan.front}/${lance.lan.behind}`);
+
+/* =====================================================================
+   BUILD 12 — WEAK POINTS, CRITS AND CHAIN BURSTS
+   The build's whole point is that WHERE you aim now matters. These check
+   the mechanic end to end: the core exists and is shootable, hitting it
+   triples damage and pays pressure back, it relocates so uptime has to be
+   re-earned, a kill on a lit core detonates into the neighbours, and the
+   cascade actually chains rather than stopping at one.
+   ===================================================================== */
+
+// B12a. Every pile and zombie carries a core, and it's in the raycast set
+const cores = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const live = (l) => l.filter(e => e.alive);
+  const withWeak = (l) => live(l).filter(e => e.weak && e.weak.mesh).length;
+  const inTargets = live(UJ.piles).concat(live(UJ.getZombies()))
+    .filter(e => e.weak && UJ.cleanTargets.includes(e.weak.mesh)).length;
+  return { piles: live(UJ.piles).length, pileCores: withWeak(UJ.piles),
+           zombies: live(UJ.getZombies()).length, zombieCores: withWeak(UJ.getZombies()),
+           inTargets, flagged: UJ.cleanTargets.filter(m => m.userData.core).length };
+});
+ok('every live pile and zombie carries a shootable weak point',
+   cores.pileCores === cores.piles && cores.zombieCores === cores.zombies &&
+   cores.inTargets === cores.piles + cores.zombies && cores.flagged >= cores.inTargets,
+   `${cores.pileCores}/${cores.piles} piles · ${cores.zombieCores}/${cores.zombies} zombies · all ${cores.inTargets} registered as ray targets`);
+
+// B12b. A core hit triples the damage and refunds pressure. Both shots are
+// fired through the real hose (aim + trigger), not by calling clean() — the
+// point is that the RAY has to find the core, not that the maths works.
+const crit = await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.setNozzle(0);
+  const t = UJ.camera.position.clone(); // a Vector3 without reaching for THREE
+  const shoot = (atCore) => {
+    const z = UJ.spawnZombieAt(0, -30);
+    z.state = 'stunned'; z.stateT = 99;         // hold it still: aim is the only variable
+    UJ.Player.pos.set(0, 0, -24); UJ.Player.hasHorn = true;
+    for (let i = 0; i < 6; i++) UJ.step(0.03);  // let the camera boom settle
+    z.goo = z.gooMax; UJ.Meters.pressure = 100;
+    const g0 = z.goo, p0 = UJ.Meters.pressure;
+    let sawCore = false;
+    for (let i = 0; i < 6; i++) {               // track the target, as a player would
+      z.state = 'stunned'; z.stateT = 99;
+      (atCore ? z.weak.mesh : z.belly).getWorldPosition(t);
+      UJ.aimAt(t.x, t.y, t.z);
+      UJ.Input.spray = true;
+      UJ.step(0.03);
+      sawCore = sawCore || !!UJ.HoseFX.lastCore;
+    }
+    UJ.Input.spray = false;
+    UJ.step(0.09); // the ~12Hz target-sense raycast needs a tick to catch up
+    const out = { dmg: +(g0 - z.goo).toFixed(1), psi: +(UJ.Meters.pressure - p0).toFixed(2), sawCore,
+                  cross: document.getElementById('crosshair').className };
+    z.alive = false; UJ.reapEntities();
+    return out;
+  };
+  return { body: shoot(false), head: shoot(true) };
+});
+ok('landing the jet on the core triples the damage and pays pressure back',
+   crit.head.sawCore && !crit.body.sawCore &&
+   crit.head.dmg > crit.body.dmg * 2.2 && crit.head.psi > crit.body.psi &&
+   crit.head.cross === 'onCore' && crit.body.cross === 'onTarget',
+   `body hits ${crit.body.dmg} dmg / ${crit.body.psi} PSI (crosshair "${crit.body.cross}") vs core hits ${crit.head.dmg} dmg / ${crit.head.psi > 0 ? '+' : ''}${crit.head.psi} PSI (crosshair "${crit.head.cross}")`);
+
+// B12c. The core doesn't sit still — idle drift and a bolt after sustained
+// contact are what stop "aim once, hold forever"
+const drift = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const z = UJ.spawnZombieAt(0, -30);
+  const w = z.weak;
+  const start = w.orb.position.clone();
+  const m0 = w.moves;
+  let idleMoved = 0;
+  for (let i = 0; i < 40; i++) { UJ.step(0.03); idleMoved = Math.max(idleMoved, w.orb.position.distanceTo(start)); }
+  const idleMoves = w.moves - m0;                 // 1.2s idle: at most one relocation
+  const m1 = w.moves, held = w.orb.position.clone();
+  let heldMoved = 0;
+  for (let i = 0; i < 40; i++) {                  // 1.2s of the jet held on the core
+    UJ.applyCrit(z, 0.1, z.group.position, 0.03);
+    UJ.step(0.03);
+    heldMoved = Math.max(heldMoved, w.orb.position.distanceTo(held));
+  }
+  const heldMoves = w.moves - m1;
+  z.alive = false; UJ.reapEntities();
+  return { idleMoves, heldMoves, idleMoved: +idleMoved.toFixed(2), heldMoved: +heldMoved.toFixed(2) };
+});
+// (distance isn't asserted: relocation is biased into the arc facing the
+// player, so two consecutive picks can legitimately land close together —
+// the contract under test is the RATE, not how far any one hop travels)
+ok('holding the jet on a core makes it bolt far sooner than it drifts on its own',
+   drift.heldMoves >= 2 && drift.heldMoves > drift.idleMoves && drift.heldMoved > 0.02,
+   `over the same 1.2s: ${drift.idleMoves} relocation(s) left alone vs ${drift.heldMoves} while held · slid ${drift.heldMoved}m`);
+
+// B12d. Popping something on a lit core detonates into its neighbours —
+// and the detonation can chain through a weakened pack
+const burst = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const ring = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    ring.push(UJ.spawnZombieAt(Math.cos(a) * 3, -40 + Math.sin(a) * 3));
+  }
+  const victim = UJ.spawnZombieAt(0, -40);
+  // control: kill it with the core cold, nobody else should feel a thing
+  const cold = UJ.spawnZombieAt(20, -40);
+  const coldNb = UJ.spawnZombieAt(21, -40);
+  cold.weak.lit = 0;
+  cold.clean(9999, cold.group.position);
+  const coldNeighbourGoo = coldNb.goo;
+
+  const before = ring.map(z => z.goo);
+  victim.weak.lit = 1;                       // as if you'd just crit it
+  victim.clean(9999, victim.group.position); // …and that hit finished it
+  const after = ring.map(z => z.goo);
+  const hurt = after.filter((g, i) => g < before[i]).length;
+
+  // cascade: a ring already on its last legs should unzip itself
+  const weak = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.3;
+    const z = UJ.spawnZombieAt(Math.cos(a) * 3, -60 + Math.sin(a) * 3);
+    z.goo = 20; weak.push(z);                // one burst apiece would do it
+  }
+  const trigger = UJ.spawnZombieAt(0, -60);
+  trigger.weak.lit = 1;
+  trigger.clean(9999, trigger.group.position);
+  const cascaded = weak.filter(z => !z.alive).length;
+
+  for (const z of [...ring, ...weak, coldNb, cold]) z.alive = false;
+  UJ.reapEntities();
+  return { hurt, coldNeighbourUnhurt: coldNb.goo === coldNeighbourGoo, cascaded,
+           rings: UJ.burstRings.length };
+});
+ok('a kill on a lit core detonates, and the blast cascades through a weak pack',
+   burst.hurt === 5 && burst.coldNeighbourUnhurt && burst.cascaded === 5 && burst.rings > 0,
+   `core kill splashed ${burst.hurt}/5 neighbours (a cold kill splashed none) · a weakened ring of 5 chain-popped ${burst.cascaded}`);
+
+// B12e. BLAST deliberately can't crit — that's the trade that keeps the
+// three nozzles different verbs instead of damage tiers
+const noCritBlast = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const t = UJ.camera.position.clone();
+  const fire = (nz) => {
+    UJ.setNozzle(nz);
+    const z = UJ.spawnZombieAt(0, -28);
+    z.state = 'stunned'; z.stateT = 99;
+    UJ.Player.pos.set(0, 0, -24); UJ.Player.hasHorn = true;
+    for (let i = 0; i < 6; i++) UJ.step(0.03);
+    z.goo = z.gooMax; UJ.Meters.pressure = 100;
+    const g0 = z.goo;
+    let lit = false;
+    for (let i = 0; i < 6; i++) {
+      z.state = 'stunned'; z.stateT = 99;
+      z.weak.mesh.getWorldPosition(t);
+      UJ.aimAt(t.x, t.y, t.z);
+      UJ.Input.spray = true;
+      UJ.step(0.03);
+      lit = lit || z.weak.lit > 0;
+    }
+    UJ.Input.spray = false;
+    const out = { dmg: +(g0 - z.goo).toFixed(1), lit };
+    z.alive = false; UJ.reapEntities();
+    return out;
+  };
+  const jet = fire(0), blast = fire(1);
+  UJ.setNozzle(0);
+  return { jet, blast };
+});
+ok('BLAST cannot crit — coverage is what it trades precision for',
+   noCritBlast.jet.lit && !noCritBlast.blast.lit,
+   `JET on the core lights it (${noCritBlast.jet.dmg} dmg); BLAST through the same point never does (${noCritBlast.blast.dmg} dmg)`);
 
 await page.evaluate(() => window.__QA_CLEAN());
 // B8d. WHARF RUSH — starting it strips the story layer and arms the waves
