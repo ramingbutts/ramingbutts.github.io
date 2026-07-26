@@ -105,6 +105,31 @@ const SFX = {
     this.master.gain.value = 0.85;
     this.master.connect(this.ctx.destination);
 
+    // BUILD 11 — a real space. Every sound was landing bone-dry, which is the
+    // single most "not shipped" thing about procedural audio. A convolver fed
+    // by a synthesised impulse response (decaying stereo noise, slightly
+    // decorrelated per channel) puts the whole mix inside a damp wooden pier
+    // under fog. It's a send, so dry transients stay punchy.
+    try {
+      const rate = this.ctx.sampleRate, secs = 2.6, len = Math.floor(rate * secs);
+      const ir = this.ctx.createBuffer(2, len, rate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          // early reflections then a long-ish tail; ch offset widens the image
+          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 2.4) * (1 - 0.35 * ch * Math.sin(t * 40));
+        }
+      }
+      const verb = this.ctx.createConvolver();
+      verb.buffer = ir;
+      const damp = this.ctx.createBiquadFilter();     // fog eats the highs
+      damp.type = 'lowpass'; damp.frequency.value = 2600;
+      const wet = this.ctx.createGain(); wet.gain.value = 0.3;
+      verb.connect(damp); damp.connect(wet); wet.connect(this.master);
+      this._verb = verb; this._wet = wet;
+    } catch (e) { this._verb = null; } // convolver is optional; dry still plays
+
     // reusable 2s white-noise buffer
     const len = this.ctx.sampleRate * 2;
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -227,7 +252,11 @@ const SFX = {
     if (this.ctx.createStereoPanner) {
       const p = this.ctx.createStereoPanner(); p.pan.value = pan;
       g.connect(p); p.connect(this.master);
-    } else g.connect(this.master);
+      if (this._verb) p.connect(this._verb); // parallel send: wet tail, dry punch
+    } else {
+      g.connect(this.master);
+      if (this._verb) g.connect(this._verb);
+    }
     return g;
   },
 
@@ -3844,6 +3873,62 @@ function updateSplashes(dt) {
   }
 }
 
+/* ---------------------------------------------------------------------
+   CONTACT SHADOWS (BUILD 11) — the sun shadow map only covers 28m and
+   misses everything in the fog, so characters and filth read as floating
+   stickers on the planks. A soft dark ellipse under each one plants them.
+   One InstancedMesh, one draw call, rewritten each frame for whatever is
+   near. Jax's own shadow doubles as a landing indicator now that the pier
+   has rooftops — it stays on the ground he'll actually come down on.
+   --------------------------------------------------------------------- */
+const CONTACT_N = 56;
+let contactMesh = null;
+const _mShadow = new THREE.Matrix4();
+function buildContactShadows() {
+  const geo = new THREE.PlaneGeometry(1, 1);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    map: GLOW_TEX, color: 0x000000, transparent: true, opacity: 0.42,
+    depthWrite: false, blending: THREE.NormalBlending });
+  contactMesh = new THREE.InstancedMesh(geo, mat, CONTACT_N);
+  contactMesh.frustumCulled = false;   // instances are rewritten every frame
+  contactMesh.renderOrder = -1;        // under the glitter and splashes
+  scene.add(contactMesh);
+}
+function updateContactShadows() {
+  if (!contactMesh) return;
+  let i = 0;
+  const put = (x, y, z, r, alpha) => {
+    if (i >= CONTACT_N) return;
+    const s = r * 2 * alpha;
+    _mShadow.makeScale(s, 1, s);
+    _mShadow.setPosition(x, y + 0.035, z);
+    contactMesh.setMatrixAt(i++, _mShadow);
+  };
+  // Jax: fades and spreads with altitude, so it reads as "you land here"
+  const pg = groundHeightAt(Player.pos.x, Player.pos.z, Player.pos.y);
+  const air = THREE.MathUtils.clamp((Player.pos.y - pg) / 7, 0, 1);
+  put(Player.pos.x, pg, Player.pos.z, 0.75 + air * 0.5, 1 - air * 0.55);
+  for (const z of zombies) {
+    if (!z.alive || !z.group.visible) continue;
+    put(z.group.position.x, 0, z.group.position.z, 0.85 * z.sclX, 1);
+  }
+  for (const p of piles) {
+    if (!p.alive || !p.group.visible) continue;
+    put(p.group.position.x, 0, p.group.position.z, 1.15 * p.size * p.baseScale, 1);
+  }
+  for (const c of civilians) {
+    if (c.resolved) continue;
+    put(c.group.position.x, 0, c.group.position.z, 1.1, 1);
+  }
+  for (const b of barrels) {
+    if (b.resolved) continue;
+    put(b.group.position.x, 0, b.group.position.z, 0.5, 1);
+  }
+  while (i < CONTACT_N) { _mShadow.makeScale(0, 0, 0); contactMesh.setMatrixAt(i++, _mShadow); }
+  contactMesh.instanceMatrix.needsUpdate = true;
+}
+
 const raycaster = new THREE.Raycaster();
 // BUILD 5 camera rig scratch (kept separate from _v1/_v2, which updatePlayer reuses)
 const _camHead = new THREE.Vector3(), _camDesired = new THREE.Vector3(),
@@ -5138,6 +5223,7 @@ function buildLevel() {
   buildStreetlights();
   buildGraffiti();
   buildProps();
+  buildContactShadows();
 
   // the interactive toy layer: washable stains, suds barrels, beach balls
   // and the harbor bell (gull bombing runs spawn on a timer during play)
@@ -5329,6 +5415,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   NOZZLES, cycleNozzle, Nozzle, getNozzleIdx: () => nozzleIdx, setNozzle: (i) => { nozzleIdx = i; applyNozzleUI(); },
   Rush, startRush, startWave, updateRush, clearStoryContent, reapEntities,
   platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads, removeCleanTargets,
+  updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   renderOnce: () => composer.render() };
 
@@ -5355,6 +5442,7 @@ function tick() {
   updateGulls(t);
   updateSeaLions(t, dt);
   updateBouncePads(dt, t);
+  updateContactShadows();
   updateGlitter(dt);
   updateSplashes(dt);
   updateDamageArcs(dt);

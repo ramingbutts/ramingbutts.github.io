@@ -899,3 +899,43 @@ happened to be nearest, at whatever range and angle. It now parks the
 prop at a fixed spot in front of the player: 4.25/4.37/4.42 m across
 runs. Flaky checks are worse than missing ones — they train you to
 ignore a red suite.
+
+## Playthrough validation, and two presentation upgrades (BUILD 11)
+
+The honest reading of "make it more AAA quality" after shipping a
+game-breaking bug is that the least-AAA property of this project was
+**defects reaching the player**. Unit checks prove mechanics in
+isolation; they had never once played the game.
+
+**`playthrough.mjs`** is the answer and is now the more important of the
+two suites. It drives the real verbs — walk into the crater for the horn,
+hose every pile/sea lion/zombie to death, get summoned into the boss,
+break limbs and burn the core, win with a rank — then reloads and
+survives six endless waves taking an upgrade each time. It sets nothing
+directly: it moves the player, holds the trigger, and lets the game
+decide when things die. That is precisely the shape of test that would
+have caught `hits[0]`, because it fires down a *populated* corridor full
+of the corpses it just made.
+
+It also asserts the things a unit test never thinks to: that the level is
+*completable*, that the reward persists, that a long endless run doesn't
+let the entity arrays grow (0 zombies / 0 piles retained after six
+waves).
+
+**Contact shadows.** The sun's shadow map covers 28 m of a 221 m pier, so
+everything beyond it read as a sticker floating on the planks. One
+`InstancedMesh` of 56 soft dark ellipses, rewritten each frame for
+whatever is near, plants every character, pile, sea lion and barrel for
+**one draw call** (1020 vs 1023 without — free). Jax's own shadow stays
+on the ground he will actually land on and fades/spreads with altitude,
+so it doubles as a landing indicator — which the pier needed the moment
+it grew rooftops. `frustumCulled = false` is required: the instances move
+every frame, so the baked bounding volume is meaningless.
+
+**Convolution reverb.** Every procedural one-shot was landing bone-dry,
+which is the most "not shipped" thing about synthesised audio. A
+`ConvolverNode` fed a synthesised impulse response (decaying stereo
+noise, decorrelated per channel, low-passed at 2.6 kHz because fog eats
+highs) sits on a **parallel send**, so tails bloom while dry transients
+keep their punch. Wrapped in try/catch — if the convolver is unavailable
+the dry path still plays.
