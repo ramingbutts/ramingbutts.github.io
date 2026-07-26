@@ -1009,6 +1009,123 @@ ok('brute: bigger, tougher, slower, and too heavy for the jet to shove',
    brute.slower && brute.bruteShoved === 0 && brute.normalShoved > 0.5,
    `${brute.layout} in the layout · ${brute.goo} goo · ${brute.scale}× scale · knockback ${brute.bruteShoved.toFixed(2)}m vs a normal zombie's ${brute.normalShoved.toFixed(2)}m`);
 
+await page.evaluate(() => window.__QA_CLEAN());
+// ---- BUILD 7: THE GUNK KRAKEN. These run last: the final check wins the
+// level outright, after which step() deliberately stops advancing.
+// B7a. Clearing the wharf summons the boss instead of ending the level
+const summon = await page.evaluate(() => {
+  const UJ = window.UJ, G = UJ.Game;
+  G.pilesCleaned = G.totalPiles;
+  G.zombiesDefeated = G.totalZombies;
+  G.civResolved = G.civTotal;
+  UJ.checkWin();
+  return { state: G.state, spawned: !!UJ.getBoss(), active: G.bossActive,
+           bar: !document.getElementById('bossBar').classList.contains('hidden'),
+           coreGoo: UJ.getBoss() ? UJ.getBoss().goo : 0, tentacles: UJ.getBoss() ? UJ.getBoss().tentacles.length : 0 };
+});
+ok('clearing the wharf wakes the Kraken instead of winning',
+   summon.state === 'playing' && summon.spawned && summon.active && summon.bar &&
+   summon.coreGoo === 400 && summon.tentacles === 4,
+   `state=${summon.state} · core ${summon.coreGoo} goo · ${summon.tentacles} tentacles · bar shown=${summon.bar}`);
+
+// B7b. A tentacle telegraphs, slams, and is only cleanable once pinned
+const cycle = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player, b = UJ.getBoss();
+  P.pos.set(0, 0, -195); P.hp = 100;                 // stand in the arena
+  for (let i = 0; i < 130; i++) UJ.step(0.03);       // let it finish hauling out
+  const risen = b.rise;
+  const seen = [];
+  let ringPeak = 0, hitWhileRearing = 0, hitWhilePinned = 0;
+  const t0 = b.tentacles[0];
+  for (let i = 0; i < 400; i++) {
+    UJ.step(0.03);
+    if (seen[seen.length - 1] !== t0.state) seen.push(t0.state);
+    ringPeak = Math.max(ringPeak, t0.ring.material.opacity);
+    if (t0.state === 'rear') { const g = t0.goo; t0.clean(20, t0.tip); hitWhileRearing += g - t0.goo; }
+    if (t0.state === 'pinned') { const g = t0.goo; t0.clean(3, t0.tip); hitWhilePinned += g - t0.goo; }
+    if (seen.includes('pinned') && hitWhilePinned > 0) break;
+  }
+  return { risen, seen: seen.slice(0, 6), ringPeak, hitWhileRearing, hitWhilePinned };
+});
+ok('tentacle telegraphs, slams, pins — and only takes damage while pinned',
+   cycle.risen > 0.9 && cycle.seen.includes('rear') && cycle.seen.includes('slam') &&
+   cycle.seen.includes('pinned') && cycle.ringPeak > 0.5 &&
+   cycle.hitWhileRearing === 0 && cycle.hitWhilePinned > 0,
+   `states ${cycle.seen.join('→')} · telegraph ring peaked ${cycle.ringPeak.toFixed(2)} · damage taken rearing ${cycle.hitWhileRearing} vs pinned ${cycle.hitWhilePinned}`);
+
+// B7c. Standing where it lands hurts
+const slam = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player, b = UJ.getBoss();
+  P.hp = 100; P.pos.set(0, 0, -195);
+  const before = P.hp;
+  let landed = false;
+  for (let i = 0; i < 600 && !landed; i++) {
+    UJ.step(0.03);
+    // stay glued to whichever tentacle is winding up, so the slam connects
+    const rearing = b.tentacles.find(t => t.state === 'rear');
+    if (rearing) P.pos.set(rearing.target.x, 0, rearing.target.z);
+    if (b.tentacles.some(t => t.state === 'pinned') && P.hp < before) landed = true;
+  }
+  const out = { before, after: P.hp, landed };
+  P.hp = 100;
+  return out;
+});
+ok('a slam that lands on you takes a real bite of HP', slam.landed && slam.after < slam.before,
+   `HP ${slam.before} → ${slam.after} after eating a tentacle slam`);
+
+// B7d. The core is armoured until a tentacle goes down
+const core = await page.evaluate(() => {
+  const UJ = window.UJ, b = UJ.getBoss();
+  b.exposed = 0;
+  const g0 = b.goo;
+  b.clean(150, b.core.position);          // armoured: should bounce off
+  const armoured = b.goo;
+  b.tentacles[0].state = 'pinned';
+  b.tentacles[0].goo = 5;
+  b.tentacles[0].clean(50, b.tentacles[0].tip); // break it
+  const exposedFor = b.exposed;
+  b.clean(150, b.core.position);          // now it should bite
+  return { g0, armoured, exposedFor, after: b.goo, broke: b.tentacles[0].state };
+});
+ok('the core shrugs off the hose until a tentacle breaks and bares it',
+   core.armoured === core.g0 && core.exposedFor >= 7 && core.after === core.g0 - 150 && core.broke === 'hurt',
+   `core ${core.g0} → ${core.armoured} while armoured, → ${core.after} once bared (exposed ${core.exposedFor.toFixed(1)}s, tentacle now '${core.broke}')`);
+
+// B7e. Phases escalate as the core burns down
+const phases = await page.evaluate(() => {
+  const UJ = window.UJ, b = UJ.getBoss();
+  const at = (frac) => {
+    b.goo = UJ.BOSS.coreGoo * frac;
+    return { phase: b.phase(), active: b.activeCount(), cd: b.slamCd(), tell: b.telegraph() };
+  };
+  const out = { p1: at(0.9), p2: at(0.5), p3: at(0.2) };
+  b.goo = UJ.BOSS.coreGoo * 0.2;
+  return out;
+});
+ok('phases escalate: more tentacles, shorter telegraphs, faster slams',
+   phases.p1.phase === 1 && phases.p3.phase === 3 &&
+   phases.p3.active > phases.p1.active && phases.p3.cd < phases.p1.cd && phases.p3.tell < phases.p1.tell,
+   `P1 ${phases.p1.active} arms / ${phases.p1.cd}s cd / ${phases.p1.tell}s tell → P3 ${phases.p3.active} arms / ${phases.p3.cd}s / ${phases.p3.tell}s`);
+
+// B7f. Burning the core out wins the level
+const finale = await page.evaluate(() => {
+  const UJ = window.UJ, b = UJ.getBoss();
+  b.exposed = 10;
+  b.clean(9999, b.core.position);
+  return { alive: b.alive, defeated: UJ.Game.bossDefeated, state: UJ.Game.state,
+           barHidden: document.getElementById('bossBar').classList.contains('hidden'),
+           tentacleTargets: UJ.cleanTargets.filter(m => m.userData.entity && m.userData.entity.b).length };
+});
+// the win screen is deliberately held back 1.4s so the kill can play out
+const winShown = await page.waitForFunction(
+  () => !document.getElementById('winOverlay').classList.contains('hidden'),
+  null, { timeout: 6000 }).then(() => true).catch(() => false);
+finale.winShown = winShown;
+ok('burning out the core kills the Kraken and wins the level',
+   !finale.alive && finale.defeated && finale.state === 'won' && finale.barHidden &&
+   finale.winShown && finale.tentacleTargets === 0,
+   `boss dead · Game.state=${finale.state} · win screen up=${finale.winShown} · tentacle ray-targets cleaned up=${finale.tentacleTargets === 0}`);
+
 // 8. No JS runtime errors (network/CDN tunnel failures are expected in-sandbox and excluded)
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
 ok('no JS runtime errors (CDN/network excluded)', jsErrors.length === 0, jsErrors.slice(0,3).join(' | ') || 'clean');

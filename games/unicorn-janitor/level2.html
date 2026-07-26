@@ -135,6 +135,17 @@
              border:1px solid rgba(255,255,255,.28); overflow:hidden; }
   #hypeFill { height:100%; width:0%; border-radius:4px; transition:width .12s;
               background:linear-gradient(90deg,#5fc8ff,#ff8fd0,#ffd94f); }
+  /* ---- boss bar: the Gunk Kraken's core ---- */
+  #bossBar { position:absolute; left:50%; bottom:96px; transform:translateX(-50%);
+             width:min(560px,80vw); text-align:center; }
+  #bossName { font-size:13px; font-weight:800; letter-spacing:6px; color:#ffd0a8;
+              text-shadow:0 2px 8px #000; margin-bottom:4px; }
+  #bossTrack { height:12px; border-radius:8px; background:rgba(0,0,0,.55);
+               border:1px solid rgba(255,180,120,.5); overflow:hidden; }
+  #bossFill { height:100%; width:100%; border-radius:8px; transition:width .15s;
+              background:linear-gradient(90deg,#ff6a3f,#ffd94f); }
+  #bossState { font-size:10px; letter-spacing:2px; color:#ffb98f; margin-top:4px;
+               text-shadow:0 1px 4px #000; }
   /* ---- directional damage indicators ---- */
   #dmgArcs { position:absolute; inset:0; pointer-events:none; }
   .dmgArc { position:absolute; left:50%; top:50%; width:min(62vmin,420px); height:min(62vmin,420px);
@@ -212,6 +223,11 @@
   </div>
   <div id="compass" class="hidden"><div id="compassTicks"></div></div>
   <div id="hypeWrap"><div id="hypeLabel">GROOVY</div><div id="hypeBar"><div id="hypeFill"></div></div></div>
+  <div id="bossBar" class="hidden">
+    <div id="bossName">🐙 THE GUNK KRAKEN</div>
+    <div id="bossTrack"><div id="bossFill"></div></div>
+    <div id="bossState">ARMOURED — BREAK A TENTACLE</div>
+  </div>
   <div id="dmgArcs"></div>
   <div id="crosshair" class="hidden"></div>
   <div id="beamCd" class="hidden"><div id="beamCdFill"></div></div>
@@ -239,7 +255,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 6</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 7</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>

@@ -696,3 +696,52 @@ chain and a "grounded control kill" silently counted as a style kill.
 Any state the playing branch mutates must be mirrored in `step`, or
 tests quietly measure a different game. Same class of bug as the
 `updatePileJelly` split back in BUILD 28 of level 1.
+
+## The Gunk Kraken — the level's climax (BUILD 7)
+
+Level 2 used to just *stop*: sweep the last pile and the win screen
+appeared. Now clearing the wharf **summons** something. `checkWin()`
+gained one branch — if the objectives are done but `Game.bossDefeated`
+is false, it calls `summonBoss()` and returns — so the whole ending
+rewires through a single existing chokepoint.
+
+**The fight loop** is one readable rule: *the core is armoured; break a
+tentacle to bare it.* Four tentacles cycle
+`idle → rear → slam → pinned → retract`, with `hurt` when broken.
+`rear` paints a swelling ring on the planks (the telegraph), `slam`
+drives the tip down and damages anything inside `slamRadius`, and
+`pinned` is the ~2.7 s window where the limb is the only thing on the
+boss that `clean()` will accept damage on. Break one and the beast
+recoils, `expose()`ing the core for 7 s (9 s in phase 3). Core health
+drives three phases: 2 → 3 → 4 active tentacles, telegraphs 1.15 s →
+0.85 s, and from phase 2 it starts hawking gunk onto the deck (which
+just reuses `spawnGullSplat`, the existing falling-splat entity —
+no new class for a new attack).
+
+**Tentacles are beziers of spheres**, and the geometry lessons cost two
+rebuilds:
+- 8 beads over an 18 m arc reads as a *dotted line*, not a limb.
+  Continuity needs neighbour spacing under one bead diameter — which
+  means both more beads (24) and, because reach varies from 12 m to
+  30 m as it tracks the player, a per-frame `thick` multiplier scaled
+  off the base→tip span. Fixed radii cannot stay continuous at variable
+  reach.
+- One shared `TENTACLE_GEO` unit sphere, sized per segment via `scale`,
+  instead of 96 individual `SphereGeometry` allocations. The
+  corollary: `dispose()` must **not** free a shared geometry — the
+  first tentacle to die would blank the other three.
+- A dark silhouette (`0x3d2a17`) at 20 m in FogExp2 0.03 reads as
+  scenery. The beast needed `scale 1.7`, a much brighter emissive, and
+  a 22-unit glow sprite behind it before it looked alive at all.
+
+**Screenshot gotcha, not a game bug:** headless rAF is throttled to
+~2 fps, so the always-on tick barely runs and `updateSplashes` never
+expires anything. The boss's emergence splashes pile up into giant
+pale sprites that swallow the frame. Screenshot scripts should zero
+`splashPool` lifetimes before `renderOnce()`. Worth remembering before
+"fixing" a rendering bug that only exists in the harness.
+
+Testing: the boss checks run **last**, because the final one wins the
+level and `step()` deliberately stops advancing afterwards. And the win
+overlay is revealed on a 1.4 s `setTimeout` so the kill can play out —
+assert it with `waitForFunction`, not synchronously.
