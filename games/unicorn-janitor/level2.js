@@ -445,6 +445,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'BracketLeft') nudgeNozzle('fwd', -0.15);
   if (e.code === 'Quote') nudgeNozzle('up', 0.1);
   if (e.code === 'Semicolon') nudgeNozzle('up', -0.1);
+  if (Game.state === 'perks' && /^Digit[123]$/.test(e.code)) takePerk(+e.code.slice(5) - 1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
 window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
@@ -680,6 +681,102 @@ function makePlankTexture() {
   return tex;
 }
 
+/* ---------------------------------------------------------------------
+   BUILD 9 — verticality. The pier was a flat corridor, which gave the jet
+   boost nowhere to go and made every fight the same fight. Cargo
+   containers, kiosk roofs and springy awnings turn it into terrain: cover
+   to break line of sight, high ground to fight from, and a bounce-and-jet
+   route along the tops for anyone who wants to skip the deck entirely.
+   --------------------------------------------------------------------- */
+const platforms = [];   // {x0,x1,z0,z1,y} axis-aligned tops the player can stand on
+const bouncePads = [];  // {x,z,r,power,mesh}
+
+// highest platform top under (x,z) that we're allowed to land on. `fromY` is
+// where we were before this frame's fall, so you pass up through a platform
+// from underneath instead of snapping onto its roof.
+function groundHeightAt(x, z, fromY) {
+  let best = 0;
+  for (const p of platforms) {
+    if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
+    if (p.y > best && fromY >= p.y - 0.35) best = p.y;
+  }
+  return best;
+}
+
+function addPlatform(mesh, x, z, w, d, y) {
+  platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y });
+  if (mesh) camBlockers.push(mesh);
+}
+
+function buildTerrain(grp) {
+  const steelA = new THREE.MeshStandardMaterial({ color: 0x9a4a3a, roughness: 0.7, metalness: 0.25 });
+  const steelB = new THREE.MeshStandardMaterial({ color: 0x2f6a7a, roughness: 0.7, metalness: 0.25 });
+  const steelC = new THREE.MeshStandardMaterial({ color: 0x6a6a3a, roughness: 0.7, metalness: 0.25 });
+  const mats = [steelA, steelB, steelC];
+  const ribGeo = new THREE.BoxGeometry(0.12, 2.3, 0.12);
+  // [x, z, width, depth, height, rotated?]
+  const crates = [
+    [-7.5, -26, 5.4, 2.6, 2.5], [7.6, -40, 2.6, 5.4, 2.5], [-8.2, -55, 2.6, 5.2, 3.6],
+    [8.4, -70, 5.2, 2.6, 2.5], [0, -88, 6.2, 2.8, 3.2], [-8.6, -104, 2.8, 5.4, 2.5],
+    [8.2, -120, 5.4, 2.8, 3.8], [-7.4, -137, 5.4, 2.8, 2.5], [8.6, -152, 2.8, 5.4, 3.2],
+    [0, -166, 6.4, 2.8, 2.5], [-8.4, -182, 2.8, 5.4, 3.6], [7.8, -196, 5.4, 2.8, 2.5],
+  ];
+  crates.forEach(([x, z, w, d, h], i) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats[i % 3]);
+    m.position.set(x, h / 2, z);
+    m.castShadow = true; m.receiveShadow = true;
+    grp.add(m);
+    // corrugation ribs so a plain box reads as a shipping container
+    for (let k = -1; k <= 1; k++) {
+      const rib = new THREE.Mesh(ribGeo, mats[(i + 1) % 3]);
+      rib.scale.y = h / 2.3;
+      rib.position.set(x + (w > d ? k * w * 0.28 : w / 2 + 0.01), h / 2, z + (w > d ? d / 2 + 0.01 : k * d * 0.28));
+      grp.add(rib);
+    }
+    addPlatform(m, x, z, w, d, h);
+  });
+
+  // springy awnings: land on one and it throws you back up. Chained with the
+  // jet boost they're a route along the rooftops.
+  const padSpots = [[3.4, -33], [-4.6, -62], [5.2, -96], [-5.4, -128], [4.8, -160], [-3.6, -190]];
+  const padGeo = new THREE.CylinderGeometry(1.5, 1.6, 0.28, 14);
+  for (const [x, z] of padSpots) {
+    const pad = new THREE.Mesh(padGeo, new THREE.MeshStandardMaterial({
+      color: 0xff5fa2, roughness: 0.45, emissive: 0xff2f8a, emissiveIntensity: 0.5 }));
+    pad.position.set(x, 0.14, z);
+    pad.receiveShadow = true;
+    grp.add(pad);
+    const ring = glowSprite(0xff8fd0, 3.6, 0.35);
+    ring.position.set(x, 0.5, z);
+    grp.add(ring);
+    bouncePads.push({ x, z, r: 1.9, power: 15.5, mesh: pad, glow: ring, t: 0 });
+  }
+}
+
+function updateBouncePads(dt, t) {
+  for (const b of bouncePads) {
+    b.t = Math.max(0, b.t - dt * 3);
+    b.mesh.scale.y = 1 - b.t * 0.55;
+    b.glow.material.opacity = 0.3 + b.t * 0.5 + 0.06 * Math.sin(t * 4);
+  }
+}
+
+// called from the player's ground-contact code
+function tryBounce() {
+  for (const b of bouncePads) {
+    const dx = Player.pos.x - b.x, dz = Player.pos.z - b.z;
+    if (dx * dx + dz * dz > b.r * b.r) continue;
+    Player.vel.y = b.power;
+    Player.onGround = false;
+    b.t = 1;
+    SFX.pop(panFor(new THREE.Vector3(b.x, 0.5, b.z)), 0.5);
+    spawnGlitter(new THREE.Vector3(b.x, 0.6, b.z), 22, 4);
+    Player._fovPunch = Math.max(Player._fovPunch, 4);
+    return true;
+  }
+  return false;
+}
+
 const ambientSeaLions = [];
 // solid geometry the camera boom collides against (shops, carts, pilings) —
 // a short explicit list, because raycasting the whole scene every frame is waste
@@ -697,36 +794,57 @@ function buildWharf() {
   deck.receiveShadow = true;
   grp.add(deck);
 
-  // pilings under the pier edges — barnacle-dark, poking out of the water
-  const pileGeo = new THREE.CylinderGeometry(0.32, 0.38, 5, 8);
-  for (const side of [-1, 1]) {
-    for (let z = B.zStart; z > B.zEnd; z -= 7) {
-      const p = new THREE.Mesh(pileGeo, woodDark);
-      p.position.set(side * (B.width / 2 - 0.2), -2.2, z);
-      grp.add(p);
+  // Pilings and railings repeat ~230 times down a 243m pier. As individual
+  // meshes that was ~230 draw calls of scenery that never moves or reacts —
+  // more than the entire Level 1 scene. InstancedMesh renders each family in
+  // one call. Anything static and repeated on this map should go this way.
+  const _m4 = new THREE.Matrix4();
+  // ...but ONE InstancedMesh spanning the whole pier can never frustum-cull,
+  // so it draws all 243m of railing even when you're facing the other way.
+  // Chunk by z: each chunk is a single draw call AND culls as a unit.
+  const CHUNK = 55;
+  const instanced = (geo, mat, placements) => {
+    const chunks = new Map();
+    for (const pl of placements) {
+      const k = Math.floor(pl[2] / CHUNK);
+      if (!chunks.has(k)) chunks.set(k, []);
+      chunks.get(k).push(pl);
     }
+    for (const group of chunks.values()) {
+      const im = new THREE.InstancedMesh(geo, mat, group.length);
+      group.forEach(([x, y, z, rx], i) => {
+        _m4.makeRotationX(rx || 0);
+        _m4.setPosition(x, y, z);
+        im.setMatrixAt(i, _m4);
+      });
+      im.instanceMatrix.needsUpdate = true;
+      // scenery this small doesn't need to cast into the 28m shadow window
+      im.castShadow = false;
+      grp.add(im);
+    }
+  };
+
+  // pilings under the pier edges — barnacle-dark, poking out of the water
+  const pilingSpots = [];
+  for (const side of [-1, 1]) {
+    for (let z = B.zStart; z > B.zEnd; z -= 7) pilingSpots.push([side * (B.width / 2 - 0.2), -2.2, z]);
   }
+  instanced(new THREE.CylinderGeometry(0.32, 0.38, 5, 8), woodDark, pilingSpots);
 
   // post-and-rail wooden railings (waist height, rope sag between posts)
-  const postGeo = new THREE.BoxGeometry(0.18, 1.5, 0.18);
   const ropeMat = new THREE.MeshStandardMaterial({ color: 0x9a8563, roughness: 0.95 });
+  const postSpots = [], ropeSpots = [];
   for (const side of [-1, 1]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, len), wood);
     rail.position.set(side * (B.width / 2 - 0.4), 1.35, zMid);
     grp.add(rail);
     for (let z = B.zStart; z > B.zEnd; z -= 6) {
-      const p = new THREE.Mesh(postGeo, wood);
-      p.position.set(side * (B.width / 2 - 0.4), 0.75, z);
-      grp.add(p);
-      // rope sag to the next post
-      if (z - 6 > B.zEnd) {
-        const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 5.7, 5), ropeMat);
-        rope.rotation.x = Math.PI / 2;
-        rope.position.set(side * (B.width / 2 - 0.4), 0.95, z - 3);
-        grp.add(rope);
-      }
+      postSpots.push([side * (B.width / 2 - 0.4), 0.75, z]);
+      if (z - 6 > B.zEnd) ropeSpots.push([side * (B.width / 2 - 0.4), 0.95, z - 3, Math.PI / 2]);
     }
   }
+  instanced(new THREE.BoxGeometry(0.18, 1.5, 0.18), wood, postSpots);
+  instanced(new THREE.CylinderGeometry(0.035, 0.035, 5.7, 5), ropeMat, ropeSpots);
 
   // shop row along the -x side: colorful shacks, striped awnings, glowing signs
   const shopDefs = [ // [z, width, hull color, awning color, sign color]
@@ -863,6 +981,7 @@ function buildWharf() {
   sunGlow.position.set(120, 26, -70);
   grp.add(sunGlow);
 
+  buildTerrain(grp);
   scene.add(grp);
 }
 
@@ -1214,6 +1333,9 @@ function buildProps() {
 // physics debris. Zombies add their trademark eye; piles pass their own
 // material so the debris glows the pile's color.
 function spawnChunkBurst(center, { count = 6, mat = null, eyeMat = null, rMin = 0.14, rMax = 0.3, power = 1 } = {}) {
+  // a wiped-out swarm must not dump 600 rigid bodies into one frame
+  if (physBodies.length > 150) count = Math.max(1, Math.round(count * 0.4));
+  if (physBodies.length > 260) return;
   const scoopMat = mat || new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
   for (let i = 0; i < count; i++) {
     const isEye = eyeMat && i === count - 1;
@@ -1299,6 +1421,11 @@ class PoopPile {
     // the pile bursts into physical gobs in its own glowing color
     spawnChunkBurst(this.group.position, { count: 5, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 0.9 });
     spawnWetPatch(this.group.position); // a burst pile leaves the planks slick
+    if (Perks.thorns()) { // GLITTER BOMB: the pop is shrapnel
+      for (const z of zombies) {
+        if (z.alive && z.group.position.distanceTo(this.group.position) < 5.5) z.clean(Perks.thorns(), z.group.position);
+      }
+    }
     SFX.pop(panFor(this.group.position), 0.9);
     registerCombo(this.group.position);
     removeCleanTargets(this.group);
@@ -1344,6 +1471,10 @@ function updatePileJelly(dt, t) {
   for (let i = 0; i < piles.length; i++) {
     const p = piles[i];
     if (!p.alive) continue;
+    const pdx = p.group.position.x - Player.pos.x, pdz = p.group.position.z - Player.pos.z;
+    const pvis = pdx * pdx + pdz * pdz < CULL2;
+    if (p.group.visible !== pvis) p.group.visible = pvis;
+    if (!pvis) continue; // no point springing jelly nobody can see
     // BUILD 3: abandoned progress re-festers — a half-cleaned pile slowly
     // regrows if it hasn't been sprayed for a few seconds. Finish the job.
     p.sinceClean += dt;
@@ -1701,11 +1832,15 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.
 // fog, where nobody can see a 60Hz gait. Beyond 55m they tick in coarser
 // batched steps — same behaviour, a fraction of the work. Shared by tick and
 // the headless stepper so tests exercise exactly what ships.
+const CULL2 = 52 * 52; // squared distance past which the fog has eaten it anyway
 function updateZombies(dt, t) {
   for (const z of zombies) {
     if (!z.alive) continue;
     const dx = z.group.position.x - Player.pos.x, dz = z.group.position.z - Player.pos.z;
-    if (dx * dx + dz * dz > 3025) {
+    const d2 = dx * dx + dz * dz;
+    const vis = d2 < CULL2;
+    if (z.group.visible !== vis) z.group.visible = vis;
+    if (d2 > 3025) {
       z._acc = (z._acc || 0) + dt;
       if (z._acc < 0.1) continue;      // ~10Hz out in the murk
       z.update(Math.min(z._acc, 0.15), t);
@@ -2699,6 +2834,80 @@ class GunkKraken {
         escalating waves, and a score that only climbs while you keep the
         hype alive. Dying ends the run and banks a high score.
    ===================================================================== */
+/* ---------------------------------------------------------------------
+   PERKS (BUILD 9) — the run-scoped upgrade layer. The talent tree is a
+   slow drip across a whole level; this is the fast one: clear a wave,
+   pick one of three, watch the build compound. Same discipline as the
+   talents — every perk is read at the call site, never written into CFG.
+   --------------------------------------------------------------------- */
+const PERKS = [
+  { key: 'power',   icon: '💦', name: 'HIGH PRESSURE', desc: '+22% hose power, stacking.' },
+  { key: 'tank',    icon: '🫧', name: 'BIGGER TANK',   desc: 'Pressure refills 40% faster and drains slower.' },
+  { key: 'boots',   icon: '👟', name: 'SPRING BOOTS',  desc: 'Move 12% faster and jump noticeably higher.' },
+  { key: 'wide',    icon: '🌊', name: 'FLARED CONE',   desc: 'BLAST reaches further and hits wider.' },
+  { key: 'leech',   icon: '💗', name: 'SUDS THERAPY',  desc: 'Cleaning slowly heals you.' },
+  { key: 'hype',    icon: '🪩', name: 'SLOW BURN',     desc: 'Hype drains 40% slower — hold LEGENDARY longer.' },
+  { key: 'beam',    icon: '🌈', name: 'PRISM LENS',    desc: 'Magic Beam costs less rainbow to fire.' },
+  { key: 'thorns',  icon: '✨', name: 'GLITTER BOMB',  desc: 'Popped piles damage nearby zombies.' },
+];
+const Perks = {
+  taken: {},
+  rank(k) { return this.taken[k] || 0; },
+  reset() { this.taken = {}; },
+  hoseMul() { return 1 + 0.22 * this.rank('power'); },
+  regenMul() { return 1 + 0.4 * this.rank('tank'); },
+  drainMul() { return 1 / (1 + 0.18 * this.rank('tank')); },
+  speedMul() { return 1 + 0.12 * this.rank('boots'); },
+  jumpMul() { return 1 + 0.14 * this.rank('boots'); },
+  blastMul() { return 1 + 0.22 * this.rank('wide'); },
+  leech() { return 0.9 * this.rank('leech'); },        // hp per second of contact
+  hypeDecayMul() { return 1 / (1 + 0.4 * this.rank('hype')); },
+  beamCostMul() { return 1 / (1 + 0.25 * this.rank('beam')); },
+  thorns() { return 26 * this.rank('thorns'); },
+};
+const perkPickEl = document.getElementById('perkPick');
+const perkRowEl = document.getElementById('perkRow');
+const perkOwnedEl = document.getElementById('perkOwned');
+let perkOffer = [];
+
+function offerPerks() {
+  const pool = PERKS.slice();
+  perkOffer = [];
+  for (let i = 0; i < 3 && pool.length; i++) {
+    perkOffer.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  perkRowEl.innerHTML = '';
+  perkOffer.forEach((pk, i) => {
+    const card = document.createElement('div');
+    card.className = 'perkCard';
+    const rank = Perks.rank(pk.key);
+    card.innerHTML = `<div class="ico">${pk.icon}</div><h3>${pk.name}${rank ? ' ' + (rank + 1) : ''}</h3>` +
+      `<p>${pk.desc}</p><div class="key">${i + 1}</div>`;
+    card.addEventListener('click', () => takePerk(i));
+    perkRowEl.appendChild(card);
+  });
+  const owned = Object.entries(Perks.taken).map(([k, v]) => {
+    const d = PERKS.find(p => p.key === k);
+    return `${d.icon} ${d.name}${v > 1 ? ' ×' + v : ''}`;
+  });
+  perkOwnedEl.textContent = owned.length ? 'Loadout: ' + owned.join('  ·  ') : '';
+  perkPickEl.classList.add('show');
+  Game.state = 'perks';           // freeze the world while you read
+  if (document.exitPointerLock) document.exitPointerLock();
+}
+
+function takePerk(i) {
+  const pk = perkOffer[i];
+  if (!pk) return;
+  Perks.taken[pk.key] = Perks.rank(pk.key) + 1;
+  perkPickEl.classList.remove('show');
+  Game.state = 'playing';
+  SFX.chime(1.3);
+  showToast(`${pk.icon} ${pk.name} acquired`);
+  spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 60, 5);
+  if (!IS_TOUCH && canvas.requestPointerLock) canvas.requestPointerLock();
+}
+
 const rushHudEl = document.getElementById('rushHud');
 const rushWaveEl = document.getElementById('rushWave');
 const rushScoreEl = document.getElementById('rushScore');
@@ -2743,6 +2952,7 @@ function clearStoryContent() {
 function startRush() {
   Rush.on = true;
   Rush.wave = 0; Rush.score = 0; Rush.breather = 3.5; Rush.cleared = false;
+  Perks.reset();
   clearStoryContent();
   Player.hasHorn = true;
   Player.horn && (Player.horn.visible = true);
@@ -2765,7 +2975,11 @@ function startWave() {
   Rush.cleared = false;
   const w = Rush.wave;
   const swarm = w % 5 === 0;
-  const count = Math.min(22, 3 + Math.floor(w * 1.35)) * (swarm ? 2 : 1);
+  // a wave is a threat, not a framerate test: keep the live crowd bounded so
+  // deep waves get *harder* (more brutes/runners) rather than just heavier
+  const live = zombies.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
+  const want = Math.min(16, 3 + Math.floor(w * 1.2)) * (swarm ? 2 : 1);
+  const count = Math.max(2, Math.min(want, 26 - live));
   const runnerFrom = 2, bruteFrom = 4;
   for (let i = 0; i < count; i++) {
     const ang = Math.random() * Math.PI * 2;
@@ -2814,7 +3028,8 @@ function updateRush(dt) {
     Meters.pressure = 100;
     rushWaveEl.textContent = 'WAVE ' + Rush.wave + ' CLEAR';
     banner('WAVE CLEAR');
-    showToast(`✅ Wave ${Rush.wave} down · +${200 * Rush.wave} · next tide in 5s`);
+    showToast(`✅ Wave ${Rush.wave} down · +${200 * Rush.wave}`);
+    offerPerks();
   }
 }
 
@@ -3359,7 +3574,7 @@ function updatePlayer(dt, t) {
   // BUILD 4 momentum: velocity chases the wish direction with real
   // acceleration (much less of it mid-air), so starts, stops and strafes
   // carry weight instead of teleport-snapping
-  _v2.multiplyScalar(CFG.player.speed * RPG.speedMul() * (sprinting ? 1.45 : 1));
+  _v2.multiplyScalar(CFG.player.speed * RPG.speedMul() * Perks.speedMul() * (sprinting ? 1.45 : 1));
   const accel = (Player.onGround ? 34 : 10) * dt;
   Player.hvel.x += THREE.MathUtils.clamp(_v2.x - Player.hvel.x, -accel, accel);
   Player.hvel.z += THREE.MathUtils.clamp(_v2.z - Player.hvel.z, -accel, accel);
@@ -3381,14 +3596,26 @@ function updatePlayer(dt, t) {
   Player.knock.multiplyScalar(Math.max(0, 1 - 5 * dt));
 
   // --- jump / gravity ---
-  if (Input.jumpPressed && Player.onGround) { Player.vel.y = CFG.player.jumpVel; Player.onGround = false; }
+  if (Input.jumpPressed && Player.onGround) { Player.vel.y = CFG.player.jumpVel * Perks.jumpMul(); Player.onGround = false; }
   Input.jumpPressed = false;
+  const prevY = Player.pos.y;
   Player.vel.y -= CFG.player.gravity * dt;
   Player.pos.y += Player.vel.y * dt;
-  if (Player.pos.y <= 0) {
-    // touchdown: bank the impact speed as a squash-and-recover on the body
-    if (!Player.onGround && Player.vel.y < -3) Player._landSq = Math.min(0.16, -Player.vel.y * 0.016);
-    Player.pos.y = 0; Player.vel.y = 0; Player.onGround = true;
+  const groundY = groundHeightAt(Player.pos.x, Player.pos.z, prevY);
+  if (Player.pos.y <= groundY) {
+    const impact = Player.vel.y;
+    Player.pos.y = groundY; Player.vel.y = 0;
+    const wasAir = !Player.onGround;
+    Player.onGround = true;
+    // a springy awning converts that landing straight back into height
+    if (groundY === 0 && tryBounce()) {
+      Player._landSq = 0;
+    } else if (wasAir && impact < -3) {
+      // touchdown: bank the impact speed as a squash-and-recover on the body
+      Player._landSq = Math.min(0.16, -impact * 0.016);
+    }
+  } else if (Player.pos.y > groundY + 0.05) {
+    Player.onGround = false; // walked off an edge
   }
 
   // stay on the playable deck
@@ -3673,10 +3900,14 @@ function updateHose(dt) {
   if (pressureLocked && Meters.pressure > 25) pressureLocked = false;
   const spraying = wantSpray && !pressureLocked && Meters.pressure > 0;
   if (spraying) {
-    Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * Nozzle().drain * (1 - 0.08 * RPG.ranks.power) * dt);
+    Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * Nozzle().drain * Perks.drainMul() * (1 - 0.08 * RPG.ranks.power) * dt);
+    if (Perks.leech() && Player.hp < 100) { // suds therapy ticks while you work
+      Player.hp = Math.min(100, Player.hp + Perks.leech() * dt);
+      hpFill.style.width = Player.hp + '%';
+    }
     if (Meters.pressure <= 0) { pressureLocked = true; Tutorial.fire('pressureEmpty'); }
   } else {
-    Meters.pressure = Math.min(100, Meters.pressure + PRESSURE_REGEN * dt);
+    Meters.pressure = Math.min(100, Meters.pressure + PRESSURE_REGEN * Perks.regenMul() * dt);
   }
   pressureFill.style.width = Meters.pressure + '%';
   rainbowFill.style.width = Meters.rainbow + '%';
@@ -3724,7 +3955,7 @@ function updateHose(dt) {
 
     // the actual cleaning: ray from the camera through the crosshair
     const NZ = Nozzle();
-    const power = CFG.hose.dps * NZ.dps * RPG.hoseMul() * Hype.dmgMul();
+    const power = CFG.hose.dps * NZ.dps * RPG.hoseMul() * Hype.dmgMul() * Perks.hoseMul();
     raycaster.set(camera.position, Player.aim);
     raycaster.far = NZ.range + 6; // camera sits ~5.4 behind the player
     const hits = raycaster.intersectObjects(cleanTargets, false);
@@ -3745,9 +3976,10 @@ function updateHose(dt) {
           _v2.subVectors(tgt.group.position, Player.pos);
           _v2.y += (tgt.aimY ?? 0.9) - 1.2;
           const d = _v2.length();
-          if (d > NZ.range || d < 0.01) continue;
-          if (_v2.dot(Player.aim) / d < BLAST_COS) continue;
-          const falloff = 1 - 0.5 * (d / NZ.range);
+          const blastRange = NZ.range * Perks.blastMul();
+          if (d > blastRange || d < 0.01) continue;
+          if (_v2.dot(Player.aim) / d < BLAST_COS / Perks.blastMul()) continue;
+          const falloff = 1 - 0.5 * (d / blastRange);
           tgt.clean(power * falloff * dt, tgt.group.position);
           if (tgt.push) { tgt.push(dt * 1.35); if (tgt.stun && Math.random() < dt * 1.6) tgt.stun(0.35); }
           any = true;
@@ -3911,8 +4143,8 @@ function updateBeam(dt) {
 
   if (Input.beamPressed) {
     Input.beamPressed = false;
-    if (Player.hasHorn && beamCooldown <= 0 && Meters.rainbow >= BEAM_COST && Game.state === 'playing') {
-      Meters.rainbow -= BEAM_COST;
+    if (Player.hasHorn && beamCooldown <= 0 && Meters.rainbow >= BEAM_COST * Perks.beamCostMul() && Game.state === 'playing') {
+      Meters.rainbow -= BEAM_COST * Perks.beamCostMul();
       beamCooldown = beamMaxCd;
       Player._fovPunch = Math.max(Player._fovPunch, 6);
       SFX.beam();
@@ -4196,6 +4428,11 @@ function updateNova(dt) {
 let hitStop = 0;                 // seconds of slow-motion remaining
 const dyingZombies = [];         // spin-shrink corpses mid-animation
 
+function reapEntities() {
+  for (let i = piles.length - 1; i >= 0; i--) if (!piles[i].alive) piles.splice(i, 1);
+  for (let i = zombies.length - 1; i >= 0; i--) if (!zombies[i].alive) zombies.splice(i, 1);
+}
+
 function updateDying(dt) {
   for (let i = dyingZombies.length - 1; i >= 0; i--) {
     const d = dyingZombies[i];
@@ -4283,7 +4520,7 @@ const Hype = {
 
 function updateHype(dt) {
   // heat bleeds away steadily — a streak is something you keep alive
-  Hype.heat = Math.max(0, Hype.heat - dt * 0.075);
+  Hype.heat = Math.max(0, Hype.heat - dt * 0.075 * Perks.hypeDecayMul());
   // hysteresis: you climb at the threshold but only fall 0.07 below it, so a
   // tier you earned doesn't strobe on and off while the meter drains
   let tier = 0;
@@ -4921,6 +5158,11 @@ function buildLevel() {
   }
   Game.totalZombies = zombies.length;
 
+  Game.layoutStats = {
+    piles: piles.length, zombies: zombies.length, civs: civilians.length,
+    runners: zombies.filter(z => z.runner).length,
+    brutes: zombies.filter(z => z.brute).length,
+  };
   updateObjectiveHUD();
 }
 
@@ -5041,6 +5283,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updateWharfToys(dt);
     updateBoss(dt, t);
     updateRush(dt);
+    reapEntities();
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
     updateCompass(); updateThreatMusic(dt); updateHype(dt);
     if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
@@ -5059,9 +5302,11 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   screenBearing, showDamageFrom, updateDamageArcs, damagePlayer,
   getThreat: () => threatLevel, vignette, updateZombies,
   Hype, HYPE_TIERS, updateHype, getDisco: () => disco, bloom,
-  BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool,
+  BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool, scene,
   NOZZLES, cycleNozzle, Nozzle, getNozzleIdx: () => nozzleIdx, setNozzle: (i) => { nozzleIdx = i; applyNozzleUI(); },
-  Rush, startRush, startWave, updateRush, clearStoryContent,
+  Rush, startRush, startWave, updateRush, clearStoryContent, reapEntities,
+  platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads,
+  PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -5086,6 +5331,7 @@ function tick() {
   updateOcean(t);
   updateGulls(t);
   updateSeaLions(t, dt);
+  updateBouncePads(dt, t);
   updateGlitter(dt);
   updateSplashes(dt);
   updateDamageArcs(dt);
@@ -5123,6 +5369,7 @@ function tick() {
     updateWharfToys(dt);
     updateBoss(dt, t);
     updateRush(dt);
+    reapEntities();
     updateCompass();
     updateThreatMusic(dt);
     updateHype(dt);
