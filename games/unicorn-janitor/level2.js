@@ -3960,6 +3960,8 @@ function updateHose(dt) {
     raycaster.far = NZ.range + 6; // camera sits ~5.4 behind the player
     const hits = raycaster.intersectObjects(cleanTargets, false);
     HoseFX.lastHits = hits.length; HoseFX.lastMode = NZ.key; // debug readout
+    HoseFX.lastEntity = hits.length ? ((hits[0].object.userData.entity || {}).constructor || {}).name || 'none' : null;
+    HoseFX.lastHitDist = hits.length ? +hits[0].distance.toFixed(1) : -1;
     // ride the jet light out to whatever the water is hitting (or ~3m ahead)
     HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(Player.aim, 3));
     HoseFX.light.intensity = 1.7 + (Settings.reduceMotion ? 0 : Math.random() * 0.5);
@@ -4010,14 +4012,21 @@ function updateHose(dt) {
         if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
       }
     } else if (hits.length) {
-      const e = hits[0].object.userData.entity;
+      // skip anything that can't take damage — a corpse still in cleanTargets
+      // or a sea lion you already saved would otherwise swallow the whole jet
+      let e = null, point = null;
+      for (const h of hits) {
+        const c = h.object.userData.entity;
+        if (!c || c.alive === false || c.resolved) continue;
+        e = c; point = h.point; break;
+      }
       if (e) {
-        e.clean(power * dt, hits[0].point);
+        e.clean(power * dt, point);
         if (e.push) e.push(dt); // high-pressure water shoves zombies back
         Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); // cleaning charges the beam
         hitPulse = 1; // crosshair feedback: you're scrubbing something
-        if (Math.random() < dt * 14) spawnSplash(hits[0].point);
-        if (Math.random() < dt * 6) SFX.splat(panFor(hits[0].point), 0.35);
+        if (Math.random() < dt * 14) spawnSplash(point);
+        if (Math.random() < dt * 6) SFX.splat(panFor(point), 0.35);
       }
     }
     // SOFT AIM ASSIST (BUILD 3): when the ray misses everything, the single
@@ -4156,14 +4165,20 @@ function updateBeam(dt) {
       const nozzle = nozzleWorldPos(_v1.clone());
       let end;
       Player.shake = Math.max(Player.shake, 0.22);
-      if (hits.length && hits[0].object.userData.entity) {
-        end = hits[0].point.clone();
-        const ent = hits[0].object.userData.entity;
-        ent.clean(CFG.beam.damage * RPG.beamMul(), hits[0].point);
+      let bh = null;
+      for (const h of hits) { // same rule as the hose: shoot past the undamageable
+        const c = h.object.userData.entity;
+        if (!c || c.alive === false || c.resolved) continue;
+        bh = h; break;
+      }
+      if (bh) {
+        end = bh.point.clone();
+        const ent = bh.object.userData.entity;
+        ent.clean(CFG.beam.damage * RPG.beamMul(), bh.point);
         if (ent.stun) ent.stun(2.5); // the beam blasts AND stuns
-        spawnGlitter(hits[0].point, 30, 4);
-        spawnSplash(hits[0].point, true);
-        SFX.splat(panFor(hits[0].point), 0.7);
+        spawnGlitter(bh.point, 30, 4);
+        spawnSplash(bh.point, true);
+        SFX.splat(panFor(bh.point), 0.7);
       } else {
         // BEAM GRAZE (BUILD 3): the big cooldown shot shouldn't whiff on a
         // hair miss — bend the blast into the nearest target within ~1m of
@@ -4429,8 +4444,16 @@ let hitStop = 0;                 // seconds of slow-motion remaining
 const dyingZombies = [];         // spin-shrink corpses mid-animation
 
 function reapEntities() {
-  for (let i = piles.length - 1; i >= 0; i--) if (!piles[i].alive) piles.splice(i, 1);
-  for (let i = zombies.length - 1; i >= 0; i--) if (!zombies[i].alive) zombies.splice(i, 1);
+  for (let i = piles.length - 1; i >= 0; i--) {
+    if (piles[i].alive) continue;
+    removeCleanTargets(piles[i].group); // never leave a ray-blocker behind
+    piles.splice(i, 1);
+  }
+  for (let i = zombies.length - 1; i >= 0; i--) {
+    if (zombies[i].alive) continue;
+    removeCleanTargets(zombies[i].group);
+    zombies.splice(i, 1);
+  }
 }
 
 function updateDying(dt) {
@@ -5305,7 +5328,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool, scene,
   NOZZLES, cycleNozzle, Nozzle, getNozzleIdx: () => nozzleIdx, setNozzle: (i) => { nozzleIdx = i; applyNozzleUI(); },
   Rush, startRush, startWave, updateRush, clearStoryContent, reapEntities,
-  platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads,
+  platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads, removeCleanTargets,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   renderOnce: () => composer.render() };
 

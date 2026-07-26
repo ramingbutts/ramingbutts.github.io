@@ -859,3 +859,43 @@ Two harness lessons from this build:
 - A check that waits to observe `onGround` before measuring a rebound
   will never fire on a bounce pad — the pad clears that flag in the same
   frame it launches. The pad worked; the test's gate didn't.
+
+## The hits[0] bug — why enemies stopped taking damage (BUILD 10)
+
+Player report: "the enemies are not taking damage." Every headless check
+was green, because every check shot at a *clean* line of fire.
+
+The hose took `hits[0]` — the nearest thing the ray touched — and called
+`clean()` on it. If that nearest thing could not take damage, the shot
+was simply consumed. A dead zombie whose meshes were still registered in
+`cleanTargets`, or a sea lion you'd already rescued, became an **invisible
+bulletproof shield** for everything behind it. A distance sweep made it
+unmistakable: at 5 m the target took 48.8 damage; at 10, 14, 17, 20, 24
+and 30 m it took **exactly zero**, while `hits.length` was 3–5 the whole
+time. The ray was connecting every frame and the damage was landing on a
+corpse.
+
+Two fixes, and the first is the general rule:
+1. **Walk the sorted hit list; take the first entity that can actually
+   receive damage** (skip `alive === false` / `resolved`). The jet — and
+   the beam, which had the identical assumption — now shoot *through*
+   whatever can't be hurt. Note this deliberately does not skip boss
+   tentacles: they have no `alive`/`resolved` of their own, so an
+   un-pinned limb still shields the core, which is the intended fight.
+2. **Close the leak at the source**: `reapEntities()` now calls
+   `removeCleanTargets()` before splicing, so nothing can be removed from
+   the world while leaving a ray-blocker behind, regardless of whether it
+   died through `die()`.
+
+The lesson worth carrying: **`intersectObjects` returns a sorted list for
+a reason.** Any "nearest hit" logic needs a validity predicate, or the
+first invalid thing in the line silently eats the mechanic. And a check
+that only ever fires down an empty corridor cannot see it — the
+regression test now deliberately parks a corpse in the line of fire.
+
+Also fixed here: the level-1 "jet sends a prop flying" check was flaky
+(0.5–1.4 m against a 0.5 m threshold) because it grabbed whichever prop
+happened to be nearest, at whatever range and angle. It now parks the
+prop at a fixed spot in front of the player: 4.25/4.37/4.42 m across
+runs. Flaky checks are worse than missing ones — they train you to
+ignore a red suite.
