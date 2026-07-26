@@ -235,6 +235,13 @@ const phys = await page.evaluate(() => {
   const prop = UJ.physBodies.filter(b => b.ttl == null)
     .sort((a,b) => a.g.position.distanceTo(P.pos) - b.g.position.distanceTo(P.pos))[0];
   if (!prop) return { skipped: true };
+  // Park it at a known spot in front of the player. Whichever prop happens to
+  // be nearest sits at a different range and angle each run, and the impulse
+  // scales with both — that variance made this check flaky (0.5m to 1.4m).
+  prop.g.position.set(P.pos.x, prop.restY, P.pos.z - 4);
+  prop.vel.set(0, 0, 0); prop.angVel.set(0, 0, 0);
+  P.yaw = Math.PI; P.pitch = 0;
+  for (let i=0;i<30;i++) UJ.step(0.03);   // settle the camera behind the player
   const p0 = prop.g.position.clone();
   UJ.Input.spray = true;
   for (let i=0;i<25;i++) { const q = prop.g.position; UJ.aimAt(q.x, q.y + 0.3, q.z); UJ.step(0.03); }

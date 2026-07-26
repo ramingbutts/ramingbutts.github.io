@@ -1010,6 +1010,42 @@ ok('brute: bigger, tougher, slower, and too heavy for the jet to shove',
    `${brute.layout} in the layout · ${brute.goo} goo · ${brute.scale}× scale · knockback ${brute.bruteShoved.toFixed(2)}m vs a normal zombie's ${brute.normalShoved.toFixed(2)}m`);
 
 await page.evaluate(() => window.__QA_CLEAN());
+// B9z. THE BUG THAT BROKE THE GAME: anything in cleanTargets that can't take
+// damage used to swallow the whole jet, because only hits[0] was considered.
+// One corpse between you and an enemy = zero damage, with no feedback.
+const blocker = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const setup = (leaveCorpse) => {
+    UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; UJ.removeCleanTargets(z.group); z.group.visible = false; } });
+    P.pos.set(0, 0, -30); P.yaw = Math.PI; P.pitch = 0;
+    if (leaveCorpse) {
+      // a dead zombie whose meshes were never unregistered — exactly the state
+      // that made the hose useless
+      const dead = UJ.spawnZombieAt(0, -38);
+      dead.alive = false; dead.group.visible = false;
+    }
+    const target = UJ.spawnZombieAt(0, -46);
+    target.stun(999);
+    UJ.Meters.pressure = 100;
+    for (let i = 0; i < 45; i++) { UJ.aimAt(0, 1.1, -46); UJ.step(0.03); }
+    const g0 = target.goo;
+    UJ.Input.spray = true;
+    for (let i = 0; i < 25; i++) { UJ.aimAt(0, 1.1, -46); UJ.step(0.03); }
+    UJ.Input.spray = false;
+    const dmg = +(g0 - target.goo).toFixed(1);
+    target.alive = false; target.group.visible = false;
+    return dmg;
+  };
+  const clean = setup(false);
+  const throughCorpse = setup(true);
+  window.__QA_CLEAN();
+  return { clean, throughCorpse };
+});
+ok('the jet shoots through corpses instead of being swallowed by them',
+   blocker.clean > 10 && blocker.throughCorpse > 10,
+   `damage to a zombie 16m out — clear line ${blocker.clean}, with a corpse in the way ${blocker.throughCorpse}`);
+
+await page.evaluate(() => window.__QA_CLEAN());
 // B9a. TERRAIN — cargo containers are solid ground you can stand on
 const terrain = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
@@ -1064,23 +1100,23 @@ const perks = await page.evaluate(() => {
   const base = { hose: UJ.Perks.hoseMul(), jump: UJ.Perks.jumpMul(), drain: UJ.Perks.drainMul() };
   UJ.Perks.taken = { power: 2, boots: 1, tank: 1 };
   const buffed = { hose: UJ.Perks.hoseMul(), jump: UJ.Perks.jumpMul(), drain: UJ.Perks.drainMul() };
-  // and prove the jump one actually reaches higher in the sim
-  const apex = () => {
+  // measure the launch impulse itself: integrating to an apex is perturbed by
+  // terrain, bob and landing squash, and that noise swamped the difference
+  const launch = () => {
     P.pos.set(0, 0, -30); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
     UJ.Input.jumpPressed = true;
-    let peak = 0;
-    for (let i = 0; i < 60; i++) { UJ.step(0.03); peak = Math.max(peak, P.pos.y); }
-    return peak;
+    UJ.step(0.03);
+    return P.vel.y;
   };
-  const highJump = apex();
+  const highJump = launch();
   UJ.Perks.reset();
-  const plainJump = apex();
+  const plainJump = launch();
   return { base, buffed, highJump, plainJump };
 });
 ok('perks stack and take effect at the call site',
    perks.base.hose === 1 && Math.abs(perks.buffed.hose - 1.44) < 0.001 &&
-   perks.buffed.jump > 1 && perks.buffed.drain < 1 && perks.highJump > perks.plainJump + 0.2,
-   `hose ×${perks.base.hose} → ×${perks.buffed.hose.toFixed(2)} with 2 stacks · jump apex ${perks.plainJump.toFixed(2)}m → ${perks.highJump.toFixed(2)}m with SPRING BOOTS`);
+   perks.buffed.jump > 1 && perks.buffed.drain < 1 && perks.highJump > perks.plainJump * 1.1,
+   `hose ×${perks.base.hose} → ×${perks.buffed.hose.toFixed(2)} with 2 stacks · jump launch ${perks.plainJump.toFixed(2)} → ${perks.highJump.toFixed(2)} m/s with SPRING BOOTS`);
 
 await page.evaluate(() => window.__QA_CLEAN());
 // B8a. NOZZLES — R cycles three genuinely different tools
