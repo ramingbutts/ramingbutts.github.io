@@ -2312,6 +2312,370 @@ function nudgeNozzle(axis, delta) {
 }
 
 /* =====================================================================
+   9.9 THE GUNK KRAKEN (BUILD 7) — the thing the rot was feeding.
+       It hauls itself out of the bay at the end of the pier once the
+       wharf is clear. Tentacles hammer the deck on a telegraph; hose a
+       pinned one until it breaks and the beast recoils, baring the core
+       that is its actual health. Everything the level taught you —
+       dodging with the jet, banking hype for damage, the beam for
+       burst — is what this fight asks for.
+   ===================================================================== */
+const BOSS = {
+  tentacleGoo: 130, coreGoo: 400, slamDmg: 18, expose: 7,
+  slamRadius: 3.7, arena: 20, // metres of deck the fight lives on
+};
+let boss = null;
+// every tentacle segment is the same unit sphere, sized by scale — 4 limbs of
+// 18 beads each would otherwise be 72 separate geometries
+const TENTACLE_GEO = new THREE.SphereGeometry(1, 10, 8);
+
+class BossTentacle {
+  constructor(b, idx, baseX) {
+    this.b = b; this.idx = idx;
+    this.goo = BOSS.tentacleGoo;
+    this.state = 'idle'; this.t = 0;
+    this.cd = 1.4 + idx * 1.1;      // staggered so they don't slam in unison
+    this.disabled = 0;
+    this.base = new THREE.Vector3(baseX * 1.5, -0.4, b.z + 5.5);
+    this.tip = this.base.clone().add(new THREE.Vector3(0, 5, 5));
+    this.target = this.tip.clone();
+    this.lift = 6;
+
+    const hue = 0.08 + idx * 0.05;
+    this.mat = new THREE.MeshStandardMaterial({
+      color: 0x4a3520, roughness: 0.55,
+      emissive: new THREE.Color().setHSL(hue, 0.9, 0.4), emissiveIntensity: 0.25 });
+    // Enough beads that neighbours overlap along the whole arc — at 8 they
+    // read as a dotted line in the sky, not a limb. Spacing along an ~18m
+    // bezier has to stay under one segment diameter.
+    this.segs = [];
+    this.segR = [];
+    const N = 24;
+    for (let i = 0; i < N; i++) {
+      const u = i / (N - 1);
+      const r = 0.95 - 0.5 * u * u;       // thick at the shoulder, tapering to the tip
+      const m = new THREE.Mesh(TENTACLE_GEO, this.mat);
+      m.scale.setScalar(r);
+      m.userData.entity = this;
+      m.castShadow = true;
+      scene.add(m);
+      cleanTargets.push(m);
+      this.segs.push(m);
+      this.segR.push(r);
+    }
+    // the telegraph: a ring that swells on the planks where it's about to land
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 40),
+      new THREE.MeshBasicMaterial({ color: 0xff5f6e, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    this.ring.rotation.x = -Math.PI / 2;
+    this.ring.position.y = 0.05;
+    scene.add(this.ring);
+    this.group = { position: this.tip }; // duck-typing for the cleaning helpers
+  }
+
+  clean(amount, point) {
+    if (!this.b.alive) return;
+    // only vulnerable while it's lying on the deck — that's the whole rhythm
+    if (this.state !== 'pinned') {
+      if (Math.random() < 0.25) spawnSplash(point || this.tip);
+      return;
+    }
+    this.goo -= amount;
+    const f = Math.max(this.goo, 0) / BOSS.tentacleGoo;
+    this.mat.emissiveIntensity = 0.25 * f;
+    if (Math.random() < 0.3) spawnGlitter(point || this.tip, 6, 2);
+    if (this.goo <= 0) this.breakOff();
+  }
+
+  breakOff() {
+    this.state = 'hurt'; this.t = 0;
+    this.disabled = 9;
+    this.goo = BOSS.tentacleGoo;
+    this.mat.emissiveIntensity = 0.25;
+    this.ring.material.opacity = 0;
+    spawnGlitter(this.tip.clone(), 90, 6);
+    spawnChunkBurst(this.tip, { count: 5, mat: this.mat, rMin: 0.14, rMax: 0.3, power: 1.2 });
+    SFX.pop(panFor(this.tip), 1);
+    spawnFloatText(this.tip.clone().setY(this.tip.y + 2), 'TENTACLE DOWN!', '#ffd94f');
+    Hype.add(0.28);
+    gainXP(60, this.tip);
+    hitStop = 0.16;
+    Player.shake = Math.max(Player.shake, 0.3);
+    this.b.expose(BOSS.expose + (this.b.phase() === 3 ? 2 : 0));
+  }
+
+  update(dt, t) {
+    this.t += dt;
+    if (this.disabled > 0) this.disabled -= dt;
+    const inArena = Player.pos.z < CFG.bridge.playZEnd + BOSS.arena + 6;
+
+    switch (this.state) {
+      case 'idle': {
+        // sway above the water, waiting for a turn
+        this.tip.set(this.base.x + Math.sin(t * 0.9 + this.idx) * 2.2, 4.2 + Math.sin(t * 1.3 + this.idx) * 0.7,
+                     this.base.z + 4 + Math.cos(t * 0.7 + this.idx) * 1.4);
+        this.lift += (3.4 - this.lift) * dt * 2;
+        this.cd -= dt;
+        if (this.cd <= 0 && this.disabled <= 0 && inArena && this.b.activeCount() > this.idx) {
+          // aim at where the player is standing, clamped to the arena deck
+          this.target.set(
+            THREE.MathUtils.clamp(Player.pos.x, -(CFG.bridge.playHalfW - 1), CFG.bridge.playHalfW - 1),
+            0.35,
+            THREE.MathUtils.clamp(Player.pos.z, CFG.bridge.playZEnd + 1, CFG.bridge.playZEnd + BOSS.arena));
+          this.ring.position.set(this.target.x, 0.05, this.target.z);
+          this.state = 'rear'; this.t = 0;
+          SFX.groan(panFor(this.target), 0.8);
+        }
+        break;
+      }
+      case 'rear': { // telegraph — rise high, ring swells under the landing spot
+        const f = Math.min(1, this.t / this.b.telegraph());
+        this.tip.lerp(_v1.set(this.target.x, 8.5, this.target.z - 1.5), 1 - Math.pow(0.02, dt));
+        this.lift += (5.5 - this.lift) * dt * 3;
+        this.ring.scale.setScalar(BOSS.slamRadius * (0.45 + 0.55 * f));
+        this.ring.material.opacity = 0.35 + 0.4 * f;
+        if (f >= 1) { this.state = 'slam'; this.t = 0; }
+        break;
+      }
+      case 'slam': {
+        this.tip.lerp(this.target, 1 - Math.pow(0.000002, dt));
+        this.lift += (1.2 - this.lift) * dt * 12;
+        if (this.tip.distanceTo(this.target) < 0.45 || this.t > 0.5) {
+          this.state = 'pinned'; this.t = 0;
+          this.ring.material.opacity = 0;
+          this.tip.copy(this.target);
+          // the hit itself
+          const d = Math.hypot(Player.pos.x - this.target.x, Player.pos.z - this.target.z);
+          if (d < BOSS.slamRadius && Player.pos.y < 2.4) {
+            _v2.set(Player.pos.x - this.target.x, 0, Player.pos.z - this.target.z).normalize();
+            damagePlayer(BOSS.slamDmg, _v2.lengthSq() < 0.1 ? new THREE.Vector3(0, 0, 1) : _v2);
+          }
+          Player.shake = Math.max(Player.shake, 0.55);
+          SFX.splat(panFor(this.target), 1);
+          spawnSplash(this.target.clone(), true);
+          spawnWetPatch(this.target);
+          spawnChunkBurst(this.target, { count: 4, mat: this.mat, rMin: 0.1, rMax: 0.22, power: 1.4 });
+          spawnFloatText(this.target.clone().setY(1.8), 'PINNED — HOSE IT!', '#9fdcff');
+        }
+        break;
+      }
+      case 'pinned': { // the window: lying on the planks and cleanable
+        this.lift += (1.1 - this.lift) * dt * 6;
+        if (this.t > this.b.pinTime()) { this.state = 'retract'; this.t = 0; }
+        break;
+      }
+      case 'retract': {
+        this.tip.lerp(_v1.set(this.base.x, 4.2, this.base.z + 4), 1 - Math.pow(0.06, dt));
+        this.lift += (3.4 - this.lift) * dt * 3;
+        if (this.t > 0.9) { this.state = 'idle'; this.t = 0; this.cd = this.b.slamCd(); }
+        break;
+      }
+      case 'hurt': { // thrashing back into the bay after being broken
+        this.tip.lerp(_v1.set(this.base.x + Math.sin(t * 12) * 1.5, -1.2, this.base.z + 1), 1 - Math.pow(0.15, dt));
+        this.lift += (2 - this.lift) * dt * 3;
+        if (this.t > 1.2) { this.state = 'idle'; this.t = 0; this.cd = 2 + Math.random(); }
+        break;
+      }
+    }
+
+    // lay the segments along a bezier from base to tip, bowed upward by `lift`
+    const cx = (this.base.x + this.tip.x) / 2, cz = (this.base.z + this.tip.z) / 2;
+    const cy = Math.max(this.base.y, this.tip.y) + this.lift;
+    const n = this.segs.length;
+    // a limb reaching 30m needs fatter beads than one curled at 12m, or the
+    // spacing outruns the diameter and it reads as a dotted line again
+    const span = Math.hypot(this.tip.x - this.base.x, this.tip.y - this.base.y, this.tip.z - this.base.z);
+    const thick = THREE.MathUtils.clamp(span / 20, 0.9, 1.75);
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1), iv = 1 - u;
+      this.segs[i].position.set(
+        iv * iv * this.base.x + 2 * iv * u * cx + u * u * this.tip.x,
+        iv * iv * this.base.y + 2 * iv * u * cy + u * u * this.tip.y,
+        iv * iv * this.base.z + 2 * iv * u * cz + u * u * this.tip.z);
+      const pulse = this.state === 'pinned' ? 1.12 + Math.sin(t * 14 + i) * 0.06 : 1;
+      this.segs[i].scale.setScalar(this.segR[i] * thick * pulse);
+    }
+    if (this.state !== 'rear') this.ring.material.opacity = Math.max(0, this.ring.material.opacity - dt * 3);
+  }
+
+  dispose() {
+    for (const m of this.segs) {
+      const i = cleanTargets.indexOf(m);
+      if (i >= 0) cleanTargets.splice(i, 1);
+      scene.remove(m); // geometry is shared (TENTACLE_GEO) — never dispose it here
+    }
+    scene.remove(this.ring); this.ring.geometry.dispose(); this.ring.material.dispose();
+  }
+}
+
+class GunkKraken {
+  constructor() {
+    this.alive = true;
+    this.goo = BOSS.coreGoo;
+    this.exposed = 0;
+    this.rise = 0;          // 0..1 emergence animation
+    this.spitCd = 7;
+    this.z = CFG.bridge.playZEnd - 11;
+    const g = this.group = new THREE.Group();
+    g.position.set(0, -14, this.z); // starts submerged
+    g.scale.setScalar(1.7);         // it has to dwarf the pier to land as a boss
+
+    // a dark silhouette just reads as scenery through the fog — it needs to
+    // glow from inside to look alive at 20m
+    const hide = new THREE.MeshStandardMaterial({ color: 0x6b4726, roughness: 0.6,
+      emissive: 0xb04a00, emissiveIntensity: 0.55 });
+    this.hide = hide;
+    // a lumpy mass rather than one clean sphere — it should look accreted
+    for (const [sx, sy, sz, x, y, z] of [
+      [4.2, 3.2, 4.2, 0, 1.4, 0], [2.6, 2.1, 2.6, -3.1, 0.8, 0.6],
+      [2.4, 1.9, 2.4, 3.2, 0.7, -0.4], [2.0, 1.6, 2.0, 0.4, 0.6, 2.6]]) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), hide);
+      m.scale.set(sx, sy, sz); m.position.set(x, y, z);
+      m.castShadow = true;
+      g.add(m);
+    }
+    // the maw: two shells that crank apart when the core is bared
+    this.shells = [];
+    for (const side of [-1, 1]) {
+      const sh = new THREE.Mesh(new THREE.SphereGeometry(2.5, 14, 10, 0, Math.PI), hide);
+      sh.position.set(0, 2.2, 3.1);
+      sh.rotation.z = side > 0 ? 0 : Math.PI;
+      sh.userData.side = side;
+      g.add(sh);
+      this.shells.push(sh);
+    }
+    this.coreMat = new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffb03f,
+      emissiveIntensity: 2.2, roughness: 0.2 });
+    this.core = new THREE.Mesh(new THREE.SphereGeometry(1.25, 16, 12), this.coreMat);
+    this.core.position.set(0, 2.2, 3.2);
+    this.core.userData.entity = this;
+    g.add(this.core);
+    cleanTargets.push(this.core);
+    this.coreGlow = glowSprite(0xffc46a, 6, 0);
+    this.coreGlow.position.copy(this.core.position);
+    g.add(this.coreGlow);
+    // eyes, because a silhouette needs somewhere to look from
+    this.eyeMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffa000, emissiveIntensity: 1.4 });
+    for (const ex of [-1.5, 1.5]) {
+      const e = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), this.eyeMat);
+      e.position.set(ex, 3.6, 2.4);
+      g.add(e);
+    }
+    const aura = glowSprite(0xff8a3f, 22, 0.28); // carries its bulk through the fog
+    aura.position.set(0, 2, 0);
+    g.add(aura);
+    this.aura = aura;
+    scene.add(g);
+    camBlockers.push(...this.shells);
+
+    this.tentacles = [];
+    [-6.5, 6.5, -2.4, 2.4].forEach((x, i) => this.tentacles.push(new BossTentacle(this, i, x)));
+  }
+
+  // phase 1 while the core is fat, 3 once it's nearly done
+  phase() { const f = this.goo / BOSS.coreGoo; return f > 0.66 ? 1 : f > 0.33 ? 2 : 3; }
+  activeCount() { return this.phase() + 1; }       // 2, 3, then all 4 tentacles
+  slamCd() { return [0, 3.4, 2.8, 2.2][this.phase()]; }
+  telegraph() { return [0, 1.15, 1, 0.85][this.phase()]; }
+  pinTime() { return [0, 2.9, 2.7, 2.5][this.phase()]; }
+
+  expose(secs) {
+    this.exposed = Math.max(this.exposed, secs);
+    showToast('🐙 THE CORE IS BARE — burn it down!');
+  }
+
+  clean(amount, point) {
+    if (!this.alive || this.exposed <= 0) {
+      if (Math.random() < 0.2) spawnSplash(point || this.core.getWorldPosition(_v1));
+      return; // armoured until a tentacle goes down
+    }
+    this.goo -= amount;
+    bossFillEl.style.width = Math.max(0, this.goo / BOSS.coreGoo * 100) + '%';
+    if (Math.random() < 0.3) spawnGlitter(point || this.core.getWorldPosition(_v1), 7, 3);
+    if (this.goo <= 0) this.die();
+  }
+
+  die() {
+    this.alive = false;
+    Game.bossDefeated = true;
+    const c = this.group.position.clone(); c.y += 3;
+    hitStop = 0.5;
+    Player.shake = Math.max(Player.shake, 0.9);
+    Player._fovPunch = Math.max(Player._fovPunch, 12);
+    for (let i = 0; i < 8; i++) {
+      spawnGlitter(c.clone().add(new THREE.Vector3((Math.random() - 0.5) * 12, Math.random() * 6, (Math.random() - 0.5) * 12)), 140, 9);
+    }
+    spawnChunkBurst(c, { count: 12, mat: this.hide, rMin: 0.25, rMax: 0.6, power: 2.2 });
+    SFX.pop(panFor(c), 1); SFX.fanfare();
+    Hype.add(1);
+    gainXP(400, c);
+    bossBarEl.classList.add('hidden');
+    showToast('🐙 THE GUNK KRAKEN IS PURIFIED!');
+    narrate('The wharf is yours, janitor.', 0.6);
+    for (const t of this.tentacles) t.dispose();
+    const i = cleanTargets.indexOf(this.core);
+    if (i >= 0) cleanTargets.splice(i, 1);
+    checkWin();
+  }
+
+  update(dt, t) {
+    if (!this.alive) return;
+    // haul out of the bay on first sight
+    if (this.rise < 1) {
+      this.rise = Math.min(1, this.rise + dt * 0.35);
+      const e = 1 - Math.pow(1 - this.rise, 3);
+      this.group.position.y = -14 + e * 15;
+      if (Math.random() < dt * 12) spawnSplash(this.group.position.clone().add(
+        new THREE.Vector3((Math.random() - 0.5) * 9, 0.4, (Math.random() - 0.5) * 6)), true);
+    } else {
+      this.group.position.y = 1 + Math.sin(t * 0.8) * 0.35; // breathing swell
+    }
+    this.group.rotation.y = Math.sin(t * 0.35) * 0.12;
+
+    this.exposed = Math.max(0, this.exposed - dt);
+    const open = this.exposed > 0 ? 1 : 0;
+    this._open = (this._open ?? 0) + (open - (this._open ?? 0)) * (1 - Math.pow(0.02, dt));
+    for (const sh of this.shells) sh.rotation.x = -this._open * 1.15 * sh.userData.side;
+    this.coreGlow.material.opacity = this._open * (0.55 + 0.25 * Math.sin(t * 9));
+    this.coreMat.emissiveIntensity = 1 + this._open * 2.4;
+    this.eyeMat.emissiveIntensity = this.phase() === 3 ? 2.8 : 1.6;
+    this.aura.material.opacity = 0.2 + 0.12 * this._open + (this.phase() === 3 ? 0.12 : 0);
+    if (this.phase() === 3) this.hide.emissive.setHex(0xa02000);
+
+    if (this.rise > 0.75) for (const tn of this.tentacles) tn.update(dt, t);
+
+    // phase 2+: hawk gunk onto the deck so the arena never goes quiet
+    if (this.phase() >= 2 && this.rise >= 1) {
+      this.spitCd -= dt;
+      if (this.spitCd <= 0) {
+        this.spitCd = this.phase() === 3 ? 4.5 : 6.5;
+        const sx = THREE.MathUtils.clamp(Player.pos.x + (Math.random() - 0.5) * 8,
+          -(CFG.bridge.playHalfW - 1), CFG.bridge.playHalfW - 1);
+        const sz = THREE.MathUtils.clamp(Player.pos.z + (Math.random() - 0.5) * 8,
+          CFG.bridge.playZEnd + 1, CFG.bridge.playZEnd + BOSS.arena);
+        spawnGullSplat(sx, sz); // reuse the falling-splat entity wholesale
+        SFX.groan(panFor(this.group.position), 0.7);
+      }
+    }
+    bossFillEl.style.width = Math.max(0, this.goo / BOSS.coreGoo * 100) + '%';
+    bossStateEl.textContent = this.exposed > 0 ? 'CORE EXPOSED' : 'ARMOURED — BREAK A TENTACLE';
+  }
+}
+
+function summonBoss() {
+  if (boss) return boss;
+  boss = new GunkKraken();
+  Game.bossActive = true;
+  bossBarEl.classList.remove('hidden');
+  SFX.setMusicMood('hero');
+  Player.shake = Math.max(Player.shake, 0.7);
+  showToast('🐙 THE BAY ERUPTS — something enormous is climbing the pier!');
+  narrate('Janitor. The rot had a heart, and it is awake.', 0.55);
+  return boss;
+}
+function updateBoss(dt, t) { if (boss) boss.update(dt, t); }
+
+/* =====================================================================
    9.5 STORY CONTENT (design doc) — transforming civilians, the hidden
    meteor shard, flickering streetlights, and Jax's graffiti job site.
    ===================================================================== */
@@ -4015,6 +4379,7 @@ function updateThreatMusic(dt) {
   }
   let want = Math.min(1, hunters / 3);
   if (nearest < 7) want = Math.min(1, want + 0.35);
+  if (boss && boss.alive && boss.rise > 0.5) want = Math.max(want, 0.55 + 0.15 * boss.phase());
   threatLevel += (want - threatLevel) * (1 - Math.pow(0.25, dt)); // slew, don't flicker
   SFX.setIntensity(threatLevel);
 }
@@ -4074,6 +4439,7 @@ function updateCompass() {
   if (pile) marks.push({ icon: '💩', p: pile.group.position });
   if (hunter && hunterD < 40) marks.push({ icon: '🧟', p: hunter.group.position, urgent: hunterD < 12 });
   if (shard && shard.position.distanceTo(Player.pos) < 90) marks.push({ icon: '🌠', p: shard.position });
+  if (boss && boss.alive) marks.push({ icon: '🐙', p: boss.group.position, urgent: true });
 
   const placed = [];
   for (let i = 0; i < compassPool.length || i < marks.length; i++) {
@@ -4190,6 +4556,9 @@ const Tutorial = {
 /* =====================================================================
    14. GAME STATE, HUD, WIN/LOSE
    ===================================================================== */
+const bossBarEl = document.getElementById('bossBar');
+const bossFillEl = document.getElementById('bossFill');
+const bossStateEl = document.getElementById('bossState');
 const hpFill = document.getElementById('hpFill');
 const beamCdFill = document.getElementById('beamCdFill');
 const dmgFlashEl = document.getElementById('dmgFlash');
@@ -4200,6 +4569,7 @@ const Game = {
   pilesCleaned: 0, zombiesDefeated: 0,
   totalPiles: 0, totalZombies: 0,
   civSaved: 0, civResolved: 0, civTotal: 5,
+  bossActive: false, bossDefeated: false,
   shardFound: false,
   dmgFlash: 0, startTime: 0,
 };
@@ -4221,6 +4591,9 @@ function checkWin() {
   if (Game.state !== 'playing') return;
   if (Game.pilesCleaned >= Game.totalPiles && Game.zombiesDefeated >= Game.totalZombies
       && Game.civResolved >= Game.civTotal) {
+    // BUILD 7: a clean wharf is no longer the end of it — it's what wakes
+    // the Kraken. The level is won when the core goes out.
+    if (!Game.bossDefeated) { summonBoss(); return; }
     Game.state = 'won';
     WIDE_NOZZLE = true; // reward turns on immediately, and persists below
     try { localStorage.setItem('uj_wide_nozzle', '1'); } catch (e) { /* private mode */ }
@@ -4260,6 +4633,7 @@ function checkWin() {
       ['Cleaned every poop pile', true],
       [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
       [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
+      ['The Gunk Kraken purified', Game.bossDefeated],
       ['Meteor Shard Fragment found', Game.shardFound],
     ].map(([txt, ok]) => `${ok ? '✅' : '⬜'} ${txt}`).join('<br>');
     setTimeout(() => {
@@ -4452,6 +4826,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updateZombies(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
+    updateBoss(dt, t);
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
     updateCompass(); updateThreatMusic(dt); updateHype(dt);
     if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
@@ -4465,6 +4840,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   screenBearing, showDamageFrom, updateDamageArcs, damagePlayer,
   getThreat: () => threatLevel, vignette, updateZombies,
   Hype, HYPE_TIERS, updateHype, getDisco: () => disco, bloom,
+  BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool,
   renderOnce: () => composer.render() };
 
 const clock = new THREE.Clock();
@@ -4524,6 +4900,7 @@ function tick() {
     updateZombies(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
+    updateBoss(dt, t);
     updateCompass();
     updateThreatMusic(dt);
     updateHype(dt);
