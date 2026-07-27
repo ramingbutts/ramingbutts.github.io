@@ -16,6 +16,19 @@ const CFG = {
   fogDensity: 0.030,
   fogColor: 0x6d5570, // mauve dusk rolling off the bay — level 2 is sunset
   player: { speed: 8, jumpVel: 8.5, gravity: 24, hp: 100 },
+  // GROUND POUND (BUILD 13). The level had exactly one offensive verb, and a
+  // whole vertical layer — containers, awning pads, the jet boost — that
+  // combat never touched. Tap jump again in the air and you come down hard.
+  // Every number scales off how far you FELL, so height is the resource and
+  // the rooftops become a weapon rather than scenery.
+  slam:   { minHeight: 2.2,  // above the ground below you before it arms
+            dive: 27,        // downward dive speed
+            drag: 0.22,      // fraction of horizontal momentum you keep
+            rMin: 3.6, rPerM: 0.42, rMax: 9.5,      // shockwave radius vs drop
+            dmgMin: 45, dmgPerM: 11, dmgMax: 175,   // and its bite
+            downMin: 1.5, downPerM: 0.1, downMax: 3.2, // knockdown seconds
+            padBoost: 1.35 },  // slamming onto an awning throws you back higher
+
   hose:   { range: 20, dps: 65, spawnRate: 560, jetSpeed: 34,
             assistOff2: 0.5, assistPower: 0.35, // soft aim assist: near-misses ≤ ~0.7m off-axis still scrub, weakly
             boost: 30, boostMax: 7.5, boostDrain: 30 }, // BUILD 6: ride your own recoil
@@ -410,6 +423,37 @@ const SFX = {
     });
   },
 
+  // ---- ground pound (BUILD 13): a falling whistle, then a body blow ----
+  whoosh() { // the dive: filtered noise sliding down, air past your ears
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, out = this._out(0, 0.7);
+    const n = this._noise(0.5);
+    const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.4;
+    bp.frequency.setValueAtTime(2400, t); bp.frequency.exponentialRampToValueAtTime(320, t + 0.4);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, t); g.gain.linearRampToValueAtTime(0.3, t + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    n.connect(bp); bp.connect(g); g.connect(out);
+  },
+
+  slamHit(pan = 0, power = 1) { // impact: sub thump + a crack of plank noise
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, out = this._out(pan, Math.min(1, 0.55 + power * 0.45));
+    const sub = this.ctx.createOscillator(); sub.type = 'sine';
+    sub.frequency.setValueAtTime(150 + 40 * power, t);
+    sub.frequency.exponentialRampToValueAtTime(34, t + 0.3 + 0.2 * power);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.55, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.4 + 0.25 * power);
+    sub.connect(sg); sg.connect(out); sub.start(t); sub.stop(t + 0.7 + 0.25 * power);
+    const n = this._noise(0.22);
+    const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(5200, t); lp.frequency.exponentialRampToValueAtTime(700, t + 0.2);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.4 * power, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    n.connect(lp); lp.connect(ng); ng.connect(out);
+  },
+
   hurt() {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -503,7 +547,7 @@ document.addEventListener('pointerlockchange', () => {
 function setupTouch() {
   document.getElementById('touchUI').style.display = 'block';
   document.getElementById('controlsText').innerHTML =
-    '<b>Left stick</b> move · <b>drag right side</b> look<br><b>SPRAY</b> hold to hose · <b>BEAM</b> magic blast · <b>JUMP</b><br>Fog is thick out there — <b>trust your ears</b>.';
+    '<b>Left stick</b> move · <b>drag right side</b> look<br><b>SPRAY</b> hold to hose · <b>BEAM</b> magic blast · <b>JUMP</b><br><b>JUMP again in mid-air</b> to ground pound.<br>Fog is thick out there — <b>trust your ears</b>.';
 
   const joyBase = document.getElementById('joyBase'), joyKnob = document.getElementById('joyKnob');
   let joyId = null, lookId = null, lookLast = null;
@@ -765,6 +809,27 @@ function buildTerrain(grp) {
     addPlatform(m, x, z, w, d, h);
   });
 
+  // SECOND TIER (BUILD 13): the ground pound needs somewhere worth falling
+  // from. Six of the containers get a smaller crate stacked on them, which
+  // puts a roof at 5.5–7 m — high enough for a SKY SLAM — right over the
+  // stretches where the horde gathers. Reachable by jet boost from the lower
+  // tier, so the vertical route is earned rather than free.
+  const stacks = [
+    [-7.5, -26, 3.4, 2.2, 2.6, 2.5], [-8.2, -55, 2.2, 3.4, 2.4, 3.6],
+    [0, -88, 4.0, 2.4, 2.8, 3.2], [8.2, -120, 3.4, 2.4, 2.6, 3.8],
+    [0, -166, 4.2, 2.4, 3.0, 2.5], [-8.4, -182, 2.4, 3.4, 2.4, 3.6],
+  ];
+  stacks.forEach(([x, z, w, d, h, baseH], i) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats[(i + 2) % 3]);
+    m.position.set(x, baseH + h / 2, z);
+    m.castShadow = true; m.receiveShadow = true;
+    grp.add(m);
+    const rim = glowSprite(0xffd94f, 2.4, 0.22); // a faint crown so the high ground reads through fog
+    rim.position.set(x, baseH + h + 0.5, z);
+    grp.add(rim);
+    addPlatform(m, x, z, w, d, baseH + h);
+  });
+
   // springy awnings: land on one and it throws you back up. Chained with the
   // jet boost they're a route along the rooftops.
   const padSpots = [[3.4, -33], [-4.6, -62], [5.2, -96], [-5.4, -128], [4.8, -160], [-3.6, -190]];
@@ -791,11 +856,11 @@ function updateBouncePads(dt, t) {
 }
 
 // called from the player's ground-contact code
-function tryBounce() {
+function tryBounce(mult = 1) {
   for (const b of bouncePads) {
     const dx = Player.pos.x - b.x, dz = Player.pos.z - b.z;
     if (dx * dx + dz * dz > b.r * b.r) continue;
-    Player.vel.y = b.power;
+    Player.vel.y = b.power * mult;
     Player.onGround = false;
     b.t = 1;
     SFX.pop(panFor(new THREE.Vector3(b.x, 0.5, b.z)), 0.5);
@@ -2230,6 +2295,7 @@ class Zombie {
 
     // dizzy-stars indicator shown while stunned by the beam/nova
     this.stunT = 0;
+    this.downT = 0; // BUILD 13 knockdown (ground pound)
     this.stunStars = glowSprite(0x9fdcff, 1.3, 0);
     this.stunStars.position.y = 2.55;
     g.add(this.stunStars);
@@ -2263,13 +2329,28 @@ class Zombie {
 
   stun(dur) { // design doc: the Magic Beam stuns as well as cleans
     if (!this.alive) return;
+    if (this.state === 'downed') { this.downT = Math.max(this.downT, dur); return; } // already flat — keep him there
     this.stunT = Math.max(this.stunT, dur);
     this.group.rotation.x = 0;
     this.setState('stunned');
   }
 
+  // BUILD 13: flattened by a ground pound. Distinct from a stun — he goes
+  // face-down on the planks, takes DOUBLE from the hose while he's there,
+  // and has to scramble back up. That vulnerability window is the whole
+  // point: the slam sets the table, the hose eats.
+  knockdown(dur) {
+    if (!this.alive) return;
+    this.downT = Math.max(this.downT || 0, dur);
+    this.speed = 0;
+    this.setState('downed');
+    this.stunStars.material.opacity = 0.6;
+    spawnSplash(this.group.position.clone().setY(0.12), true);
+  }
+
   clean(amount, point) {
     if (!this.alive) return;
+    if (this.state === 'downed') amount *= 2; // flat on his back: open season
     this.goo -= amount;
     this.flinch = Math.min(1, (this.flinch || 0) + amount * 0.12); // impact shudder (gain must beat the per-frame decay under continuous spray)
     const f = Math.max(this.goo, 0) / this.gooMax;
@@ -2287,7 +2368,8 @@ class Zombie {
     spawnGlitter(c, Math.round(130 * Hype.glitterMul()), 7);
     // STYLE KILLS: how you finished it matters. Each one slams the brakes
     // for a beat, punches the lens and pays into the hype meter.
-    const style = this.weak && this.weak.lit > 0 ? 'CORE POP!'
+    const style = this.state === 'downed' ? 'CURB SERVICE!'
+      : this.weak && this.weak.lit > 0 ? 'CORE POP!'
       : !Player.onGround ? 'AIRBORNE PURIFY!'
       : this._propStun > 0 ? 'STRIKE!'
       : this.brute ? 'BRUTE DOWN!'
@@ -2325,7 +2407,7 @@ class Zombie {
   // mid-lunge zombie resists (it has committed momentum); otherwise it slides
   // away and leans back, clamped to the deck.
   push(dt) {
-    if (!this.alive || this.state === 'lunge') return;
+    if (!this.alive || this.state === 'lunge' || this.state === 'downed') return;
     if (this.brute) return; // too heavy to shove — the jet just makes it angry
     _knockV.subVectors(this.group.position, Player.pos); _knockV.y = 0;
     if (_knockV.lengthSq() < 1e-4) return;
@@ -2452,6 +2534,20 @@ class Zombie {
         }
         break;
       }
+      case 'downed': { // face-down on the planks after a slam, wide open
+        this.downT -= dt;
+        this.stunStars.material.opacity = 0.5 + 0.3 * Math.sin(t * 9);
+        // pitch flat fast, then scramble upright over the last half second
+        const up = this.downT < 0.5 ? 1 - this.downT / 0.5 : 0;
+        this.group.rotation.x = THREE.MathUtils.lerp(this.group.rotation.x, -1.35 * (1 - up), 1 - Math.pow(0.001, dt));
+        if (up > 0) this.group.rotation.y += dt * 5 * up; // pushing himself around
+        if (this.downT <= 0) {
+          this.stunStars.material.opacity = 0;
+          this.group.rotation.x = 0;
+          this.setState('chase'); // he gets up angry
+        }
+        break;
+      }
     }
 
     if (!this._moved) this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
@@ -2502,7 +2598,10 @@ class Zombie {
 
     // waddle roll + pitch rock, scaled by stride
     this.group.rotation.z += ((walking ? Math.sin(gp) * 0.09 : 0) - this.group.rotation.z) * k;
-    if (this.state !== 'windup' && this.state !== 'lunge') {
+    // 'downed' joins windup/lunge here: the gait's idle pose pulls pitch back
+    // toward level every frame, which fought the knockdown to a stalemate at
+    // about -0.6 rad — a zombie leaning back rather than flat on the planks
+    if (this.state !== 'windup' && this.state !== 'lunge' && this.state !== 'downed') {
       this.group.rotation.x += ((walking ? Math.sin(gp * 2) * 0.05 : 0) - this.group.rotation.x) * k;
     }
     // stepping feet: alternate lift + toe pitch, planted when idle
@@ -3514,6 +3613,7 @@ const Player = {
   hvel: new THREE.Vector3(), // horizontal momentum (BUILD 4)
   _aimT: 0, _fovPunch: 0,    // camera-rig state (BUILD 5)
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
+  slamming: false, slamFrom: 0, // ground pound: state + the height it started from
   hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
   // muzzle offset from the player origin; swapped for the long GLB gun below
@@ -3837,20 +3937,40 @@ function updatePlayer(dt, t) {
   Player.pos.addScaledVector(Player.knock, dt);
   Player.knock.multiplyScalar(Math.max(0, 1 - 5 * dt));
 
-  // --- jump / gravity ---
-  if (Input.jumpPressed && Player.onGround) { Player.vel.y = CFG.player.jumpVel * Perks.jumpMul(); Player.onGround = false; }
+  // --- jump / slam / gravity ---
+  if (Input.jumpPressed) {
+    if (Player.onGround) {
+      Player.vel.y = CFG.player.jumpVel * Perks.jumpMul();
+      Player.onGround = false;
+    } else if (!Player.slamming &&
+               Player.pos.y - groundHeightAt(Player.pos.x, Player.pos.z, Player.pos.y) >= CFG.slam.minHeight) {
+      // tap it again up high and you commit: the same button, no new control
+      // to learn, and the height gate stops a hop from triggering it
+      startSlam();
+    }
+  }
   Input.jumpPressed = false;
   const prevY = Player.pos.y;
-  Player.vel.y -= CFG.player.gravity * dt;
+  if (Player.slamming) {
+    Player.vel.y = -CFG.slam.dive;          // a dive, not a fall — gravity is out of it
+    Player.hvel.multiplyScalar(Math.pow(CFG.slam.drag, dt * 12)); // and you can't steer far
+    if (Math.random() < dt * 40) spawnGlitter(_v2.copy(Player.pos).setY(Player.pos.y + 0.8), 3, 2);
+  } else {
+    Player.vel.y -= CFG.player.gravity * dt;
+  }
   Player.pos.y += Player.vel.y * dt;
   const groundY = groundHeightAt(Player.pos.x, Player.pos.z, prevY);
   if (Player.pos.y <= groundY) {
     const impact = Player.vel.y;
     Player.pos.y = groundY; Player.vel.y = 0;
     const wasAir = !Player.onGround;
+    const slammed = Player.slamming;
+    if (slammed) landSlam(groundY);
     Player.onGround = true;
-    // a springy awning converts that landing straight back into height
-    if (groundY === 0 && tryBounce()) {
+    // a springy awning converts that landing straight back into height —
+    // and a slam onto one throws you higher still, so pad → slam → bigger
+    // pad is a loop worth finding
+    if (groundY === 0 && tryBounce(slammed ? CFG.slam.padBoost : 1)) {
       Player._landSq = 0;
     } else if (wasAir && impact < -3) {
       // touchdown: bank the impact speed as a squash-and-recover on the body
@@ -4035,6 +4155,130 @@ function updatePlayer(dt, t) {
     // relax any ping flash back to the resting glow
     Player.hornLight.intensity += (3 - Player.hornLight.intensity) * (1 - Math.pow(0.05, dt));
   }
+}
+
+/* ---------------------------------------------------------------------
+   GROUND POUND (BUILD 13)
+
+   The hose was the only offensive verb, so the whole vertical layer —
+   twelve containers, six awning pads, the jet boost that BUILD 6 added —
+   was traversal you never had a combat reason to use. The slam turns
+   height into the resource that powers a second attack.
+
+   Everything scales off the DROP, not a flat number: a hop off a crate is
+   a shove, a dive off a stacked roof is a screen-clearing detonation. It
+   flattens rather than kills — downed zombies take double from the hose —
+   so the loop is get up, come down, then mop up, and the two verbs feed
+   each other instead of competing.
+
+   It also detonates: a slam kill is flagged as a burst, so BUILD 12's
+   chain reactions fire straight off the impact.
+   --------------------------------------------------------------------- */
+function startSlam() {
+  Player.slamming = true;
+  Player.slamFrom = Player.pos.y;
+  Player.vel.y = -CFG.slam.dive;
+  Player._fovPunch = Math.max(Player._fovPunch, 5);
+  SFX.whoosh();
+  spawnGlitter(_v1.copy(Player.pos).setY(Player.pos.y + 0.9), 14, 3);
+}
+
+const slamRings = [];
+function landSlam(groundY) {
+  Player.slamming = false;
+  const drop = Math.max(0, Player.slamFrom - groundY);
+  const C = CFG.slam;
+  const radius = Math.min(C.rMax, C.rMin + drop * C.rPerM);
+  const damage = Math.min(C.dmgMax, C.dmgMin + drop * C.dmgPerM) * RPG.hoseMul() * Perks.hoseMul();
+  const downFor = Math.min(C.downMax, C.downMin + drop * C.downPerM);
+  const impact = _v1.copy(Player.pos).setY(groundY + 0.12);
+
+  spawnSlamRing(impact, radius);
+  spawnGlitter(_v2.copy(impact).setY(groundY + 0.5), Math.round(40 + drop * 6), 6);
+  SFX.slamHit(panFor(impact), Math.min(1, drop / 8));
+  Player.shake = Math.max(Player.shake, Math.min(0.85, 0.28 + drop * 0.05));
+  Player._fovPunch = Math.max(Player._fovPunch, Math.min(13, 5 + drop * 0.7));
+  hitStop = Math.max(hitStop, Math.min(0.26, 0.08 + drop * 0.015));
+  Player._landSq = 0.16;
+
+  // snapshot before damaging: clean() can kill entities and splice the arrays
+  const caught = [];
+  for (const list of [piles, zombies, grimes, barrels, gullSplats]) {
+    for (const o of list) {
+      if (!o || o.alive === false || o.resolved) continue;
+      const d = o.group.position.distanceTo(impact);
+      if (d < radius) caught.push({ o, d });
+    }
+  }
+  let flattened = 0;
+  for (const { o, d } of caught) {
+    if (o.alive === false) continue; // taken out by a chain earlier in this pass
+    const falloff = 1 - 0.45 * (d / radius);
+    o._burst = true;                 // a slam kill detonates (BUILD 12 chains)
+    o.clean(damage * falloff, o.group.position);
+    o._burst = false;
+    if (o.alive && o.knockdown) { o.knockdown(downFor); flattened++; }
+  }
+  // the shockwave throws loose props and rocks the parked cars
+  for (const b of physBodies) {
+    const d = b.g.position.distanceTo(impact);
+    if (d > radius) continue;
+    _v2.subVectors(b.g.position, impact).setY(0.4).normalize();
+    b.vel.addScaledVector(_v2, (10 + drop * 1.6) * (1 - d / radius) / b.mass);
+    b.angVel.x += (Math.random() - 0.5) * 7;
+    b.angVel.z += (Math.random() - 0.5) * 7;
+  }
+  for (const c of cars) {
+    if (c.mesh.position.distanceTo(impact) < radius + 3) c.rockV += 6;
+  }
+  for (let i = 0; i < 5; i++) {
+    spawnSplash(_v2.set(impact.x + (Math.random() - 0.5) * radius, 0.1,
+                        impact.z + (Math.random() - 0.5) * radius), true);
+  }
+  if (flattened >= 3) {
+    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SLAM x' + flattened, '#ffd94f', 'slam');
+    Hype.add(0.1 + 0.05 * flattened);
+  } else if (drop > 5) {
+    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SKY SLAM!', '#ffd94f', 'slam');
+    Hype.add(0.12);
+  }
+  Hype.add(0.06 + drop * 0.012);
+  Tutorial.fire('firstSlam');
+  Game.slams++;
+  Game.bestSlam = Math.max(Game.bestSlam, Math.round(drop));
+}
+
+const SLAM_GEO = new THREE.RingGeometry(0.8, 1, 40);
+function spawnSlamRing(pos, radius) {
+  if (Settings.reduceMotion) return;
+  const m = new THREE.Mesh(SLAM_GEO, new THREE.MeshBasicMaterial({ color: 0xffd94f,
+    transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false,
+    blending: THREE.AdditiveBlending }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.copy(pos);
+  scene.add(m);
+  slamRings.push({ m, t: 0, radius });
+  if (slamRings.length > 4) { const o = slamRings.shift(); scene.remove(o.m); o.m.material.dispose(); }
+}
+function updateSlamRings(dt) {
+  for (let i = slamRings.length - 1; i >= 0; i--) {
+    const r = slamRings[i];
+    r.t += dt;
+    const f = Math.min(1, r.t / 0.45);
+    const s = 0.5 + r.radius * (1 - Math.pow(1 - f, 3)); // fast out, easing to the rim
+    r.m.scale.set(s, s, s);
+    r.m.material.opacity = 0.8 * (1 - f);
+    if (f >= 1) { scene.remove(r.m); r.m.material.dispose(); slamRings.splice(i, 1); }
+  }
+}
+
+// the airborne prompt: the slam is only discoverable if the game says so once
+const slamHintEl = document.getElementById('slamHint');
+function updateSlamHint() {
+  if (!slamHintEl) return;
+  const armed = Game.state === 'playing' && !Player.onGround && !Player.slamming &&
+    Player.pos.y - groundHeightAt(Player.pos.x, Player.pos.z, Player.pos.y) >= CFG.slam.minHeight;
+  slamHintEl.classList.toggle('on', armed);
 }
 
 function damagePlayer(amount, fromDir) {
@@ -5347,6 +5591,9 @@ const Tutorial = {
       case 'firstSpray':
         this.show('That’s the stuff! Now hose down the glowing poop pile ahead until it bursts into glitter.');
         break;
+      case 'firstSlam':
+        this.show('GROUND POUND! The higher the drop, the wider it hits — and anything it flattens takes DOUBLE from the hose while it’s down. Get up on the containers and the awning pads, then come down on the crowd.');
+        break;
       case 'firstCrit':
         this.show('CORE HIT! That cyan orb is a gunk core — triple damage, and it pays your pressure back. It moves, so keep tracking it. Pop something while its core is lit and the goo goes off in everything nearby.');
         break;
@@ -5386,6 +5633,7 @@ const Game = {
   state: 'menu', // menu | intro | playing | skills | won | dead
   pilesCleaned: 0, zombiesDefeated: 0,
   crits: 0, bursts: 0, bestChain: 0, // BUILD 12 precision telemetry
+  slams: 0, bestSlam: 0,             // BUILD 13 ground pound telemetry
   totalPiles: 0, totalZombies: 0,
   civSaved: 0, civResolved: 0, civTotal: 5,
   bossActive: false, bossDefeated: false,
@@ -5453,6 +5701,7 @@ function checkWin() {
       [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
       [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
       [`Weak points hit: ${Game.crits} · goo detonations: ${Game.bursts}${Game.bestChain > 1 ? ` (best chain x${Game.bestChain})` : ''}`, Game.crits > 0],
+    [`Ground pounds: ${Game.slams}${Game.bestSlam > 0 ? ` (longest drop ${Game.bestSlam} m)` : ''}`, Game.slams > 0],
     ['The Gunk Kraken purified', Game.bossDefeated],
       ['Meteor Shard Fragment found', Game.shardFound],
     ].map(([txt, ok]) => `${ok ? '✅' : '⬜'} ${txt}`).join('<br>');
@@ -5666,7 +5915,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
     updateRush(dt);
     reapEntities();
     updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
-    updateWeakPoints(dt, t); updateBurstRings(dt); updateFloatTexts(dt);
+    updateWeakPoints(dt, t); updateBurstRings(dt); updateFloatTexts(dt); updateSlamRings(dt); updateSlamHint();
     updateCompass(); updateThreatMusic(dt); updateHype(dt);
     if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
     // A real frame ends in composer.render(), which is what refreshes every
@@ -5691,6 +5940,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 13 ground pound
+  startSlam, landSlam, slamRings, updateSlamRings, updateSlamHint,
   CRIT, attachWeakPoint, moveWeakPoint, updateWeakPoints, applyCrit, chainBurst,
   burstOnDeath, burstRings, updateBurstRings,
   getCritChain: () => critChain, onCore: () => crosshairOnCore,
@@ -5739,6 +5990,7 @@ function tick() {
   updatePileJelly(dt, t);
   updateWeakPoints(dt, t);
   updateBurstRings(dt);
+  updateSlamRings(dt);
 
   // toast fade (level-ups, unlocks)
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }
@@ -5765,6 +6017,7 @@ function tick() {
     updateHype(dt);
     updateShard(dt, t);
     updateStreetlights(dt);
+    updateSlamHint();
     updateAudioCues(dt);
     Tutorial.update(dt);
 

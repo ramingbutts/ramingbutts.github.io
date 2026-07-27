@@ -543,6 +543,17 @@ await page.evaluate(() => window.__QA_CLEAN());
 const assist = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
   P.pos.set(0, 0, -25);
+  // clear the firing lane. A wandering zombie drifting into the shot eats the
+  // jet outright, which reads as "the assist did nothing" — and since BUILD 12
+  // its weak point sticks out past its body, so it blocks from further off
+  // axis than it used to. Park anything nearby and put it back afterwards.
+  const parked = [];
+  for (const z of UJ.getZombies()) {
+    if (!z.alive || z.group.position.distanceTo(P.pos) > 22) continue;
+    parked.push([z, z.group.position.clone(), z.state]);
+    z.group.position.set(0, 0, -140);
+    z.setState('wander');
+  }
   for (let i = 0; i < 70; i++) UJ.step(0.03); // camera settles
   const trial = (offset) => {
     const s = UJ.spawnGullSplat(0, -31);
@@ -555,7 +566,9 @@ const assist = await page.evaluate(() => {
     if (!s.resolved) s.clean(1000, s.mesh.position); // tidy up
     return gone;
   };
-  return { near: trial(0.55), far: trial(1.3) };
+  const out = { near: trial(0.55), far: trial(1.3) };
+  for (const [z, pos, st] of parked) { z.group.position.copy(pos); z.setState(st); }
+  return out;
 });
 ok('soft aim assist: near-miss scrubs at reduced power, wide miss does not',
    assist.near > 2 && assist.far < 0.5,
@@ -1052,7 +1065,11 @@ await page.evaluate(() => window.__QA_CLEAN());
 // B9a. TERRAIN — cargo containers are solid ground you can stand on
 const terrain = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
-  const c = UJ.platforms.find(p => p.y > 2);
+  // pick a container with nothing stacked on it — BUILD 13 put a second tier
+  // on six of them, and landing on a roof you didn't aim for proves nothing
+  const covered = (c) => UJ.platforms.some(o => o !== c && o.y > c.y &&
+    o.x0 < c.x1 && o.x1 > c.x0 && o.z0 < c.z1 && o.z1 > c.z0);
+  const c = UJ.platforms.find(p => p.y > 2 && !covered(p));
   const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2;
   const onTop = UJ.groundHeightAt(cx, cz, 10);        // falling from above
   const beside = UJ.groundHeightAt(cx + 9, cz, 10);   // off to the side
@@ -1096,6 +1113,179 @@ ok('bounce pads launch Jax far higher than the deck does',
    `rebound apex — plain deck ${bounce.off.peak.toFixed(2)}m vs pad ${bounce.on.peak.toFixed(2)}m (drift on pad ${bounce.on.drift}m)`);
 
 await page.evaluate(() => window.__QA_CLEAN());
+/* =====================================================================
+   BUILD 13 — THE GROUND POUND
+   The level had one offensive verb and a whole vertical layer combat
+   never touched. These check the new verb end to end: it arms only with
+   real height under you, everything scales off the drop, it flattens
+   rather than just damages, the flattened take double, and it detonates
+   BUILD 12's chains off the impact.
+   ===================================================================== */
+
+// B13a. It arms on height, not on being airborne — a hop must not trigger it
+const slamArm = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  const tryAt = (h) => {
+    P.pos.set(0, h, -30); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+    P.slamming = false;
+    UJ.Input.jumpPressed = true;
+    UJ.step(0.016);
+    const out = P.slamming;
+    P.slamming = false;
+    return out;
+  };
+  const low = tryAt(0.9), high = tryAt(6);
+  P.pos.set(0, 0, -30); P.vel.y = 0; P.onGround = true;
+  return { low, high, gate: UJ.CFG.slam.minHeight };
+});
+ok('the slam arms only with real height under you, not on any hop',
+   !slamArm.low && slamArm.high,
+   `at 0.9m above the deck: ${slamArm.low ? 'armed' : 'no slam'} · at 6m: ${slamArm.high ? 'armed' : 'no slam'} (gate ${slamArm.gate}m)`);
+
+// B13b. Everything scales off the DROP — height is the resource
+const slamScale = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  const from = (h) => {
+    for (const z of UJ.getZombies()) z.alive = false;
+    UJ.reapEntities();
+    // a ring of victims at a fixed radius: how many get caught reads the
+    // shockwave's reach without having to inspect the number itself
+    const ring = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ring.push(UJ.spawnZombieAt(Math.cos(a) * 5.5, -70 + Math.sin(a) * 5.5));
+    }
+    const near = UJ.spawnZombieAt(1.2, -70);
+    const g0 = near.goo;
+    P.pos.set(0, h, -70); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+    P.hp = 100;
+    UJ.Input.jumpPressed = true;
+    for (let i = 0; i < 120 && !P.onGround; i++) { P.hp = 100; UJ.step(0.03); }
+    const out = { dmg: +(g0 - near.goo).toFixed(1),
+                  caught: ring.filter(z => z.goo < z.gooMax || !z.alive).length,
+                  downed: ring.filter(z => z.state === 'downed').length + (near.state === 'downed' ? 1 : 0) };
+    for (const z of [...ring, near]) z.alive = false;
+    UJ.reapEntities();
+    return out;
+  };
+  const lowDrop = from(3), highDrop = from(14);
+  P.pos.set(0, 0, -30);
+  return { lowDrop, highDrop };
+});
+ok('the slam scales off the drop — a rooftop dive hits harder and wider',
+   slamScale.highDrop.dmg > slamScale.lowDrop.dmg * 1.5 &&
+   slamScale.highDrop.caught > slamScale.lowDrop.caught &&
+   slamScale.lowDrop.dmg > 0,
+   `from 3m: ${slamScale.lowDrop.dmg} dmg, ${slamScale.lowDrop.caught}/8 of the ring caught · ` +
+   `from 14m: ${slamScale.highDrop.dmg} dmg, ${slamScale.highDrop.caught}/8 caught`);
+
+// B13c. It flattens, and the flattened take double from the hose. This is
+// the actual design: the slam sets the table, the hose eats.
+const slamDown = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  // a brute: 240 goo, so a 10m pound flattens him without killing him and
+  // there is still a live target to measure the vulnerability window on
+  const z = UJ.spawnZombieAt(1.5, -70, { brute: true });
+  P.pos.set(0, 10, -70); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+  UJ.Input.jumpPressed = true;
+  for (let i = 0; i < 120 && !P.onGround; i++) { P.hp = 100; UJ.step(0.03); }
+  const flat = z.state === 'downed';
+  for (let i = 0; i < 12; i++) UJ.step(0.03);   // let him pitch over
+  const pitched = Math.abs(z.group.rotation.x) > 0.4;
+  // same hose tick, downed vs upright
+  z.goo = z.gooMax; z.clean(50, z.group.position);
+  const downedTook = +(z.gooMax - z.goo).toFixed(1);
+  z.setState('chase'); z.group.rotation.x = 0;
+  z.goo = z.gooMax; z.clean(50, z.group.position);
+  const uprightTook = +(z.gooMax - z.goo).toFixed(1);
+  // and he gets back up on his own (clear the slam's own timer first —
+  // knockdown() takes the MAX, so a fresh short one would be swallowed)
+  z.downT = 0; z.setState('chase');
+  z.knockdown(0.6);
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const recovered = z.state !== 'downed' && Math.abs(z.group.rotation.x) < 0.2;
+  z.alive = false; UJ.reapEntities();
+  P.pos.set(0, 0, -30);
+  return { flat, pitched, downedTook, uprightTook, recovered };
+});
+ok('a slam flattens zombies, doubles what the hose does to them, and they get back up',
+   slamDown.flat && slamDown.pitched && slamDown.downedTook === slamDown.uprightTook * 2 && slamDown.recovered,
+   `knocked face-down · same 50-point hose tick took ${slamDown.uprightTook} standing vs ${slamDown.downedTook} downed · scrambled up after the timer`);
+
+// B13d. A slam kill detonates, so BUILD 12's chains fire off the impact
+const slamChain = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  UJ.Game.bursts = 0; UJ.Game.bestChain = 0; UJ.Game.slams = 0;
+  const pack = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const z = UJ.spawnZombieAt(Math.cos(a) * 2.4, -70 + Math.sin(a) * 2.4);
+    z.goo = 12;              // already worked over: the slam should finish them
+    pack.push(z);
+  }
+  P.pos.set(0, 12, -70); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+  UJ.Input.jumpPressed = true;
+  for (let i = 0; i < 140 && !P.onGround; i++) { P.hp = 100; UJ.step(0.03); }
+  const out = { killed: pack.filter(z => !z.alive).length, bursts: UJ.Game.bursts,
+                chain: UJ.Game.bestChain, slams: UJ.Game.slams };
+  for (const z of pack) z.alive = false;
+  UJ.reapEntities();
+  P.pos.set(0, 0, -30);
+  return out;
+});
+ok('a slam kill detonates, chaining straight into the BUILD 12 goo bursts',
+   slamChain.slams === 1 && slamChain.killed === 5 && slamChain.bursts > 0 && slamChain.chain >= 2,
+   `one pound wiped a softened pack of ${slamChain.killed} · ${slamChain.bursts} detonations, best chain x${slamChain.chain}`);
+
+// B13e. Slamming onto an awning rebounds higher than landing on one —
+// the pad → slam → bigger pad loop
+const slamPad = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  UJ.Input.gpX = 0; UJ.Input.gpY = 0;
+  const pad = UJ.bouncePads[0];
+  const apex = (withSlam) => {
+    P.pos.set(pad.x, 6, pad.z); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+    P.slamming = false;
+    if (withSlam) UJ.Input.jumpPressed = true;
+    // gate on the pad FIRING (upward velocity), not on onGround — the pad
+    // clears that flag in the same frame, so an onGround loop runs on past
+    // the rebound and ends up measuring a second, ordinary bounce
+    let fired = false;
+    for (let i = 0; i < 90 && !fired; i++) { UJ.step(0.03); fired = P.vel.y > 1; }
+    let peak = P.pos.y;
+    for (let i = 0; i < 90; i++) {
+      UJ.step(0.03);
+      peak = Math.max(peak, P.pos.y);
+      if (P.vel.y < 0 && P.pos.y < peak - 0.5) break; // coming down again; stop before the next pad hit
+    }
+    return +peak.toFixed(2);
+  };
+  const plain = apex(false), slammed = apex(true);
+  P.pos.set(0, 0, -30); P.vel.y = 0; P.onGround = true;
+  return { plain, slammed, mult: UJ.CFG.slam.padBoost };
+});
+ok('slamming onto an awning throws you back higher than simply landing on it',
+   slamPad.slammed > slamPad.plain + 1,
+   `rebound apex — landed ${slamPad.plain}m vs slammed ${slamPad.slammed}m (pad boost ×${slamPad.mult})`);
+
+// B13f. The wharf grew a second tier worth falling from
+const tiers = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const high = UJ.platforms.filter(p => p.y > 5);
+  return { total: UJ.platforms.length, high: high.length,
+           tallest: +Math.max(...UJ.platforms.map(p => p.y)).toFixed(1) };
+});
+ok('the wharf has high ground to dive from, not just crates to stand on',
+   tiers.high >= 4 && tiers.tallest >= 5.5,
+   `${tiers.total} platforms, ${tiers.high} of them above 5m · tallest roof ${tiers.tallest}m`);
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
@@ -1204,8 +1394,14 @@ const lance = await page.evaluate(() => {
   UJ.setNozzle(0);
   return { jet, lan };
 });
+// The rear number is a RATIO, not zero: BUILD 12's weak points orbit outside
+// the body and lean toward the player, so the back pile's core can peek past
+// the front one and catch a stray JET tick. That is a fair consequence of
+// cores being real geometry — what must hold is that LANCE reaches the rear
+// target by an order of magnitude more, which is the nozzle's whole identity.
 ok('LANCE punches through the front pile into the one behind',
-   lance.jet.front > 1 && lance.jet.behind < 1 && lance.lan.front > 1 && lance.lan.behind > 1,
+   lance.jet.front > 1 && lance.lan.front > 1 && lance.lan.behind > 1 &&
+   lance.lan.behind > lance.jet.behind * 5,
    `dirt removed front/behind — JET ${lance.jet.front}/${lance.jet.behind} vs LANCE ${lance.lan.front}/${lance.lan.behind}`);
 
 /* =====================================================================
@@ -1243,6 +1439,9 @@ const crit = await page.evaluate(() => {
   const shoot = (atCore) => {
     const z = UJ.spawnZombieAt(0, -30);
     z.state = 'stunned'; z.stateT = 99;         // hold it still: aim is the only variable
+    // the control shot must be a PURE body hit. Cores lean toward the player,
+    // so one can drift in front of the belly and turn the baseline into a crit
+    if (!atCore) { const i = UJ.cleanTargets.indexOf(z.weak.mesh); if (i >= 0) UJ.cleanTargets.splice(i, 1); }
     UJ.Player.pos.set(0, 0, -24); UJ.Player.hasHorn = true;
     for (let i = 0; i < 6; i++) UJ.step(0.03);  // let the camera boom settle
     z.goo = z.gooMax; UJ.Meters.pressure = 100;
