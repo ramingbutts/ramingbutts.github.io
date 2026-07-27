@@ -1068,3 +1068,97 @@ the aim-assist test (the lane is cleared and restored around it).
 Cost: draw calls and sim time unchanged within noise (1080 vs 1123
 calls, 0.57 vs 0.53 ms) for six crates, six crown sprites and one
 shockwave ring pool.
+
+## One simulation, and the screenshots that were lying (BUILD 14)
+
+No new mechanics this build. After three feature builds in a row the most
+valuable thing was to find out what was actually broken — so: a chaos
+audit that plays twelve endless waves with every verb mashed together in
+nonsense order, then reports leaks, wedged state machines, NaNs and
+anything left dangling in the raycast set.
+
+### The root cause of a bug class, finally removed
+
+`tick()` and `UJ.step()` were two hand-maintained lists of update calls.
+Keeping them in sync had already failed **four** times: the stepper
+silently skipped `updatePileJelly`, then combo expiry, then
+`scene.updateMatrixWorld` (which made every headless raycast miss), and —
+found by this audit — `updateGlitter`.
+
+Diffing the two mechanically found **fourteen** live divergences. So
+there is now exactly one list. `simulate(dt, t)` is the whole world
+advancing; `tick()` calls it and renders, `UJ.step()` calls it and
+refreshes matrices by hand. Frame-only work stays frame-only and is
+labelled as such: `pollGamepad` (a headless step has no gamepad) and
+`updateAutoQuality` (feeding it fake frame times would have it downgrade
+the quality tier). Everything else is shared, including the hitstop
+`dt *= 0.15` — a stepper that skipped that was simulating a different
+game. All three suites stayed green through the change, which is the
+evidence the divergences were bugs and not deliberate.
+
+**A new system added to `simulate()` cannot be forgotten by one driver,
+because there is no longer a second place to forget it.**
+
+### Every screenshot in this repo was of a frozen particle system
+
+`updateGlitter` running only in `tick()` meant that in headless, glitter
+spawned and then never moved, never faded and never got reaped — ~2000
+`Points` objects by wave twelve. Scene children grew 171 → 2154.
+
+The leak itself was headless-only. What was *not* headless-only is that
+**every visual judgement and every performance number recorded in this
+file was taken against that broken state.** The first honest screenshot
+of a chain slam, once glitter actually animated, was a white rectangle
+where the fight used to be. BUILD 12's "4.7% blown pixels" number was
+measured against frozen particles and should not be compared to anything.
+
+Lesson: when a test driver diverges from the real one, it does not just
+miss bugs — it silently invalidates everything you measured through it.
+
+### Glitter on a budget
+
+Bursts now request what they'd like and get what's left. Past a soft
+budget of 520 live particles each new burst scales down, hard-floored at
+four sparks so nothing ever silently produces no feedback. And
+`Hype.glitterMul` went from `1 + tier*0.7` to `1 + tier*0.18` — it was
+multiplying the sparkle at exactly the moment the most things die at once
+and the bloom is already hottest, which is backwards.
+
+Worst case (pinned LEGENDARY, seven-kill chain slam): blown-out pixels
+3.4% → 1.8%, and a single kill looks exactly as it did.
+
+### A hierarchy for feedback, not just de-duplication
+
+BUILD 12 stopped one popup printing five copies of itself. It did not fix
+six *different* channels firing at once at the same size in the same
+place. Three tiers now, which never compete:
+
+- **headline** — ONE at a time, large, at the action. Ranked by priority,
+  so `CRIT!` (1) cannot stomp `CHAIN x5` (8), and `SKY SLAM!` (9) takes
+  the slot from both.
+- **ticker** — small, dimmed to 72%, parked below. Running totals: XP,
+  score, combo. Reference numbers, not events.
+- **label** — normal size at the object it belongs to. `SAVED!`,
+  `SPOTLESS!`, `HELP!`.
+
+### The slam is not overpowered, and here is the evidence
+
+Last build shipped with an open question. Playing the same eight endless
+waves twice — hose-only versus slamming at every opportunity:
+
+| | hose only | slam-heavy |
+|---|---|---|
+| total time | 351 s | 400 s |
+| total HP lost | 666 | 78 |
+
+Slamming is **slower but far safer**: the climb costs time, and you are
+airborne and your targets are flat. Since endless mode scores on points
+per run, that is a real trade — safe-and-slow survives deeper, fast-and-
+risky scores harder — not a strictly dominant option. No nerf needed.
+
+### First trustworthy perf numbers
+
+Story pier: 1138 draw calls, 63k triangles, 1.78 ms sim.
+Rush wave 11 (26 zombies, 36 piles, 497 ray targets): 1251 calls, 62k
+triangles, 1.44 ms. Over 15,840 frames of chaos play the scene graph is
+flat, `physBodies` net zero, and there are no dangling raycast targets.
