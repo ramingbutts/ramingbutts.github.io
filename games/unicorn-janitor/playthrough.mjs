@@ -251,12 +251,88 @@ const precision = await page.evaluate(() => {
 // (cascade DEPTH isn't asserted here: a fresh pack at full goo survives a
 // single detonation, so chains only compound once neighbours are softened —
 // that path is covered by B12d in the unit suite)
+// Time is the claim under test, not detonation count: a centre-mass shot can
+// clip a core in passing and set one off too, so comparing burst tallies is a
+// coin flip. How long the pack takes to die is not.
 ok('tracking weak points clears a pack far faster than hosing centre-mass',
-   precision.core.crits > 0 && precision.core.bursts > precision.body.bursts &&
-   precision.core.left === 0 && precision.core.secs < precision.body.secs * 0.75,
+   precision.core.crits > 0 && precision.core.bursts > 0 &&
+   precision.core.left === 0 && precision.core.secs < precision.body.secs * 0.7,
    `same pack of 6, same hose — centre-mass took ${precision.body.secs}s (${precision.body.bursts} detonations); ` +
    `tracking cores took ${precision.core.secs}s with ${precision.core.crits} weak-point hits, ` +
    `${precision.core.bursts} detonations, best chain x${precision.core.chain}`);
+
+// ---- 8. the vertical route is real: climb the wharf using only the moves
+// the player has, then pound the crowd from the roof ----
+const vertical = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  UJ.Input.gpX = 0; UJ.Input.gpY = 0;
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  UJ.Game.slams = 0; UJ.Game.bestSlam = 0;
+  // stand under a second-tier roof and get up there on the jet boost alone —
+  // jump, then hose straight down. No teleporting, no cheats.
+  const roof = UJ.platforms.filter(p => p.y > 5)
+    .sort((a, b) => b.y - a.y)[0];
+  const rx = (roof.x0 + roof.x1) / 2, rz = (roof.z0 + roof.z1) / 2;
+  P.pos.set(rx, 0, rz); P.vel.y = 0; P.hvel.set(0, 0, 0);
+  P.onGround = true; P.hasHorn = true; P.hp = 100;
+  UJ.Meters.pressure = 100;
+  UJ.Input.jumpPressed = true;
+  let peak = 0, landedOnRoof = false;
+  // climb it in stages, the way a player does: boost until clear of the next
+  // lip, cut the jet and settle, and if that landed you on the lower tier
+  // (the stacks sit ON containers) jump and boost again from there.
+  for (let i = 0; i < 260; i++) {
+    UJ.Meters.pressure = 100;                 // pressure economy isn't what this validates
+    if (P.onGround && P.pos.y < roof.y - 0.2) UJ.Input.jumpPressed = true;
+    const climbing = P.pos.y < roof.y + 1.2 && !P.onGround;
+    if (climbing) {
+      UJ.aimAt(P.pos.x, P.pos.y - 8, P.pos.z); // hose straight down: ride the recoil
+      UJ.Input.spray = true;
+    } else {
+      UJ.Input.spray = false;
+    }
+    UJ.step(0.03);
+    peak = Math.max(peak, P.pos.y);
+    if (P.onGround && P.pos.y > 5) { landedOnRoof = true; break; }
+  }
+  UJ.Input.spray = false;
+  // a crowd on the deck beside the container, and a dive onto it. Note he has
+  // to walk off the EDGE — hopping on the spot leaves him barely 2m above the
+  // roof he is standing on, which correctly does not arm the pound.
+  // step off along +z: the stack sits ON a container, and the container is
+  // wider than it, so walking off the x side just drops you onto the lower
+  // tier. Clear BOTH lips and the ground below is the deck.
+  const off = rz + 6;
+  const pack = [];
+  for (let i = 0; i < 6; i++) pack.push(UJ.spawnZombieAt(rx - 1.5 + i * 0.6, off));
+  for (let i = 0; i < 80; i++) {              // walk to the edge and over it
+    if (P.pos.z < off) P.pos.z += 0.14;
+    UJ.step(0.03);
+    if (!P.onGround && UJ.groundHeightAt(P.pos.x, P.pos.z, P.pos.y) === 0) break;
+  }
+  for (let i = 0; i < 40; i++) {              // fall until the pound arms, then hit it
+    UJ.step(0.03);
+    if (P.pos.y - UJ.groundHeightAt(P.pos.x, P.pos.z, P.pos.y) >= UJ.CFG.slam.minHeight) {
+      UJ.Input.jumpPressed = true;
+      break;
+    }
+  }
+  for (let i = 0; i < 160 && !P.onGround; i++) { P.hp = 100; UJ.step(0.03); }
+  const out = { roofY: +roof.y.toFixed(1), peak: +peak.toFixed(1), landedOnRoof,
+                slams: UJ.Game.slams, drop: UJ.Game.bestSlam,
+                flattened: pack.filter(z => z.alive && z.state === 'downed').length,
+                killed: pack.filter(z => !z.alive).length };
+  for (const z of pack) z.alive = false;
+  UJ.reapEntities();
+  return out;
+});
+ok('the jet boost reaches the rooftops and a dive off one flattens the crowd below',
+   vertical.landedOnRoof && vertical.slams === 1 && vertical.drop >= 4 &&
+   vertical.flattened + vertical.killed >= 4,
+   `boosted from the deck onto a ${vertical.roofY}m roof, then pounded ${vertical.drop}m down — ` +
+   `${vertical.flattened} of 6 flattened, ${vertical.killed} outright killed`);
 
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
 ok('a full playthrough raises no runtime errors', jsErrors.length === 0,

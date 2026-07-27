@@ -999,3 +999,72 @@ Harmless when popups were fire-and-forget; fatal once they are keyed,
 because a stale keyed entry would live forever in a headless run and
 swallow every later popup. Third instance of this bug class — anything
 with per-frame state belongs in `UJ.step()` too.
+
+## The ground pound: making height a weapon (BUILD 13)
+
+BUILD 12 gave the hose a skill layer. What was still missing was a second
+verb. The level had one way to attack and an entire vertical layer —
+twelve containers, six awning pads, the jet boost from BUILD 6 — that
+combat had no reason to touch. Traversal and fighting were separate
+activities happening in the same space.
+
+**Tap jump again in the air and you come down hard.** No new control: in
+the air the jump button did nothing, so the same key, pad button and
+touch button all pick it up for free. A height gate (2.2 m of clear air
+below you) stops a hop from triggering it and teaches the rule.
+
+**Everything scales off the DROP, not a constant.** Radius, damage,
+knockdown length, shake, hitstop and FOV punch all read `slamFrom -
+groundY`. A step off a crate is a shove; a dive off a stacked roof is a
+9.5 m detonation. That single decision is what turns the rooftops from
+scenery into a resource, and it means the reward curve is the player's
+own route planning rather than a number in `CFG`.
+
+**It flattens rather than kills.** Downed zombies pitch face-down, can't
+act, and take **double** from the hose until they scramble up. So the
+loop is climb → pound → mop up, and the two verbs feed each other
+instead of competing for the same job. Slam kills also set `_burst`, so
+BUILD 12's chain detonations fire straight off the impact — the two
+builds compose rather than sit side by side.
+
+**Second tier.** Six containers got a smaller crate stacked on them,
+putting roofs at 5.5–7 m over the stretches where the horde gathers,
+each with a faint crown sprite so the high ground reads through fog. A
+slam onto an awning pad rebounds 1.35×, so pad → slam → higher pad →
+bigger slam is a loop worth finding.
+
+**The pose stalemate.** The knockdown lerped pitch toward -1.35 rad and
+settled at -0.6 — a zombie leaning back, not lying down. The gait code
+lerps `rotation.x` toward its idle pose *every frame*, and it only
+excluded `windup`/`lunge`. Two smoothers pulling at the same property
+find an equilibrium instead of one winning; `downed` had to join that
+exclusion list. Worth remembering whenever a pose "almost" works.
+
+### Three test-harness bugs, no game bugs
+
+All three of this build's initial failures were the tests being wrong,
+which is worth recording because the instinct is to reach for the game
+code first.
+
+- The terrain check grabbed `platforms.find(p => p.y > 2)` and dropped
+  Jax on it. Stacking a crate on that exact container meant he landed on
+  the *roof*, not the platform under test. It now picks a container with
+  nothing above it.
+- The bounce-pad check looped until `onGround`, but a pad clears that
+  flag in the same frame it fires — so the loop ran past the rebound and
+  measured a *second, ordinary* bounce, hiding the slam's 1.35× entirely.
+  It now gates on upward velocity and stops before the next contact.
+- The playthrough dive walked off the +x edge of a roof and landed on the
+  container underneath it (the stacks are narrower than their bases), so
+  a 6 m dive registered as 3 m. It steps off along +z now, clear of both
+  lips.
+
+Two older checks also had to be relaxed to claims that are actually true:
+weak points are real geometry sticking out past a body, so a JET shot can
+clip the core of a pile *behind* cover (LANCE is now asserted by ratio,
+not by JET scoring zero), and a wandering zombie can eat a shot aimed at
+the aim-assist test (the lane is cleared and restored around it).
+
+Cost: draw calls and sim time unchanged within noise (1080 vs 1123
+calls, 0.57 vs 0.53 ms) for six crates, six crown sprites and one
+shockwave ring pool.
