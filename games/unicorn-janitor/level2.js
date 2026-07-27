@@ -1233,7 +1233,32 @@ function updateFogParticles(dt, t) {
       (this is the payoff for every clean — make it generous)
    ===================================================================== */
 const bursts = [];
+/* Glitter, on a budget.
+
+   Every burst is additive and bloomed, so the cost of one is invisible and
+   the cost of nine at once is a white rectangle where the fight used to be.
+   A seven-kill chain slam asks for ~1200 particles in a single frame, at
+   LEGENDARY, where `glitterMul` makes each burst *bigger* — exactly backwards
+   at the one moment readability matters most.
+
+   So bursts request what they'd like and get what's left. Past the soft
+   budget each new burst is scaled down, hard-floored at a few sparks so
+   nothing ever silently produces no feedback at all. The result: a single
+   kill looks exactly as it did, and a screen-clearing chain stays a picture
+   of a fight rather than a flashbang.
+
+   This only became visible once BUILD 14 made the headless stepper run
+   `updateGlitter` — before that, particles froze at their spawn point in
+   every screenshot ever taken of this game. */
+const GLITTER_BUDGET = 520;
+let glitterLive = 0;
 function spawnGlitter(center, count = 70, power = 5) {
+  count = Math.round(count);
+  if (glitterLive > GLITTER_BUDGET) {
+    const room = Math.max(0, 1 - (glitterLive - GLITTER_BUDGET) / GLITTER_BUDGET);
+    count = Math.max(4, Math.round(count * room));
+  }
+  if (count <= 0) return;
   const pos = new Float32Array(count * 3), col = new Float32Array(count * 3);
   const vel = [];
   const c = new THREE.Color();
@@ -1252,13 +1277,15 @@ function spawnGlitter(center, count = 70, power = 5) {
     transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
   const pts = new THREE.Points(geo, mat);
   scene.add(pts);
-  bursts.push({ pts, vel, life: 1.2 });
+  glitterLive += count;
+  bursts.push({ pts, vel, life: 1.2, n: count });
 }
 function updateGlitter(dt) {
   for (let b = bursts.length - 1; b >= 0; b--) {
     const burst = bursts[b];
     burst.life -= dt;
     if (burst.life <= 0) {
+      glitterLive -= burst.n;
       scene.remove(burst.pts); burst.pts.geometry.dispose(); burst.pts.material.dispose();
       bursts.splice(b, 1); continue;
     }
@@ -1582,7 +1609,7 @@ function applyCrit(ent, amount, point, dt) {
   if (w.hold >= CRIT.pop) {
     w.hold = 0;
     spawnGlitter(point, 9, 4);
-    if (ent.alive) spawnFloatText(_critV.copy(point).setY(point.y + 0.7), 'CRIT!', '#9ffcff', 'crit');
+    if (ent.alive) spawnFloatText(_critV.copy(point).setY(point.y + 0.7), 'CRIT!', '#9ffcff', { tier: 'headline', pri: 1 });
     moveWeakPoint(w, false); // it bolts — crit uptime has to be re-earned
   }
 }
@@ -1619,7 +1646,7 @@ function chainBurst(ent, pos) {
   _burstDepth--;
   if (_burstDepth === 0) {
     if (critChain >= 3) {
-      spawnFloatText(_critV.copy(pos).setY(pos.y + 3), 'CHAIN x' + critChain, '#9ffcff', 'chain');
+      spawnFloatText(_critV.copy(pos).setY(pos.y + 3), 'CHAIN x' + critChain, '#9ffcff', { tier: 'headline', pri: 3 + critChain });
       Hype.add(0.08 * critChain);
       hitStop = Math.max(hitStop, 0.18);
       Player._fovPunch = Math.max(Player._fovPunch, 6);
@@ -2379,7 +2406,7 @@ class Zombie {
       Player._fovPunch = Math.max(Player._fovPunch, 7);
       Player.shake = Math.max(Player.shake, 0.3);
       Hype.add(0.2);
-      spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f', 'style');
+      spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f', { tier: 'headline', pri: 2 });
     }
     Hype.add(this.brute ? 0.34 : 0.22);
     if (burstOnDeath(this)) chainBurst(this, c); // core kill: the goo goes off
@@ -2898,7 +2925,7 @@ class BossTentacle {
     spawnGlitter(this.tip.clone(), 90, 6);
     spawnChunkBurst(this.tip, { count: 5, mat: this.mat, rMin: 0.14, rMax: 0.3, power: 1.2 });
     SFX.pop(panFor(this.tip), 1);
-    spawnFloatText(this.tip.clone().setY(this.tip.y + 2), 'TENTACLE DOWN!', '#ffd94f');
+    spawnFloatText(this.tip.clone().setY(this.tip.y + 2), 'TENTACLE DOWN!', '#ffd94f', { tier: 'headline', pri: 6 });
     Hype.add(0.28);
     gainXP(60, this.tip);
     hitStop = 0.16;
@@ -3267,7 +3294,7 @@ const Rush = {
     const got = Math.round(points * mult);
     this.score += got;
     rushScoreEl.textContent = this.score.toLocaleString();
-    if (pos && Hype.tier > 0) spawnFloatText(pos.clone().setY(pos.y + 2.2), `+${got}`, HYPE_TIERS[Hype.tier].color, 'score');
+    if (pos && Hype.tier > 0) spawnFloatText(pos.clone().setY(pos.y + 2.2), `+${got}`, HYPE_TIERS[Hype.tier].color, { tier: 'ticker', key: 'score' });
   },
 };
 Rush.load();
@@ -4236,10 +4263,10 @@ function landSlam(groundY) {
                         impact.z + (Math.random() - 0.5) * radius), true);
   }
   if (flattened >= 3) {
-    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SLAM x' + flattened, '#ffd94f', 'slam');
+    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SLAM x' + flattened, '#ffd94f', { tier: 'headline', pri: 3 + flattened });
     Hype.add(0.1 + 0.05 * flattened);
   } else if (drop > 5) {
-    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SKY SLAM!', '#ffd94f', 'slam');
+    spawnFloatText(_v2.copy(impact).setY(groundY + 2.4), 'SKY SLAM!', '#ffd94f', { tier: 'headline', pri: 4 });
     Hype.add(0.12);
   }
   Hype.add(0.06 + drop * 0.012);
@@ -4872,7 +4899,7 @@ function gainXP(amount, worldPos) {
     if (xpRunT <= 0) xpRun = 0;
     xpRun += amount; xpRunT = 1.15;
     spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
-    spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + xpRun + ' XP', '#ffd94f', 'xp');
+    spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + xpRun + ' XP', '#ffd94f', { tier: 'ticker', key: 'xp' });
   }
   let gained = 0;
   while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
@@ -5061,43 +5088,87 @@ function paintFloatText(sprite, text, color) {
 // other and the screen becomes unreadable at exactly the moment you most
 // want to see what you did. Keyed popups also count up, which reads better
 // than a stack of near-identical numbers.
-function spawnFloatText(pos, text, color = '#ffd94f', key = null) {
+/* ---------------------------------------------------------------------
+   FEEDBACK HIERARCHY (BUILD 14)
+
+   BUILD 12 stopped a repeating popup printing five copies of itself. What
+   it did not fix is that six *different* channels all fire at the same
+   instant and all draw at the same size, in the same place, at the moment
+   you most want to read them. A good slam printed SKY SLAM!, AIRBORNE
+   PURIFY!, +600 XP and SPOTLESS! in one band of pixels, and you could read
+   none of them.
+
+   Three tiers, and they never compete:
+
+     headline — ONE at a time, large, at the action. Style kills, chains,
+       slams, boss beats. A new headline only displaces a live one if it
+       is at least as important, so a CRIT! can't stomp a CHAIN x5.
+     ticker   — small, dim, parked below the headline. Running totals:
+       XP, score, combo. They are reference numbers, not events.
+     label    — normal size, at the object it belongs to. SAVED!, HELP!,
+       SPOTLESS! — contextual, and usually nowhere near the middle.
+
+   Tiers are the ranking; `key` (from BUILD 12) still collapses repeats
+   within one.
+   --------------------------------------------------------------------- */
+const FLOAT_TIERS = {
+  headline: { scale: [3.0, 0.94], pop: [3.35, 1.05], life: 1.25, rise: 1.25, dim: 1 },
+  ticker:   { scale: [1.65, 0.5], pop: [1.85, 0.56], life: 0.95, rise: 0.8,  dim: 0.72 },
+  label:    { scale: [2.4, 0.74], pop: [2.7, 0.83],  life: 1.15, rise: 1.1,  dim: 0.9 },
+};
+function spawnFloatText(pos, text, color = '#ffd94f', opts = null) {
+  // legacy call form: a bare string is the key, tier inferred as a label
+  if (typeof opts === 'string') opts = { key: opts };
+  const o = opts || {};
+  const tier = FLOAT_TIERS[o.tier] ? o.tier : 'label';
+  const T = FLOAT_TIERS[tier];
+  const pri = o.pri || 0;
+
+  // headlines share one slot: the biggest moment on screen wins it
+  const key = tier === 'headline' ? 'headline' : o.key;
   if (key) {
     const live = floatTexts.find(f => f.key === key && f.life > 0.3);
     if (live) {
+      if (tier === 'headline' && pri < live.pri) return; // a lesser beat doesn't steal it
       paintFloatText(live.s, text, color);
-      live.life = 1.15;
-      live.s.scale.set(3.0, 0.92, 1); // a repaint pops slightly — it re-earns the eye
+      live.life = T.life; live.pri = Math.max(live.pri, pri);
+      live.s.scale.set(T.pop[0], T.pop[1], 1); // a repaint pops — it re-earns the eye
+      live.s.position.copy(pos);
+      if (tier === 'ticker') live.s.position.y -= 0.9;
       return;
     }
   }
-  if (floatTexts.length > 10) { // hard cap: recycle the oldest
+  if (floatTexts.length > 9) { // hard cap: recycle the oldest
     const old = floatTexts.shift();
     scene.remove(old.s); old.s.material.map.dispose(); old.s.material.dispose();
   }
   const m = new THREE.SpriteMaterial({ transparent: true, depthWrite: false });
   const s = new THREE.Sprite(m);
   paintFloatText(s, text, color);
-  s.scale.set(2.6, 0.8, 1);
+  s.scale.set(T.scale[0], T.scale[1], 1);
   s.position.copy(pos);
-  // fan simultaneous popups apart so two events in the same frame don't
-  // print on top of one another
-  s.position.x += (Math.random() - 0.5) * 1.2;
-  s.position.y += floatTexts.length * 0.12;
+  // tickers sit below the headline band; labels fan slightly so two events in
+  // the same frame don't print on top of one another
+  if (tier === 'ticker') s.position.y -= 0.9;
+  else if (tier === 'label') {
+    s.position.x += (Math.random() - 0.5) * 1.2;
+    s.position.y += floatTexts.length * 0.12;
+  }
   scene.add(s);
-  floatTexts.push({ s, life: 1.15, key });
+  floatTexts.push({ s, life: T.life, key, pri, tier });
 }
 function updateFloatTexts(dt) {
   xpRunT = Math.max(0, xpRunT - dt);
   for (let i = floatTexts.length - 1; i >= 0; i--) {
     const f = floatTexts[i];
+    const T = FLOAT_TIERS[f.tier] || FLOAT_TIERS.label;
     f.life -= dt;
     if (f.life <= 0) {
       scene.remove(f.s); f.s.material.map.dispose(); f.s.material.dispose();
       floatTexts.splice(i, 1); continue;
     }
-    f.s.position.y += 1.1 * dt;
-    f.s.material.opacity = Math.min(1, f.life * 1.6);
+    f.s.position.y += T.rise * dt;
+    f.s.material.opacity = Math.min(1, f.life * 1.6) * T.dim;
   }
 }
 
@@ -5110,7 +5181,7 @@ function registerCombo(pos) {
   Hype.add(0.06 + 0.03 * Math.min(comboCount, 6)); // chaining is the point
   SFX.chime(1 + 0.08 * Math.min(comboCount - 1, 8));
   if (comboCount >= 2) {
-    spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0', 'combo');
+    spawnFloatText(pos.clone().add(new THREE.Vector3(0, 2.6, 0)), 'COMBO x' + comboCount, '#ff8fd0', { tier: 'ticker', key: 'combo' });
     gainXP(5 * Math.min(comboCount - 1, 6)); // bonus, no popup spam
   }
 }
@@ -5134,7 +5205,9 @@ const Hype = {
   heat: 0, tier: 0, peak: 0,
   add(x) { if (Game.state === 'playing') this.heat = Math.min(1, this.heat + x); },
   dmgMul() { return 1 + this.tier * 0.15; },      // up to +45% at LEGENDARY
-  glitterMul() { return 1 + this.tier * 0.7; },
+  // capped low deliberately: this multiplies the sparkle at exactly the
+  // moment the most things are dying at once, and the bloom is already hottest
+  glitterMul() { return 1 + this.tier * 0.18; },
 };
 
 function updateHype(dt) {
@@ -5905,19 +5978,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   step: (dt = 0.03) => {
     dt = Math.min(dt, 0.05);
     _stepTime += dt;
-    const t = clock.elapsedTime + _stepTime;
-    if (Game.state !== 'playing') return;
-    updatePlayer(dt, t); updateHose(dt); updateBeam(dt); updateNova(dt); updatePing(dt);
-    updateZombies(dt, t);
-    for (const c of civilians) c.update(dt, t);
-    updateWharfToys(dt);
-    updateBoss(dt, t);
-    updateRush(dt);
-    reapEntities();
-    updateShard(dt, t); updateDying(dt); updatePhysics(dt); updateCars(dt); updatePileJelly(dt, t);
-    updateWeakPoints(dt, t); updateBurstRings(dt); updateFloatTexts(dt); updateSlamRings(dt); updateSlamHint();
-    updateCompass(); updateThreatMusic(dt); updateHype(dt);
-    if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
+    // ONE list of updates, shared with the real frame — see simulate().
+    simulate(dt, clock.elapsedTime + _stepTime);
     // A real frame ends in composer.render(), which is what refreshes every
     // child's matrixWorld. Without it a headless step() loop raycasts against
     // stale matrices — freshly spawned meshes simply aren't where they claim
@@ -5940,6 +6002,9 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 14 particle budget + feedback tiers
+  GLITTER_BUDGET, getGlitterLive: () => glitterLive, bursts, FLOAT_TIERS, floatTexts, simulate,
+  spawnGlitter, spawnSplash, spawnFloatText,
   // BUILD 13 ground pound
   startSlam, landSlam, slamRings, updateSlamRings, updateSlamHint,
   CRIT, attachWeakPoint, moveWeakPoint, updateWeakPoints, applyCrit, chainBurst,
@@ -5950,20 +6015,33 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
 const clock = new THREE.Clock();
 let _frameCount = 0;
 let _stepTime = 0; // headless UJ.step() time accumulator (see the step hook above)
-function tick() {
-  requestAnimationFrame(tick);
-  _frameCount++;
-  const rawDt = clock.getDelta();
-  let dt = Math.min(rawDt, 0.05);
-  const t = clock.elapsedTime;
+/* ---------------------------------------------------------------------
+   ONE SIMULATION, TWO DRIVERS (BUILD 14)
 
-  pollGamepad();
-  updateAutoQuality(rawDt);
+   `tick()` is the real frame; `UJ.step()` is the deterministic driver the
+   headless suites use because a background browser throttles rAF to ~2fps.
+   Keeping two hand-maintained lists of update calls in sync failed four
+   separate times — the stepper silently skipped `updatePileJelly`, then
+   combo expiry, then `scene.updateMatrixWorld` (which made every raycast
+   miss), then `updateGlitter` (which leaked ~2000 Points objects over a
+   long headless run and quietly poisoned every performance measurement
+   taken in this repo).
 
-  // kill slow-motion: world runs at 15% for a beat (skipped for reduce-motion)
+   So there is now exactly ONE list. `simulate()` is the whole world
+   advancing by dt; both drivers call it and then do their own private
+   work — the frame renders and reads real hardware timings, the stepper
+   refreshes matrices by hand. A new system added to `simulate()` cannot
+   be forgotten by one of them, because there is no longer a second place
+   to forget it.
+   --------------------------------------------------------------------- */
+function simulate(dt, t) {
+  // kill slow-motion: world runs at 15% for a beat (skipped for reduce-motion).
+  // This lives here, not in the frame, because it changes how far the world
+  // actually moves — a stepper that skipped it was simulating a different game.
   if (Settings.reduceMotion) hitStop = 0;
   if (hitStop > 0) { hitStop -= dt; dt *= 0.15; }
 
+  // --- ambient world: runs in menus too, so the wharf is alive behind the UI
   updateCrater(dt, t);
   updateFogParticles(dt, t);
   updateOcean(t);
@@ -5974,28 +6052,20 @@ function tick() {
   updateGlitter(dt);
   updateSplashes(dt);
   updateDamageArcs(dt);
-  // filmic post: grain always breathing, aberration only when you're hurt
-  vignette.uniforms.time.value = t;
-  vignette.uniforms.aberration.value = Settings.reduceMotion ? 0 : Game.dmgFlash * 0.006;
-  updatePhysics(dt); updateCars(dt); // physics keeps settling even in menus
-
-  // optional FPS readout (settings toggle) — helps real-device playtesting
-  if (Settings.showFps) {
-    fpsAccum += rawDt; fpsCount++;
-    if (fpsAccum >= 0.5) {
-      fpsEl.textContent = Math.round(fpsCount / fpsAccum) + ' FPS · ' + activeTier().toUpperCase();
-      fpsAccum = 0; fpsCount = 0;
-    }
-  }
+  updatePhysics(dt); updateCars(dt);
   updatePileJelly(dt, t);
   updateWeakPoints(dt, t);
   updateBurstRings(dt);
   updateSlamRings(dt);
+  updateDying(dt);
+  updateFloatTexts(dt);
+
+  // filmic post: grain always breathing, aberration only when you're hurt
+  vignette.uniforms.time.value = t;
+  vignette.uniforms.aberration.value = Settings.reduceMotion ? 0 : Game.dmgFlash * 0.006;
 
   // toast fade (level-ups, unlocks)
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = 0; }
-  updateDying(dt);
-  updateFloatTexts(dt);
   if (comboT > 0) { comboT -= dt; if (comboT <= 0) comboCount = 0; }
 
   if (Game.state === 'intro') {
@@ -6039,7 +6109,28 @@ function tick() {
     camera.position.lerp(_v1.set(Player.pos.x + Math.sin(a) * 8, 4, Player.pos.z + Math.cos(a) * 8), 0.02);
     camera.lookAt(Player.pos.x, 1.5, Player.pos.z);
   }
+}
 
+function tick() {
+  requestAnimationFrame(tick);
+  _frameCount++;
+  const rawDt = clock.getDelta();
+  const t = clock.elapsedTime;
+
+  // frame-only work: real input devices and real hardware timings. These are
+  // deliberately NOT in simulate() — a headless step has no gamepad, and
+  // feeding it fake frame times would have it downgrade the quality tier.
+  pollGamepad();
+  updateAutoQuality(rawDt);
+  if (Settings.showFps) {
+    fpsAccum += rawDt; fpsCount++;
+    if (fpsAccum >= 0.5) {
+      fpsEl.textContent = Math.round(fpsCount / fpsAccum) + ' FPS · ' + activeTier().toUpperCase();
+      fpsAccum = 0; fpsCount = 0;
+    }
+  }
+
+  simulate(Math.min(rawDt, 0.05), t);
   composer.render();
 }
 tick();

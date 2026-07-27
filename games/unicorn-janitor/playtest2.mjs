@@ -1286,6 +1286,90 @@ ok('the wharf has high ground to dive from, not just crates to stand on',
    tiers.high >= 4 && tiers.tallest >= 5.5,
    `${tiers.total} platforms, ${tiers.high} of them above 5m · tallest roof ${tiers.tallest}m`);
 
+/* =====================================================================
+   BUILD 14 — THE STEPPER IS THE FRAME, AND THE FRAME IS READABLE
+   Four separate bugs came from tick() and UJ.step() keeping two
+   hand-maintained lists of updates. There is one list now (simulate()),
+   and these guard the properties that proves.
+   ===================================================================== */
+
+// B14a. Transient pools actually drain under the stepper. This is the check
+// that would have caught updateGlitter never running headless — a leak that
+// quietly poisoned every screenshot and perf number taken in this repo.
+const drains = await page.evaluate(async () => {
+  const UJ = window.UJ;
+  // Quiesce first: a live wharf sprays its own glitter every few frames, so
+  // "did MY bursts drain" is only answerable with gameplay parked. 'skills'
+  // skips simulate()'s playing branch while the ambient/particle half — the
+  // half under test — keeps running, which is exactly the isolation we want.
+  const was = UJ.Game.state;
+  UJ.Game.state = 'skills';
+  for (let i = 0; i < 120; i++) UJ.step(0.03);   // drain whatever was in flight
+  const base = { children: UJ.scene.children.length, glitter: UJ.getGlitterLive(),
+                 bursts: UJ.bursts.length };
+  const pos = UJ.Player.pos.clone().setY(1);
+  for (let i = 0; i < 10; i++) UJ.spawnGlitter(pos, 60, 5);
+  UJ.spawnSplash(pos, true);
+  const peak = { children: UJ.scene.children.length, glitter: UJ.getGlitterLive(), bursts: UJ.bursts.length };
+  for (let i = 0; i < 90; i++) UJ.step(0.03);   // 2.7s: everything transient should be gone
+  const after = { children: UJ.scene.children.length, glitter: UJ.getGlitterLive(), bursts: UJ.bursts.length };
+  UJ.Game.state = was;
+  return { base, peak, after };
+});
+ok('transient particle pools drain under the headless stepper, not just the real frame',
+   drains.base.bursts === 0 && drains.peak.bursts === 10 && drains.after.bursts === 0 &&
+   drains.after.glitter === 0 && drains.after.children === drains.base.children,
+   `10 bursts (${drains.peak.glitter} particles) spawned then fully reaped · ` +
+   `scene children ${drains.base.children} → ${drains.peak.children} → ${drains.after.children}`);
+
+// B14b. The glitter budget bounds the worst case: a chain kill asking for
+// thousands of additive particles at once gets a picture of a fight back,
+// not a flashbang
+const glitterCap = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const was = UJ.Game.state;
+  UJ.Game.state = 'skills';                             // park gameplay, see B14a
+  for (let i = 0; i < 120; i++) UJ.step(0.03);          // start from a clean pool
+  const pos = UJ.Player.pos.clone().setY(1);
+  let asked = 0;
+  for (let i = 0; i < 20; i++) { asked += 300; UJ.spawnGlitter(pos, 300, 5); }
+  const live = UJ.getGlitterLive();
+  const smallest = Math.min(...UJ.bursts.map(b => b.n));
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  const drained = UJ.getGlitterLive();
+  UJ.Game.state = was;
+  return { asked, live, smallest, cap: UJ.GLITTER_BUDGET, drained };
+});
+// B14c. Feedback hierarchy: one headline at a time, and a lesser beat
+// cannot stomp a bigger one
+const feedback = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const texts = UJ.floatTexts;
+  texts.length = 0;
+  const p = UJ.Player.pos.clone().setY(2);
+  const read = () => texts.map(f => ({ key: f.key, pri: f.pri, tier: f.tier,
+                                       w: +f.s.scale.x.toFixed(2) }));
+  UJ.spawnFloatText(p, 'CHAIN x5', '#9ffcff', { tier: 'headline', pri: 8 });
+  const afterChain = read();
+  UJ.spawnFloatText(p, 'CRIT!', '#9ffcff', { tier: 'headline', pri: 1 });  // must NOT win
+  const afterCrit = read();
+  UJ.spawnFloatText(p, 'SKY SLAM!', '#ffd94f', { tier: 'headline', pri: 9 }); // must win
+  const afterSlam = read();
+  UJ.spawnFloatText(p, '+400 XP', '#ffd94f', { tier: 'ticker', key: 'xp' });
+  UJ.spawnFloatText(p, 'COMBO x4', '#ff8fd0', { tier: 'ticker', key: 'combo' });
+  const all = read();
+  const headlines = all.filter(f => f.tier === 'headline');
+  const tickers = all.filter(f => f.tier === 'ticker');
+  texts.length = 0;
+  return { afterChain, afterCrit, afterSlam, headlines, tickers,
+           headlineW: UJ.FLOAT_TIERS.headline.scale[0], tickerW: UJ.FLOAT_TIERS.ticker.scale[0] };
+});
+ok('one headline at a time, and a small beat cannot displace a big one',
+   feedback.headlines.length === 1 && feedback.afterCrit[0].pri === 8 && feedback.afterSlam[0].pri === 9 &&
+   feedback.tickers.length === 2 && feedback.tickerW < feedback.headlineW * 0.6,
+   `CHAIN x5 held the slot against CRIT! (pri 8 vs 1) and yielded to SKY SLAM! (pri 9) · ` +
+   `${feedback.tickers.length} tickers alongside, drawn at ${feedback.tickerW} vs the headline's ${feedback.headlineW}`);
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
