@@ -424,6 +424,19 @@ function setupTouch() {
    3. RENDERER, SCENE, FOG
    ===================================================================== */
 const canvas = document.getElementById('game');
+// Chromium returns a promise from requestPointerLock() and REJECTS it when the
+// pointer is already locked, or when the document isn't focused. Several call
+// sites here can fire while a lock is pending (click, resume, wave banner), so
+// an unguarded call surfaces as an unhandled rejection in the console. One
+// wrapper: skip if already locked, and swallow the benign rejection.
+function grabPointer() {
+  if (IS_TOUCH || !canvas.requestPointerLock) return;
+  if (document.pointerLockElement === canvas) return;
+  try {
+    const r = canvas.requestPointerLock();
+    if (r && typeof r.catch === 'function') r.catch(() => {});
+  } catch (e) { /* not focused, or a lock is already pending */ }
+}
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
@@ -2722,7 +2735,7 @@ function toggleSkillPanel(open) {
   } else if (!open && Game.state === 'skills') {
     Game.state = 'playing';
     el.classList.add('hidden');
-    if (!IS_TOUCH) canvas.requestPointerLock();
+    grabPointer();
   }
 }
 
@@ -2980,7 +2993,7 @@ function togglePause(open) {
   } else if (!open && Game.state === 'paused') {
     Game.state = 'playing';
     el.classList.add('hidden');
-    if (!IS_TOUCH) canvas.requestPointerLock();
+    grabPointer();
   }
 }
 
@@ -3204,7 +3217,7 @@ function startGame() {
   introT = 0; introSkip = false;
   document.body.classList.add('cine');
   Game.startTime = performance.now();
-  if (!IS_TOUCH) canvas.requestPointerLock();
+  grabPointer();
 }
 
 document.getElementById('startBtn').addEventListener('click', startGame);
@@ -3249,7 +3262,7 @@ refreshSettingsUI();
 applyQuality();
 // clicking back into the game re-locks the pointer on desktop
 canvas.addEventListener('click', () => {
-  if (Game.state === 'playing' && !IS_TOUCH && !Input.locked) canvas.requestPointerLock();
+  if (Game.state === 'playing' && !Input.locked) grabPointer();
 });
 
 if (IS_TOUCH) setupTouch();

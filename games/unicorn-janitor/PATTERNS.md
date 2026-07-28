@@ -1162,3 +1162,94 @@ Story pier: 1138 draw calls, 63k triangles, 1.78 ms sim.
 Rush wave 11 (26 zombies, 36 piles, 497 ray targets): 1251 calls, 62k
 triangles, 1.44 ms. Over 15,840 frames of chaos play the scene graph is
 flat, `physBodies` net zero, and there are no dangling raycast targets.
+
+## The roster: six questions instead of one (BUILD 15)
+
+Through BUILD 14 every enemy asked the player the same thing: point at it
+and hold the trigger. Runner and brute changed the numbers, not the
+conversation — they still walked at you and swiped. So three nozzles, a
+ground pound and a crit system all existed with nothing that ever
+*demanded* them. The fights were rich in options and poor in questions.
+
+Three new kinds, each breaking a different assumption:
+
+- **Spitter** — never closes. Walks to an 11 m stand-off ring, faces you
+  and lobs an arcing gob. This level had *no ranged threat at all*, which
+  meant standing still and holding the trigger was always safe. Now it
+  isn't. Answer: shoot it from range (the hose reaches 20 m, it stands at
+  11), run it down, or reach out with LANCE.
+- **Crust** — plated across a ~70° frontal arc, where the hose does 16%
+  of its damage. Answer: go round it, shove it with BLAST, or pound it
+  over — a knockdown turns the plates skyward and the belly up. This is
+  the first enemy that makes the other two nozzles and the slam
+  *necessary* rather than optional.
+- **Bloater** — swells visibly as it is hurt and detonates when it dies,
+  reading the player as a valid target exactly like everything else.
+  Turns "kill it fast" into "kill it in the right place", and its blast
+  feeds BUILD 12's chain reactions.
+
+### A data table, not a seventh boolean
+
+`runner` and `brute` were booleans read at a dozen call sites, and the
+pattern was already at its limit with two. `ZKIND` is now a table of
+specs and `Zombie` reads `this.spec`; the booleans survive as derived
+properties because the layout, the wave director and the playtests all
+speak them. The refactor landed with all 82 checks green *before* any new
+behaviour was added, which is what made the rest of the build safe.
+
+### Teaching order is level design
+
+Every new kind is introduced **alone**, in open deck, before it ever
+appears in a mixed fight. Meet one spitter with nothing else on you and
+its arc is a puzzle; meet your first one inside a pack and it is
+unexplained damage out of the fog. The pier was re-cut around that: first
+spitter at z=-68, first crust at -104, first bloater at -142, each with
+clear space. Endless mode does the same over time — kinds unlock at
+different wave depths so a run keeps changing shape after it has stopped
+merely getting bigger.
+
+A unit check that asserted "exactly 2 runners in the layout" had to be
+relaxed to "at least 2". Pinning a designer's placement count in a test
+makes the level harder to change for no safety in return.
+
+### Telegraphs are the whole contract
+
+A ranged attack in a fog level is unfair unless you can read it, so the
+gob has three tells in sequence: the thrower rears back and its eye
+charges for 0.75 s (longer on easier difficulties); the gob glows and
+arcs for about a second; and a marker tracks the impact point on the deck
+the whole way in, tightening and brightening as it closes.
+
+The marker started as a tasteful dark-green decal and was invisible in
+the first screenshot — against a lit deck, through fog, under bloom,
+mid-firefight. It is now an additive bright ring plus a soft fill. The
+lesson generalises: a telegraph is not decoration you tune for taste, it
+is the thing that makes the attack fair, and it should be tested at the
+messiest moment rather than in isolation.
+
+The same applies to silhouettes. The crust wears its plates *where the
+damage reduction applies*, the bloater is visibly a balloon, and the
+spitter has a gullet that lights as its next gob comes off cooldown.
+An armoured enemy that looks like every other enemy is not a puzzle, it
+is a bug report.
+
+### Bots are not players
+
+The long-run audit stalled at wave 3 because its "walk at the nearest
+enemy" bot chased spitters, which retreat from anyone who closes — so it
+never landed a shot. A player would simply fire from 11 m, well inside
+the hose's 20 m reach. Fixed by teaching the bot to shoot from range.
+Worth flagging because the failure looked exactly like a balance
+problem and was not one.
+
+### An unhandled rejection hiding as test flake
+
+The playthrough failed roughly one run in five with
+`PAGEERROR: Pointer is already locked.` It looked like headless noise; it
+was a real defect. Chromium's `requestPointerLock()` returns a promise
+and **rejects** it when the pointer is already locked or the document
+isn't focused, and this file called it unguarded from five places that
+can fire while a lock is pending (click-to-play, resume, wave banner,
+level start). In a real browser that is an unhandled rejection in the
+console on every double-click. One `grabPointer()` wrapper — skip if
+already locked, swallow the benign rejection — in both levels.
