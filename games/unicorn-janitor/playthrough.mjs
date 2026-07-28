@@ -35,19 +35,48 @@ await page.waitForFunction(() => window.UJ.Game.state === 'playing', null, { tim
 // Everything below drives the real verbs: walk into range, hold the trigger,
 // let the game decide when something dies. Nothing is set directly.
 const installHose = () => page.evaluate(() => {
-  window.__hose = (getPos, maxSeconds) => {
+  // The bot plays the way the level asks, because BUILD 15's roster made
+  // "walk up and hold the trigger" a losing strategy: a spitter retreats from
+  // anyone who closes, and a crust takes 16% damage from the front. Teaching
+  // the bot the intended answers is both the fix and a stronger test — a
+  // green sweep now proves those answers actually work.
+  window.__hose = (getPos, maxSeconds, ent) => {
     const UJ = window.UJ, P = UJ.Player;
     const frames = Math.round(maxSeconds / 0.03);
     for (let i = 0; i < frames; i++) {
       const t = getPos();
       if (!t) return true;                       // target resolved itself
-      // stand off at a comfortable working distance and face it
+      const e = typeof ent === 'function' ? ent() : ent;
+      const kind = e && e.kind;
+      let want = 6;                              // default working distance
+      let aimAt = t;
+      if (kind === 'spitter') {
+        want = 14;                               // outstays its 11m ring, inside our 20m reach
+      } else if (kind === 'crust') {
+        // flank it: walk to the far side of its facing, where the plates aren't
+        const h = e.heading || 0;
+        aimAt = t;
+        const bx = t.x - Math.sin(h) * 5.5, bz = t.z - Math.cos(h) * 5.5;
+        const fx = bx - P.pos.x, fz = bz - P.pos.z, fd = Math.hypot(fx, fz) || 1;
+        if (fd > 0.6) { P.pos.x += (fx / fd) * Math.min(fd, 1.6); P.pos.z += (fz / fd) * Math.min(fd, 1.6); }
+        P.hp = Math.max(P.hp, 60);
+        UJ.Meters.pressure = 100;
+        UJ.aimAt(aimAt.x, aimAt.y + 0.9, aimAt.z);
+        UJ.Input.spray = true;
+        UJ.step(0.03);
+        continue;
+      }
       const dx = t.x - P.pos.x, dz = t.z - P.pos.z;
       const d = Math.hypot(dx, dz) || 1;
-      if (d > 7) { P.pos.x += (dx / d) * Math.min(d - 6, 2.2); P.pos.z += (dz / d) * Math.min(d - 6, 2.2); }
+      if (d > want + 1) {
+        const stepTo = Math.min(d - want, 2.2);
+        P.pos.x += (dx / d) * stepTo; P.pos.z += (dz / d) * stepTo;
+      } else if (d < want - 3) {                 // too close for a stand-off fight
+        P.pos.x -= (dx / d) * 1.2; P.pos.z -= (dz / d) * 1.2;
+      }
       P.hp = Math.max(P.hp, 60);                 // survivability isn't what this validates
       UJ.Meters.pressure = 100;
-      UJ.aimAt(t.x, t.y + 0.9, t.z);
+      UJ.aimAt(aimAt.x, aimAt.y + 0.9, aimAt.z);
       UJ.Input.spray = true;
       UJ.step(0.03);
     }
@@ -97,7 +126,7 @@ const sweep = await page.evaluate(async () => {
   guard = 0;
   while (UJ.getZombies().some(z => z.alive) && guard++ < 80) {
     const z = UJ.getZombies().find(z => z.alive);
-    window.__hose(() => (z.alive ? z.group.position : null), 10);
+    window.__hose(() => (z.alive ? z.group.position : null), 12, z);
   }
   return { pilesDone, totalPiles: G.totalPiles, civDone, civTotal: G.civTotal,
            zombiesDone: G.zombiesDefeated, totalZombies: G.totalZombies,

@@ -608,6 +608,19 @@ function setupTouch() {
    3. RENDERER, SCENE, FOG
    ===================================================================== */
 const canvas = document.getElementById('game');
+// Chromium returns a promise from requestPointerLock() and REJECTS it when the
+// pointer is already locked, or when the document isn't focused. Several call
+// sites here can fire while a lock is pending (click, resume, wave banner), so
+// an unguarded call surfaces as an unhandled rejection in the console. One
+// wrapper: skip if already locked, and swallow the benign rejection.
+function grabPointer() {
+  if (IS_TOUCH || !canvas.requestPointerLock) return;
+  if (document.pointerLockElement === canvas) return;
+  try {
+    const r = canvas.requestPointerLock();
+    if (r && typeof r.catch === 'function') r.catch(() => {});
+  } catch (e) { /* not focused, or a lock is already pending */ }
+}
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
@@ -2154,6 +2167,80 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _knockV = new THREE.
 // batched steps — same behaviour, a fraction of the work. Shared by tick and
 // the headless stepper so tests exercise exactly what ships.
 const CULL2 = 52 * 52; // squared distance past which the fog has eaten it anyway
+/* ---- the spitter's gob (BUILD 15) -------------------------------------
+   The level's first ranged attack, so it has to be readable or it is just
+   unfair damage from the fog. Three tells, in order: the thrower rears back
+   and its eye lights for 0.75s; the gob itself glows and trails; and a
+   shadow ellipse tracks the impact point on the deck the whole way in, so
+   you can see where it lands rather than where it is. Genuinely dodgeable
+   — the arc takes about a second to cross 11 m — and it leaves a slick
+   patch, which the zombies themselves then slip on. */
+const gobs = [];
+const GOB_GEO = new THREE.SphereGeometry(0.26, 10, 8);
+const GOB_MAT = new THREE.MeshStandardMaterial({ color: 0x6fbf3f, emissive: 0x7fff2f,
+  emissiveIntensity: 0.9, roughness: 0.4 });
+function throwGob(z) {
+  const from = z.group.position.clone().setY(1.55);
+  const to = Player.pos.clone().setY(0.2);
+  // lead the target a little so walking in a straight line does not save you
+  to.addScaledVector(Player.hvel, 0.35);
+  const flight = Math.max(0.55, from.distanceTo(to) / 13);
+  const mesh = new THREE.Mesh(GOB_GEO, GOB_MAT);
+  mesh.position.copy(from);
+  scene.add(mesh);
+  const glow = glowSprite(0x9fff5f, 1.5, 0.7);
+  mesh.add(glow);
+  // The impact marker is the whole reason this attack is fair, so it is drawn
+  // to be seen through fog, bloom and a firefight: a bright additive ring plus
+  // a soft fill, not the tasteful dark decal it started as.
+  const shadow = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.86, 24),
+    new THREE.MeshBasicMaterial({ color: 0x9fff4f, transparent: true, opacity: 0.9,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+  const fill = new THREE.Mesh(new THREE.CircleGeometry(0.62, 20),
+    new THREE.MeshBasicMaterial({ color: 0x6fdc2f, transparent: true, opacity: 0.3,
+      depthWrite: false, blending: THREE.AdditiveBlending }));
+  ring.rotation.x = fill.rotation.x = -Math.PI / 2;
+  ring.position.y = fill.position.y = 0.07;
+  shadow.add(ring); shadow.add(fill);
+  shadow.position.set(to.x, groundHeightAt(to.x, to.z, 40), to.z);
+  shadow.userData.ring = ring; shadow.userData.fill = fill;
+  scene.add(shadow);
+  gobs.push({ mesh, shadow, from, to, t: 0, flight });
+  SFX.splat(panFor(from), 0.5);
+}
+function updateGobs(dt) {
+  for (let i = gobs.length - 1; i >= 0; i--) {
+    const g = gobs[i];
+    g.t += dt;
+    const f = Math.min(1, g.t / g.flight);
+    g.mesh.position.lerpVectors(g.from, g.to, f);
+    g.mesh.position.y += Math.sin(f * Math.PI) * 3.2;   // the arc
+    g.mesh.rotation.x += dt * 9; g.mesh.rotation.z += dt * 7;
+    // the marker tightens and brightens as it closes — a countdown you read
+    // without taking your eyes off the fight
+    const s = 1.6 - 0.7 * f;
+    g.shadow.scale.set(s, s, s);
+    g.shadow.userData.ring.material.opacity = 0.55 + 0.45 * f;
+    g.shadow.userData.fill.material.opacity = 0.12 + 0.3 * f;
+    if (f < 1) continue;
+    const hit = g.mesh.position.clone().setY(0.2);
+    spawnSplash(hit, true);
+    spawnGlitter(hit, 12, 3);
+    spawnWetPatch(hit);                                  // and the horde slips on it
+    const d = Player.pos.distanceTo(hit);
+    if (d < 2.2) {
+      _v1.subVectors(Player.pos, hit).setY(0).normalize();
+      damagePlayer(11 * (1 - d / 2.2) * DIFF.dmg(), _v1);
+    }
+    scene.remove(g.mesh); scene.remove(g.shadow);
+    for (const m of [g.shadow.userData.ring, g.shadow.userData.fill]) {
+      m.geometry.dispose(); m.material.dispose();
+    }
+    gobs.splice(i, 1);
+  }
+}
+
 function updateZombies(dt, t) {
   for (const z of zombies) {
     if (!z.alive) continue;
@@ -2173,22 +2260,72 @@ function updateZombies(dt, t) {
   }
 }
 
+/* ---------------------------------------------------------------------
+   THE ROSTER (BUILD 15)
+
+   Up to BUILD 14 every enemy in this level asked the player the same
+   question: point at it and hold the trigger. Runner and brute changed
+   the numbers, not the conversation — they still walked at you and
+   swiped, so three nozzles and a ground pound existed with nothing that
+   ever demanded them.
+
+   Each kind below breaks a different assumption:
+
+     shambler — the baseline. Walks at you, lunges.
+     runner   — punishes standing still to line up a shot.
+     brute    — too heavy to shove; you have to commit.
+     spitter  — NEVER closes. Holds 11 m and lobs an arcing gob at you,
+                so "stand still and hold the trigger" stops being safe.
+                This level had no ranged threat at all.
+     crust    — armour plates on the front. The hose does a fraction of
+                its damage head-on; go round it, BLAST it around, or slam
+                it (a knockdown puts the soft belly up). Makes the other
+                two nozzles and the pound necessary rather than optional.
+     bloater  — swells as it takes damage and detonates when it dies,
+                hurting YOU as readily as the crowd. Turns "kill it fast"
+                into "kill it in the right place", and its blast feeds
+                BUILD 12's chain reactions.
+
+   Kept as one class with a data table rather than six subclasses: the
+   rig, the gait, the steering and the weak point are genuinely shared,
+   and the previous approach — a boolean per variant, read at a dozen
+   call sites — was already at its limit with two.
+   --------------------------------------------------------------------- */
+const ZKIND = {
+  shambler: { speedMul: 1,    goo: 110, sclX: 1,    sclY: 1,    xp: 50,  score: 100,
+              body: 0x6b4426, emis: 0xff40c0, eye: 0xffd23f, eyeGlow: 0xffc400, eyeI: 0.9,
+              core: 1,    dmg: 1,   heavy: false },
+  runner:   { speedMul: 1.5,  goo: 70,  sclX: 0.86, sclY: 1.08, xp: 60,  score: 140,
+              body: 0x7a4a2a, emis: 0xff4060, eye: 0xff5f5f, eyeGlow: 0xff2040, eyeI: 1.1,
+              core: 0.85, dmg: 1,   heavy: false, turn: 1.4, accel: 1.6 },
+  brute:    { speedMul: 0.6,  goo: 240, sclX: 1.42, sclY: 1.3,  xp: 110, score: 250,
+              body: 0x4a2f18, emis: 0xff8000, eye: 0xffa23f, eyeGlow: 0xff6a00, eyeI: 1.3,
+              core: 1.25, dmg: 1.6, heavy: true },
+  spitter:  { speedMul: 0.9,  goo: 85,  sclX: 0.92, sclY: 1.14, xp: 90,  score: 190,
+              body: 0x3f6b3a, emis: 0x7fff5f, eye: 0xc9ff5f, eyeGlow: 0x7fff2f, eyeI: 1.2,
+              core: 0.9,  dmg: 1,   heavy: false, standoff: 11, spitCd: [2.4, 3.8] },
+  crust:    { speedMul: 0.72, goo: 150, sclX: 1.2,  sclY: 1.06, xp: 120, score: 240,
+              body: 0x5a5560, emis: 0x8fb4ff, eye: 0x9fdcff, eyeGlow: 0x5fa8ff, eyeI: 1,
+              core: 1.05, dmg: 1.2, heavy: true, frontArmour: 0.16 },
+  bloater:  { speedMul: 0.8,  goo: 130, sclX: 1.26, sclY: 1.16, xp: 100, score: 210,
+              body: 0x7a4f7a, emis: 0xff5fd0, eye: 0xff9ff0, eyeGlow: 0xff3fc0, eyeI: 1.15,
+              core: 1.15, dmg: 1,   heavy: false, burstR: 5.2, burstDmg: 78, selfDmg: 26 },
+};
+const ZKINDS = Object.keys(ZKIND);
+
 class Zombie {
   constructor(x, z, opts = {}) {
-    // BUILD 3 "runner" variant: lean, fast, less goo — a different threat
-    // shape, not just bigger numbers. Two ship in the layout, two more storm
-    // the pier as climax reinforcements.
-    this.runner = !!opts.runner;
-    // BUILD 6 brute: a slab of a zombie — slow, enormously thick with goo,
-    // and too heavy for the jet to shove. You have to commit to killing it.
-    this.brute = !!opts.brute;
-    this.speedMul = this.runner ? CFG.zombie.runnerSpeedMul
-                  : this.brute ? CFG.zombie.bruteSpeedMul : 1;
-    this.gooMax = this.runner ? CFG.zombie.runnerGoo
-                : this.brute ? CFG.zombie.bruteGoo : CFG.zombie.goo;
+    // `kind` is the modern form; the runner/brute booleans are still accepted
+    // (and still exposed) because the layout, waves and playtests speak them
+    this.kind = opts.kind || (opts.runner ? 'runner' : opts.brute ? 'brute' : 'shambler');
+    const K = this.spec = ZKIND[this.kind] || ZKIND.shambler;
+    this.runner = this.kind === 'runner';
+    this.brute = this.kind === 'brute';
+    this.speedMul = K.speedMul;
+    this.gooMax = K.goo;
     this.goo = this.gooMax;
-    this.sclX = this.runner ? 0.86 : this.brute ? 1.42 : 1; // silhouette reads the threat at a glance
-    this.sclY = this.runner ? 1.08 : this.brute ? 1.3 : 1;
+    this.sclX = K.sclX;  // silhouette reads the threat at a glance
+    this.sclY = K.sclY;
     this.heading = Math.random() * Math.PI * 2; // BUILD 4 steering: facing = movement dir
     this.speed = 0;                             // current ground speed, ramps up/down
     this.pauseT = 0;                            // wander "sniff" stops
@@ -2212,8 +2349,8 @@ class Zombie {
     // grin, claw arms/feet, dripping rainbow slime (the cleanable part)
     const poopDark = new THREE.MeshStandardMaterial({ color: 0x53341f, roughness: 0.55 });
     const clawMat = new THREE.MeshStandardMaterial({ color: 0xcbb391, roughness: 0.4 });
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: this.brute ? 0x4a2f18 : 0x6b4426,
-      roughness: 0.5, emissive: this.brute ? 0xff8000 : 0xff40c0, emissiveIntensity: 0.05 });
+    this.bodyMat = new THREE.MeshStandardMaterial({ color: K.body,
+      roughness: 0.5, emissive: K.emis, emissiveIntensity: 0.05 });
 
     // round belly
     const belly = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), this.bodyMat);
@@ -2238,11 +2375,8 @@ class Zombie {
     headG.add(tip);
 
     // one big yellow eye + pupil, and a toothy grin (runners burn red)
-    this.eyeMat = this.runner
-      ? new THREE.MeshStandardMaterial({ color: 0xff5f5f, emissive: 0xff2040, emissiveIntensity: 1.1 })
-      : this.brute
-      ? new THREE.MeshStandardMaterial({ color: 0xffa23f, emissive: 0xff6a00, emissiveIntensity: 1.3 })
-      : new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffc400, emissiveIntensity: 0.9 });
+    this.eyeMat = new THREE.MeshStandardMaterial({ color: K.eye, emissive: K.eyeGlow,
+      emissiveIntensity: K.eyeI });
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), this.eyeMat);
     eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5),
@@ -2335,12 +2469,63 @@ class Zombie {
     for (const child of [...g.children]) if (!keep.has(child)) this.rig.add(child);
     g.add(this.rig);
 
+    // ---- per-kind silhouette. An armoured enemy that looks like every
+    // other enemy is not a puzzle, it is a bug report, so the crust wears
+    // its plates where the damage reduction actually applies (the front),
+    // and the bloater is visibly a balloon.
+    if (K.frontArmour) {
+      this.plates = [];
+      const plateMat = new THREE.MeshStandardMaterial({ color: 0x8f97ad, roughness: 0.35,
+        metalness: 0.45, emissive: 0x2f4a7a, emissiveIntensity: 0.25 });
+      this.plateMat = plateMat;
+      for (const [px, py, sx, sy] of [[0, 1.02, 0.62, 0.42], [-0.3, 0.7, 0.34, 0.3],
+                                      [0.3, 0.7, 0.34, 0.3], [0, 1.5, 0.44, 0.26]]) {
+        const pl = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, 0.16), plateMat);
+        pl.position.set(px, py, 0.48);          // +z is forward: the protected arc
+        pl.rotation.x = -0.12;
+        pl.userData.entity = this;
+        g.add(pl); cleanTargets.push(pl);
+        this.plates.push(pl);
+      }
+      const ridge = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.42, 5), plateMat);
+      ridge.position.set(0, 2.0, 0.18); ridge.rotation.x = 0.25;
+      g.add(ridge);
+    }
+    if (K.burstR) {
+      // a taut, over-inflated sac that grows as you hurt it
+      // big enough to be unmissable — it IS a walking bomb — but not so big
+      // it swallows its own body and stops reading as a zombie
+      this.sac = new THREE.Mesh(new THREE.SphereGeometry(0.52, 12, 10),
+        new THREE.MeshStandardMaterial({ color: 0xc46fd0, roughness: 0.25,
+          emissive: 0xff3fc0, emissiveIntensity: 0.5, transparent: true, opacity: 0.8 }));
+      this.sac.position.y = 0.95;
+      this.sac.userData.entity = this;
+      g.add(this.sac); cleanTargets.push(this.sac);
+      this.sacGlow = glowSprite(0xff8fe0, 2.4, 0.22);
+      this.sacGlow.position.y = 0.95;
+      g.add(this.sacGlow);
+    }
+    if (K.standoff) {
+      // a long throwing arm and a drooling gullet, so you can read "ranged"
+      // from across the deck before the first gob is in the air
+      const gullet = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8),
+        new THREE.MeshStandardMaterial({ color: 0x8fdc5f, emissive: 0x7fff2f, emissiveIntensity: 0.7 }));
+      gullet.position.set(0, 1.3, 0.42);
+      gullet.scale.set(1, 0.85, 1.1);
+      gullet.userData.entity = this;
+      g.add(gullet); cleanTargets.push(gullet);
+      this.gullet = gullet;
+      const sling = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.72, 3, 6), this.bodyMat);
+      sling.position.set(0.72, 1.42, 0.1); sling.rotation.z = -0.9;
+      g.add(sling);
+    }
+
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // the weak point goes on AFTER the rig partition so it survives the
     // swap to the GLB body — it's gameplay, not cosmetics. Brutes carry a
     // fatter one because their body scale widens the orbit with them.
     attachWeakPoint(this, { host: g, y: 1.15, r: 0.72, ySpan: 0.7,
-                            scale: this.brute ? 1.25 : this.runner ? 0.85 : 1 });
+                            scale: K.core });
     this.weak.mesh.castShadow = false;
     scene.add(g);
     this.applyModel(); // if the GLB prototype is already loaded, wear it now
@@ -2377,7 +2562,20 @@ class Zombie {
 
   clean(amount, point) {
     if (!this.alive) return;
+    Tutorial.fire('meet_' + this.kind); // one line, the first time you engage one
     if (this.state === 'downed') amount *= 2; // flat on his back: open season
+    // CRUST: plated across the chest. Water sheets off the front, so the
+    // answer is to go round it, shove it with BLAST, or pound it over —
+    // a knockdown turns the plates skyward and the belly up.
+    else if (this.spec.frontArmour) {
+      _v1.subVectors(Player.pos, this.group.position).setY(0);
+      const facing = Math.cos(this.heading) * _v1.z + Math.sin(this.heading) * _v1.x;
+      if (facing > 0.35 * _v1.length()) {       // inside a ~70 degree frontal arc
+        amount *= this.spec.frontArmour;
+        if (Math.random() < 0.35) spawnSplash(point || this.group.position, false);
+        this.plateFlash = 0.25;
+      }
+    }
     this.goo -= amount;
     this.flinch = Math.min(1, (this.flinch || 0) + amount * 0.12); // impact shudder (gain must beat the per-frame decay under continuous spray)
     const f = Math.max(this.goo, 0) / this.gooMax;
@@ -2391,6 +2589,7 @@ class Zombie {
 
   die() {
     this.alive = false;
+    const K = this.spec;
     const c = this.group.position.clone(); c.y += 1.3;
     spawnGlitter(c, Math.round(130 * Hype.glitterMul()), 7);
     // STYLE KILLS: how you finished it matters. Each one slams the brakes
@@ -2400,6 +2599,8 @@ class Zombie {
       : !Player.onGround ? 'AIRBORNE PURIFY!'
       : this._propStun > 0 ? 'STRIKE!'
       : this.brute ? 'BRUTE DOWN!'
+      : this.kind === 'crust' ? 'SHELL CRACKED!'
+      : this.kind === 'spitter' ? 'SNIPED!'
       : comboCount >= 3 ? 'PURIFY CHAIN!' : null;
     if (style) {
       hitStop = 0.22;
@@ -2408,7 +2609,32 @@ class Zombie {
       Hype.add(0.2);
       spawnFloatText(c.clone().setY(c.y + 1.1), style, '#ffd94f', { tier: 'headline', pri: 2 });
     }
-    Hype.add(this.brute ? 0.34 : 0.22);
+    Hype.add(K.heavy ? 0.34 : 0.22);
+    // BLOATER: it was always going to go off. Where it was standing when it
+    // did is the part you controlled — and the blast reads YOU as a valid
+    // target, so popping one at your feet is your own fault.
+    if (K.burstR) {
+      spawnBurstRing(c);
+      spawnGlitter(c, 46, 7);
+      SFX.slamHit(panFor(c), 0.85);
+      Player.shake = Math.max(Player.shake, 0.3);
+      const caught = [];
+      for (const list of [piles, zombies, grimes, barrels, gullSplats]) {
+        for (const o of list) {
+          if (!o || o === this || o.alive === false || o.resolved) continue;
+          if (o.group.position.distanceTo(this.group.position) < K.burstR) caught.push(o);
+        }
+      }
+      for (const o of caught) {
+        if (o.alive === false) continue;
+        o._burst = true; o.clean(K.burstDmg, o.group.position); o._burst = false;
+      }
+      const pd = Player.pos.distanceTo(this.group.position);
+      if (pd < K.burstR) {
+        _v1.subVectors(Player.pos, this.group.position).setY(0).normalize();
+        damagePlayer(K.selfDmg * (1 - pd / K.burstR) * DIFF.dmg(), _v1);
+      }
+    }
     if (burstOnDeath(this)) chainBurst(this, c); // core kill: the goo goes off
     spawnRagdoll(this.group.position); // physics chunks bounce off the deck
     SFX.pop(panFor(this.group.position), 1);
@@ -2421,8 +2647,8 @@ class Zombie {
     Meters.rainbow = Math.min(100, Meters.rainbow + 15);
     Game.zombiesDefeated++;
     RPG.kills++;
-    gainXP(this.brute ? 110 : 50, this.group.position);
-    Rush.award(this.brute ? 250 : this.runner ? 140 : 100, this.group.position);
+    gainXP(K.xp, this.group.position);
+    Rush.award(K.score, this.group.position);
     Tutorial.fire('zombieDefeated');
     updateObjectiveHUD();
     checkWin();
@@ -2435,7 +2661,7 @@ class Zombie {
   // away and leans back, clamped to the deck.
   push(dt) {
     if (!this.alive || this.state === 'lunge' || this.state === 'downed') return;
-    if (this.brute) return; // too heavy to shove — the jet just makes it angry
+    if (this.spec.heavy) return; // too heavy to shove — the jet just makes it angry
     _knockV.subVectors(this.group.position, Player.pos); _knockV.y = 0;
     if (_knockV.lengthSq() < 1e-4) return;
     _knockV.normalize();
@@ -2459,12 +2685,12 @@ class Zombie {
     const want = Math.atan2(dx, dz);
     let diff = want - this.heading;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    const tr = CFG.zombie.turnRate * (this.runner ? 1.4 : 1) * dt;
+    const tr = CFG.zombie.turnRate * (this.spec.turn || 1) * dt;
     this.heading += THREE.MathUtils.clamp(diff, -tr, tr);
     // commit less speed while turning hard — they bank into corners
     const align = Math.max(0, Math.cos(diff));
     const target = maxSpeed * DIFF.speed() * (0.35 + 0.65 * align);
-    const acc = (target > this.speed ? CFG.zombie.accel * (this.runner ? 1.6 : 1) : CFG.zombie.decel) * dt;
+    const acc = (target > this.speed ? CFG.zombie.accel * (this.spec.accel || 1) : CFG.zombie.decel) * dt;
     this.speed += THREE.MathUtils.clamp(target - this.speed, -acc, acc);
     pos.x += Math.sin(this.heading) * this.speed * dt;
     pos.z += Math.cos(this.heading) * this.speed * dt;
@@ -2523,8 +2749,42 @@ class Zombie {
       }
       case 'chase': {
         if (dist > CFG.zombie.lose) { this.setState('wander'); break; }
+        // SPITTER: it never wants to be near you. It walks to its stand-off
+        // ring, faces you and throws. Back it into a corner and it still
+        // won't close — you have to go and get it, which is the point.
+        if (this.spec.standoff) {
+          const want = this.spec.standoff;
+          if (dist > want + 2) this.moveToward(Player.pos.x, Player.pos.z, CFG.zombie.chaseSpeed * this.speedMul, dt);
+          else if (dist < want - 2) { // too close: back off, still facing you
+            this.moveToward(pos.x * 2 - Player.pos.x, pos.z * 2 - Player.pos.z,
+                            CFG.zombie.chaseSpeed * this.speedMul * 0.9, dt);
+          } else {
+            this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
+            this.heading = Math.atan2(toPlayer.x, toPlayer.z);
+            this.group.rotation.y = this.heading;
+          }
+          this.spitT = (this.spitT ?? this.spec.spitCd[0]) - dt;
+          if (this.spitT <= 0 && dist < want + 6) { this.setState('spit'); }
+          break;
+        }
         if (dist < 3.2) { this.setState('windup'); break; }
         this.moveToward(Player.pos.x, Player.pos.z, CFG.zombie.chaseSpeed * this.speedMul, dt);
+        break;
+      }
+      case 'spit': { // telegraphed: rears back, glows, then throws
+        this.heading = Math.atan2(toPlayer.x, toPlayer.z);
+        this.group.rotation.y = this.heading;
+        const tell = 0.75 * DIFF.rescue();       // easier settings telegraph longer
+        this.group.rotation.x = -0.4 * Math.min(1, this.stateT / tell);
+        this.eyeMat.emissiveIntensity = this.spec.eyeI * (1 + 2.2 * Math.min(1, this.stateT / tell));
+        if (this.stateT >= tell) {
+          this.group.rotation.x = 0;
+          this.eyeMat.emissiveIntensity = this.spec.eyeI;
+          throwGob(this);
+          const [lo, hi] = this.spec.spitCd;
+          this.spitT = (lo + Math.random() * (hi - lo)) / DIFF.speed();
+          this.setState('chase');
+        }
         break;
       }
       case 'windup': { // dramatic lean-back before the flying lunge-hug
@@ -2543,7 +2803,7 @@ class Zombie {
         this.group.rotation.x = 0.4;
         if (dist < CFG.zombie.hitRange && this.hitCd <= 0) {
           this.hitCd = 1;
-          damagePlayer(CFG.zombie.damage * (this.brute ? CFG.zombie.bruteDamage : 1), this.lungeDir);
+          damagePlayer(CFG.zombie.damage * this.spec.dmg, this.lungeDir);
         }
         if (this.stateT >= CFG.zombie.lungeTime) { this.group.rotation.x = 0; this.setState('recover'); }
         break;
@@ -2578,6 +2838,26 @@ class Zombie {
     }
 
     if (!this._moved) this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
+
+    // ---- per-kind tells, every frame
+    if (this.plates) {  // a hit that sheeted off the armour sparks the plate
+      this.plateFlash = Math.max(0, (this.plateFlash || 0) - dt * 3);
+      this.plateMat.emissiveIntensity = 0.25 + this.plateFlash * 2.4;
+    }
+    if (this.sac) {     // swells toward bursting as you hurt it — a fuse you can see
+      const hurt = 1 - Math.max(0, this.goo) / this.gooMax;
+      const swell = 1 + hurt * 0.6 + Math.sin(t * (3 + hurt * 9)) * (0.03 + hurt * 0.07);
+      this.sac.scale.setScalar(swell);
+      this.sac.material.emissiveIntensity = 0.5 + hurt * 2.2;
+      this.sacGlow.scale.setScalar(2.4 * swell);
+      this.sacGlow.material.opacity = 0.22 + hurt * 0.4;
+    }
+    if (this.gullet) {  // lights as the next gob comes off cooldown
+      const ready = this.state === 'spit' ? 1
+        : 1 - Math.min(1, Math.max(0, this.spitT ?? 0) / this.spec.spitCd[1]);
+      this.gullet.material.emissiveIntensity = 0.4 + ready * 1.6;
+      this.gullet.scale.set(1, 0.85 + ready * 0.2, 1.1 + ready * 0.2);
+    }
 
     // crowd separation: shamblers shoulder each other aside instead of
     // stacking into one super-zombie — cheap O(n^2), n is small
@@ -3273,7 +3553,7 @@ function takePerk(i) {
   SFX.chime(1.3);
   showToast(`${pk.icon} ${pk.name} acquired`);
   spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 60, 5);
-  if (!IS_TOUCH && canvas.requestPointerLock) canvas.requestPointerLock();
+  grabPointer();
 }
 
 const rushHudEl = document.getElementById('rushHud');
@@ -3348,7 +3628,17 @@ function startWave() {
   const live = zombies.reduce((n, z) => n + (z.alive ? 1 : 0), 0);
   const want = Math.min(16, 3 + Math.floor(w * 1.2)) * (swarm ? 2 : 1);
   const count = Math.max(2, Math.min(want, 26 - live));
-  const runnerFrom = 2, bruteFrom = 4;
+  // each kind unlocks at its own depth, so a rush run keeps changing shape
+  // long after it has stopped simply getting bigger
+  const pick = () => {
+    const r = Math.random();
+    if (w >= 4 && r < 0.11 + w * 0.010) return 'brute';
+    if (w >= 6 && r < 0.24) return 'crust';
+    if (w >= 3 && r < 0.38) return 'spitter';
+    if (w >= 7 && r < 0.48) return 'bloater';
+    if (w >= 2 && r < 0.72) return 'runner';
+    return 'shambler';
+  };
   for (let i = 0; i < count; i++) {
     const ang = Math.random() * Math.PI * 2;
     const dist = 24 + Math.random() * 20;
@@ -3356,10 +3646,7 @@ function startWave() {
       -(CFG.bridge.playHalfW - 1.5), CFG.bridge.playHalfW - 1.5);
     const z = THREE.MathUtils.clamp(Player.pos.z + Math.cos(ang) * dist,
       CFG.bridge.playZEnd + 2, CFG.bridge.zStart - 4);
-    const roll = Math.random();
-    const brute = w >= bruteFrom && roll < 0.12 + w * 0.012;
-    const runner = !brute && w >= runnerFrom && roll < 0.45;
-    const z2 = new Zombie(x, z, { runner, brute });
+    const z2 = new Zombie(x, z, { kind: pick() });
     z2.setState('chase');
     z2.heading = Math.atan2(Player.pos.x - x, Player.pos.z - z);
     zombies.push(z2);
@@ -4982,7 +5269,7 @@ function toggleSkillPanel(open) {
   } else if (!open && Game.state === 'skills') {
     Game.state = 'playing';
     el.classList.add('hidden');
-    if (!IS_TOUCH) canvas.requestPointerLock();
+    grabPointer();
   }
 }
 
@@ -5469,7 +5756,7 @@ function togglePause(open) {
   } else if (!open && Game.state === 'paused') {
     Game.state = 'playing';
     el.classList.add('hidden');
-    if (!IS_TOUCH) canvas.requestPointerLock();
+    grabPointer();
   }
 }
 
@@ -5664,6 +5951,15 @@ const Tutorial = {
       case 'firstSpray':
         this.show('That’s the stuff! Now hose down the glowing poop pile ahead until it bursts into glitter.');
         break;
+      case 'meet_spitter':
+        this.show('Green one — it throws. It won’t come to you, and the ring on the deck is where the gob lands: step off it. Chase it down, or reach out with the LANCE nozzle (R).');
+        break;
+      case 'meet_crust':
+        this.show('Plated across the chest — the hose just sheets off the front. Get around behind it, shove it with the BLAST nozzle (R), or ground-pound it over: flat on its back, the plates face the sky.');
+        break;
+      case 'meet_bloater':
+        this.show('That sac is a bomb, and it’s going off wherever it happens to be standing. Pop it in the crowd from range — and NOT while you’re next to it.');
+        break;
       case 'firstSlam':
         this.show('GROUND POUND! The higher the drop, the wider it hits — and anything it flattens takes DOUBLE from the hose while it’s down. Get up on the containers and the awning pads, then come down on the crowd.');
         break;
@@ -5848,22 +6144,29 @@ function buildLevel() {
   for (const [x, z, s] of pileSpots) piles.push(new PoopPile(x, z, s));
   Game.totalPiles = piles.length;
 
-  // zombies — first one waits past the beam tutorial so mechanics land one at
-  // a time; two mid/late spots are red-eyed runners (BUILD 3 threat variety)
+  // Zombies, laid out as a teaching order: every new kind gets introduced
+  // ALONE, in open deck, before it ever appears in a mixed fight. Meet one
+  // spitter with nothing else on you and its arc is a puzzle; meet your first
+  // one inside a pack and it is just unexplained damage out of the fog.
   const zombieSpots = [
     [0, -30], [-4, -42], [4, -50, 'runner'], [-3, -58],
-    [5, -66], [-5, -72], [0, -78, 'runner'], [3, -84],
-    [-7, -98], [6, -112, 'runner'], [-8, -130, 'brute'], [4, -148],
-    [-3, -168, 'runner'], [7, -188, 'brute'],
+    [6, -68, 'spitter'],                                   // first ranged threat, solo
+    [5, -76], [-5, -82], [0, -88, 'runner'], [3, -94],
+    [-6, -104, 'crust'],                                   // first armoured one, solo
+    [-8, -118], [6, -126, 'spitter'], [-4, -134, 'crust'],
+    [2, -142, 'bloater'],                                  // first bomb, well clear of a crowd
+    [-8, -152, 'brute'], [5, -160, 'runner'], [-3, -172, 'bloater'],
+    [7, -182, 'crust'], [-6, -192, 'spitter'], [3, -200, 'brute'],
   ];
   for (const [x, z, kind] of zombieSpots) {
-    zombies.push(new Zombie(x, z, { runner: kind === 'runner', brute: kind === 'brute' }));
+    zombies.push(new Zombie(x, z, { kind }));
   }
   Game.totalZombies = zombies.length;
 
   Game.layoutStats = {
     piles: piles.length, zombies: zombies.length, civs: civilians.length,
     runners: zombies.filter(z => z.runner).length,
+    kinds: ZKINDS.reduce((m, k) => (m[k] = zombies.filter(z => z.kind === k).length, m), {}),
     brutes: zombies.filter(z => z.brute).length,
   };
   updateObjectiveHUD();
@@ -5881,7 +6184,7 @@ function startGame(mode) {
   introT = 0; introSkip = false;
   document.body.classList.add('cine');
   Game.startTime = performance.now();
-  if (!IS_TOUCH) canvas.requestPointerLock();
+  grabPointer();
 }
 
 document.getElementById('startBtn').addEventListener('click', () => startGame());
@@ -5940,7 +6243,7 @@ refreshSettingsUI();
 applyQuality();
 // clicking back into the game re-locks the pointer on desktop
 canvas.addEventListener('click', () => {
-  if (Game.state === 'playing' && !IS_TOUCH && !Input.locked) canvas.requestPointerLock();
+  if (Game.state === 'playing' && !Input.locked) grabPointer();
 });
 
 if (IS_TOUCH) setupTouch();
@@ -6002,6 +6305,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 15 enemy roster
+  ZKIND, ZKINDS, gobs, throwGob, updateGobs,
   // BUILD 14 particle budget + feedback tiers
   GLITTER_BUDGET, getGlitterLive: () => glitterLive, bursts, FLOAT_TIERS, floatTexts, simulate,
   spawnGlitter, spawnSplash, spawnFloatText,
@@ -6079,6 +6384,7 @@ function simulate(dt, t) {
     updateZombies(dt, t);
     for (const c of civilians) c.update(dt, t);
     updateWharfToys(dt);
+    updateGobs(dt);
     updateBoss(dt, t);
     updateRush(dt);
     reapEntities();

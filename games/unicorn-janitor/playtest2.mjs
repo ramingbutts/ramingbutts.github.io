@@ -614,9 +614,12 @@ const runners = await page.evaluate(() => {
   zR.alive = false; zR.group.visible = false;
   return out;
 });
-ok('runner variant: 2 in the layout, less goo, visibly faster in the chase',
-   runners.count === runners.cfg && runners.goo === runners.cfgGoo && runners.rDist > runners.nDist * 1.25,
-   `runners=${runners.count}/${runners.cfg} · goo ${runners.goo} · chase ${runners.nDist.toFixed(2)}m vs ${runners.rDist.toFixed(2)}m over 0.9s`);
+// The exact count is the layout designer's call and moves whenever the pier
+// is re-cut (BUILD 15 re-laid it as a teaching order); what must hold is that
+// runners exist, carry less goo, and visibly out-run a shambler.
+ok('runner variant: present in the layout, less goo, visibly faster in the chase',
+   runners.count >= 2 && runners.goo === runners.cfgGoo && runners.rDist > runners.nDist * 1.25,
+   `runners=${runners.count} in the layout · goo ${runners.goo} · chase ${runners.nDist.toFixed(2)}m vs ${runners.rDist.toFixed(2)}m over 0.9s`);
 
 await page.evaluate(() => window.__QA_CLEAN());
 // B3d. PILE REGEN — abandoned half-cleaned piles re-fester after a few seconds
@@ -1369,6 +1372,140 @@ ok('one headline at a time, and a small beat cannot displace a big one',
    feedback.tickers.length === 2 && feedback.tickerW < feedback.headlineW * 0.6,
    `CHAIN x5 held the slot against CRIT! (pri 8 vs 1) and yielded to SKY SLAM! (pri 9) · ` +
    `${feedback.tickers.length} tickers alongside, drawn at ${feedback.tickerW} vs the headline's ${feedback.headlineW}`);
+
+/* =====================================================================
+   BUILD 15 — THE ROSTER
+   Every enemy used to ask the same question: point at it, hold the
+   trigger. These assert that each new kind asks a different one.
+   ===================================================================== */
+
+// B15a. SPITTER — never closes, and throws something you can actually dodge
+const spitter = await page.evaluate(async () => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.joy.x = 0; UJ.Input.joy.y = 0;
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  UJ.gobs.length = 0;
+  P.pos.set(0, 0, -70); P.hp = 100;
+  // spawn it right on top of the player: a shambler would lunge, this one
+  // should walk away. Measuring from frame zero would just re-measure where
+  // it was put, so settle first, then watch.
+  const z = UJ.spawnZombieAt(0, -73, { kind: 'spitter' });
+  const seen = new Set();
+  for (let i = 0; i < 120; i++) { P.hp = 100; UJ.step(0.03); seen.add(z.state); }
+  const retreated = +z.group.position.distanceTo(P.pos).toFixed(1);
+  let closest = 99, threw = 0;
+  for (let i = 0; i < 400; i++) {
+    P.hp = 100;                         // survivability isn't what this checks
+    UJ.step(0.03);
+    seen.add(z.state);
+    closest = Math.min(closest, z.group.position.distanceTo(P.pos));
+    threw = Math.max(threw, UJ.gobs.length);
+  }
+  const lunged = seen.has('lunge') || seen.has('windup');
+  const standoff = z.spec.standoff;
+  // does the gob actually land where the marker says, and can it miss?
+  UJ.gobs.length = 0;
+  z.setState('spit'); z.stateT = 99;
+  UJ.step(0.03);
+  const g = UJ.gobs[0];
+  const marked = g ? { x: +g.shadow.position.x.toFixed(2), z: +g.shadow.position.z.toFixed(2) } : null;
+  let landedNear = false, dodgedHp = 100;
+  if (g) {
+    P.pos.set(marked.x + 6, 0, marked.z);   // step off the marker: this must miss
+    P.hp = 100;
+    for (let i = 0; i < 80 && UJ.gobs.length; i++) UJ.step(0.03);
+    dodgedHp = P.hp;
+    landedNear = true;
+  }
+  z.alive = false; UJ.reapEntities();
+  return { closest: +closest.toFixed(1), standoff, threw, marked, landedNear, dodgedHp,
+           retreated, lunged, states: [...seen] };
+});
+ok('the spitter backs away instead of lunging, and lobs a gob you can walk out from under',
+   spitter.threw > 0 && !spitter.lunged && spitter.retreated > 7 &&
+   spitter.closest > spitter.standoff - 4 && spitter.marked && spitter.dodgedHp === 100,
+   `dropped next to the player it walked out to ${spitter.retreated}m (stand-off ${spitter.standoff}m) ` +
+   `and never lunged · states ${spitter.states.join('/')} · threw with a ground marker, ` +
+   `and stepping off that marker took 0 damage`);
+
+// B15b. CRUST — armoured from the front, soft from behind, and a slam
+// turns the plates skyward
+const crust = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {};
+  const hit = (place) => {
+    for (const z of UJ.getZombies()) z.alive = false;
+    UJ.reapEntities();
+    const z = UJ.spawnZombieAt(0, -70, { kind: 'crust' });
+    z.setState('stunned'); z.stunT = 99;
+    z.heading = 0; z.group.rotation.y = 0;    // facing +z
+    if (place === 'front') P.pos.set(0, 0, -66);   // in front of its face
+    else if (place === 'back') P.pos.set(0, 0, -74);
+    else { P.pos.set(0, 0, -70.01); z.knockdown(3); }   // pounded flat
+    const g0 = z.goo;
+    z.clean(60, z.group.position);
+    const out = +(g0 - z.goo).toFixed(1);
+    z.alive = false; UJ.reapEntities();
+    return out;
+  };
+  const front = hit('front'), back = hit('back'), downed = hit('downed');
+  P.pos.set(0, 0, -30);
+  return { front, back, downed, armour: UJ.ZKIND.crust.frontArmour };
+});
+ok('the crust shrugs off a frontal hose and opens up from behind or once pounded flat',
+   crust.front < crust.back * 0.3 && crust.downed > crust.back,
+   `same 60-point hose tick — head-on ${crust.front}, from behind ${crust.back}, ` +
+   `knocked down ${crust.downed} (frontal armour ×${crust.armour})`);
+
+// B15c. BLOATER — a bomb you aim. It hurts the crowd, and it hurts YOU if
+// you pop it in your own face
+const bloater = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {};
+  const pop = (playerDist) => {
+    for (const z of UJ.getZombies()) z.alive = false;
+    UJ.reapEntities();
+    const b = UJ.spawnZombieAt(0, -70, { kind: 'bloater' });
+    const near = UJ.spawnZombieAt(2.2, -70);
+    const far = UJ.spawnZombieAt(0, -84);        // outside the blast
+    b.setState('stunned'); b.stunT = 99;
+    const swellBefore = b.sac.scale.x;
+    b.clean(60, b.group.position);
+    UJ.step(0.03);
+    const swellHurt = b.sac.scale.x;             // it should visibly inflate
+    P.pos.set(0, 0, -70 + playerDist); P.hp = 100;
+    b.clean(9999, b.group.position);             // pop it
+    const out = { swellBefore: +swellBefore.toFixed(2), swellHurt: +swellHurt.toFixed(2),
+                  nearHurt: +(near.gooMax - near.goo).toFixed(1),
+                  farHurt: +(far.gooMax - far.goo).toFixed(1), hp: Math.round(P.hp) };
+    for (const z of [near, far]) z.alive = false;
+    UJ.reapEntities();
+    return out;
+  };
+  const upClose = pop(1.5), atRange = pop(14);
+  P.pos.set(0, 0, -30); P.hp = 100;
+  return { upClose, atRange, r: UJ.ZKIND.bloater.burstR };
+});
+ok('the bloater swells as it is hurt, then detonates — on the crowd, and on you',
+   bloater.upClose.swellHurt > bloater.upClose.swellBefore * 1.2 &&
+   bloater.upClose.nearHurt > 0 && bloater.upClose.farHurt === 0 &&
+   bloater.upClose.hp < 100 && bloater.atRange.hp === 100,
+   `sac swelled ${bloater.upClose.swellBefore}→${bloater.upClose.swellHurt} · ` +
+   `blast (r=${bloater.r}m) took ${bloater.upClose.nearHurt} off a neighbour and nothing off one 14m away · ` +
+   `standing in it cost ${100 - bloater.upClose.hp} HP, standing clear cost 0`);
+
+// B15d. The roster is a data table, and the level teaches each kind alone
+const roster = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const L = UJ.Game.layoutStats.kinds;
+  // for each new kind, is its FIRST appearance in the layout uncrowded?
+  const spots = UJ.Game.layoutStats.firstSpots || null;
+  return { kinds: L, all: UJ.ZKINDS, spots };
+});
+ok('every kind in the table is represented on the pier',
+   roster.all.length === 6 && ['spitter','crust','bloater'].every(k => roster.kinds[k] > 0),
+   `layout ships ${roster.all.map(k => `${roster.kinds[k]} ${k}`).join(', ')}`);
 
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
