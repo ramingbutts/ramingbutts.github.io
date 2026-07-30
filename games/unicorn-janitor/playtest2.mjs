@@ -1507,6 +1507,132 @@ ok('every kind in the table is represented on the pier',
    roster.all.length === 6 && ['spitter','crust','bloater'].every(k => roster.kinds[k] > 0),
    `layout ships ${roster.all.map(k => `${roster.kinds[k]} ${k}`).join(', ')}`);
 
+/* =====================================================================
+   BUILD 16 — RESCUE, DAMAGE SPREAD, AND A TREE WORTH FILLING
+   ===================================================================== */
+
+// B16a. Cleaning an enemy frees a person: a citizen is left standing, it
+// isn't a threat, it holds no raycast targets, and it leaves on its own
+const freed = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {};
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  UJ.cleansed.length = 0;
+  const before = UJ.Game.cleansed;
+  const targets0 = UJ.cleanTargets.length;
+  const kinds = ['shambler', 'brute', 'crust', 'spitter'];
+  for (let i = 0; i < kinds.length; i++) {
+    const z = UJ.spawnZombieAt(-3 + i * 2, -70, { kind: kinds[i] });
+    z.setState('stunned'); z.stunT = 99;
+    z.clean(9999, z.group.position);
+  }
+  UJ.step(0.03);
+  const spawned = UJ.cleansed.length;
+  const distinctLooks = new Set(UJ.cleansed.map(c => c.kind)).size;
+  // is anybody left in the raycast set or the threat list?
+  UJ.reapEntities();
+  const stillTargets = UJ.cleanTargets.length;
+  const liveThreats = UJ.getZombies().filter(z => z.alive).length;
+  // do they walk off and clean themselves up?
+  let moved = 0;
+  const start = UJ.cleansed.map(c => c.g.position.clone());
+  for (let i = 0; i < 120; i++) UJ.step(0.03);          // 3.6s: cheer, then walk
+  UJ.cleansed.forEach((c, i) => { if (start[i] && c.g.position.distanceTo(start[i]) > 1) moved++; });
+  const midCount = UJ.cleansed.length;
+  for (let i = 0; i < 140; i++) UJ.step(0.03);          // past their ~6.2s life
+  return { spawned, distinctLooks, freed: UJ.Game.cleansed - before,
+           stillTargets, targets0, liveThreats, moved, midCount,
+           after: UJ.cleansed.length };
+});
+ok('cleaning an enemy frees a citizen who cheers, walks off, and cleans itself up',
+   freed.spawned === 4 && freed.freed === 4 && freed.distinctLooks === 4 &&
+   freed.liveThreats === 0 && freed.stillTargets <= freed.targets0 &&
+   freed.moved === freed.midCount && freed.after === 0,
+   `4 enemies purified → 4 citizens, ${freed.distinctLooks} distinct looks · ` +
+   `no threats and no ray targets left behind · all ${freed.moved} walked away and despawned`);
+
+// B16b. Six kinds, six different bites — and the readout names each one
+const biteRows = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const el = document.getElementById('hitReadout');
+  const base = UJ.CFG.zombie.damage;
+  const rows = UJ.ZKINDS.map(k => {
+    P.hp = 100;
+    UJ.showHitReadout(base * UJ.ZKIND[k].dmg * UJ.DIFF.dmg(), k);
+    return { kind: k, mul: UJ.ZKIND[k].dmg,
+             dealt: +(base * UJ.ZKIND[k].dmg).toFixed(1),
+             label: el.textContent, sev: el.className };
+  });
+  P.hp = 100;
+  return { rows, gob: UJ.ZKIND.spitter.gobDmg, blast: UJ.ZKIND.bloater.selfDmg };
+});
+const muls = biteRows.rows.map(r => r.mul);
+ok('each kind hits for a different amount, and the readout says which and how much',
+   new Set(muls).size === 6 && Math.min(...muls) < 0.6 && Math.max(...muls) > 2 &&
+   biteRows.rows.every(r => r.label.includes(r.kind.toUpperCase())) &&
+   new Set(biteRows.rows.map(r => r.sev)).size >= 2,
+   biteRows.rows.map(r => `${r.kind} ${r.dealt}`).join(' · ') +
+   ` · gob ${biteRows.gob} · bloater blast ${biteRows.blast}`);
+
+// B16c. Levelling never stops, and every level pays a point
+const curve16 = await page.evaluate(() => {
+  const UJ = window.UJ, R = UJ.RPG;
+  R.xp = 0; R.level = 1; R.points = 0;
+  for (const k in R.ranks) R.ranks[k] = 0;
+  const curve = [];
+  for (let lv = 2; lv <= 14; lv++) curve.push(R.xpFor(lv));
+  UJ.gainXP(200000);                       // an absurd haul: it must still pay
+  const out = { level: R.level, points: R.points, curve,
+                rising: curve.every((v, i) => i === 0 || v > curve[i - 1]),
+                treeTotal: UJ.SKILLS.reduce((a, s) => a + s.max, 0) };
+  R.xp = 0; R.level = 1; R.points = 0;
+  for (const k in R.ranks) R.ranks[k] = 0;
+  UJ.gainXP(0);
+  return out;
+});
+// The tree is deliberately LARGER than any one run can fill — 26 ranks against
+// roughly 7 points for a story clear and ~23 for a deep endless run. That is
+// the point: you specialise. What had to change is that the old curve stopped
+// dead after five thresholds, so five points was the lifetime maximum and most
+// XP earned was thrown away.
+ok('levelling never stops, and every level pays a point',
+   curve16.rising && curve16.level > 20 && curve16.points === curve16.level - 1 &&
+   curve16.points > 5 && curve16.treeTotal > curve16.points,
+   `curve keeps rising (${curve16.curve[0]} → ${curve16.curve[curve16.curve.length - 1]} XP) · ` +
+   `a 200k haul reached level ${curve16.level} for ${curve16.points} points ` +
+   `(the old curve capped at 5) · ${curve16.treeTotal}-rank tree, so you specialise`);
+
+// B16d. Every new rank is read at its call site and actually changes the game
+const rankWire = await page.evaluate(() => {
+  const UJ = window.UJ, R = UJ.RPG;
+  const reset = () => { for (const k in R.ranks) R.ranks[k] = 0; };
+  reset();
+  const base = { tank: UJ.maxPressure(), reach: UJ.NOZZLES[0].range * R.reachMul(),
+                 crit: R.critMul(), slam: R.slamMul(), hose: R.hoseMul() };
+  R.ranks.tank = 3; R.ranks.reach = 3; R.ranks.crit = 3; R.ranks.slam = 3; R.ranks.power = 5;
+  const maxed = { tank: UJ.maxPressure(), reach: UJ.NOZZLES[0].range * R.reachMul(),
+                  crit: R.critMul(), slam: R.slamMul(), hose: R.hoseMul() };
+  // and the actual slam gets bigger, not just the multiplier
+  UJ.Player.pos.set(0, 9, -70); UJ.Player.slamming = true; UJ.Player.slamFrom = 9;
+  UJ.landSlam(0);
+  const bigRing = UJ.slamRings.length ? UJ.slamRings[UJ.slamRings.length - 1].radius : 0;
+  reset();
+  UJ.Player.pos.set(0, 9, -70); UJ.Player.slamming = true; UJ.Player.slamFrom = 9;
+  UJ.landSlam(0);
+  const smallRing = UJ.slamRings.length ? UJ.slamRings[UJ.slamRings.length - 1].radius : 0;
+  UJ.Player.pos.set(0, 0, -30); UJ.Player.slamming = false;
+  UJ.Meters.pressure = UJ.maxPressure();
+  return { base, maxed, bigRing: +bigRing.toFixed(2), smallRing: +smallRing.toFixed(2) };
+});
+ok('the new ranks are read at their call sites and visibly change the game',
+   rankWire.maxed.tank > rankWire.base.tank * 1.7 && rankWire.maxed.reach > rankWire.base.reach * 1.4 &&
+   rankWire.maxed.crit > rankWire.base.crit * 2 && rankWire.maxed.hose > rankWire.base.hose * 2 &&
+   rankWire.bigRing > rankWire.smallRing * 1.5,
+   `tank ${rankWire.base.tank}→${rankWire.maxed.tank} PSI · reach ${rankWire.base.reach}→${rankWire.maxed.reach}m · ` +
+   `crit ×${rankWire.base.crit}→×${rankWire.maxed.crit} · hose ×${rankWire.base.hose}→×${rankWire.maxed.hose} · ` +
+   `slam shockwave ${rankWire.smallRing}→${rankWire.bigRing}m`);
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
@@ -1775,10 +1901,14 @@ const noCritBlast = await page.evaluate(() => {
     z.state = 'stunned'; z.stateT = 99;
     UJ.Player.pos.set(0, 0, -24); UJ.Player.hasHorn = true;
     for (let i = 0; i < 6; i++) UJ.step(0.03);
-    z.goo = z.gooMax; UJ.Meters.pressure = 100;
+    z.goo = z.gooMax;
     const g0 = z.goo;
     let lit = false;
-    for (let i = 0; i < 6; i++) {
+    // 20 frames, not 6: the core orbits, so whether the ray finds it on any
+    // ONE frame is luck. Whether it finds it at all over a burst is the claim.
+    for (let i = 0; i < 20; i++) {
+      z.goo = z.gooMax;                        // keep it alive for the whole burst
+      UJ.Meters.pressure = 100;
       z.state = 'stunned'; z.stateT = 99;
       z.weak.mesh.getWorldPosition(t);
       UJ.aimAt(t.x, t.y, t.z);

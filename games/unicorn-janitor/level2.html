@@ -83,7 +83,14 @@
   #novaCd { position:absolute; left:50%; top:calc(50% + 32px); transform:translateX(-50%);
             width:56px; height:5px; border-radius:4px; background:rgba(0,0,0,.4); overflow:hidden; }
   #novaCdFill { height:100%; width:100%; background:linear-gradient(90deg,#ffd94f,#ff8fd0); }
-  .skillGrid { display:flex; flex-wrap:wrap; gap:14px; justify-content:center; max-width:740px; }
+  /* two columns, WEAPON and POWER — the split the player already thinks in */
+  .skillGrid { display:flex; flex-wrap:wrap; gap:18px; justify-content:center; max-width:900px;
+               align-items:flex-start; }
+  .skillCol { display:flex; flex-direction:column; gap:9px; }
+  .skillCol h4 { margin:0 0 2px; font-size:12px; letter-spacing:4px; color:#ffd94f;
+                 text-align:left; font-weight:700; }
+  .skillCard .rank { font-size:11px; color:#ffd94f; letter-spacing:1px; font-weight:700; }
+  .skillCard.maxed { border-color:rgba(255,217,79,.55); box-shadow:0 0 14px rgba(255,217,79,.18); }
   .skillCard { width:min(330px,86vw); background:rgba(28,18,52,.92); border:1px solid rgba(255,255,255,.18);
                border-radius:14px; padding:14px 16px; text-align:left; display:flex; gap:12px; align-items:center; }
   .skillCard .ico { font-size:28px; }
@@ -224,6 +231,17 @@
   #toastMsg { position:absolute; left:50%; top:22%; transform:translateX(-50%); color:#ffe9a8;
               font-size:clamp(16px,3vw,24px); font-weight:700; text-shadow:0 0 12px rgba(255,200,80,.8);
               opacity:0; transition:opacity .3s; }
+  /* what just hit you, and for how much — the only way a 0.55x–2.1x spread
+     across six enemy kinds is learnable rather than invisible */
+  #hitReadout { position:absolute; left:50%; top:calc(50% - 96px); transform:translateX(-50%);
+                opacity:0; transition:opacity .18s; pointer-events:none; white-space:nowrap;
+                font-weight:800; letter-spacing:2px; text-shadow:0 2px 6px #000; }
+  #hitReadout b { font-size:26px; }
+  #hitReadout span { font-size:12px; letter-spacing:3px; opacity:.85; vertical-align:2px; }
+  #hitReadout.light { color:#ffd28f; }
+  #hitReadout.mid   { color:#ff9e6a; }
+  #hitReadout.heavy { color:#ff5f6e; }
+  #hitReadout.heavy b { font-size:32px; }
   #dmgFlash { position:absolute; inset:0; background:radial-gradient(ellipse at center, transparent 40%, rgba(255,30,60,.55));
               opacity:0; }
   #resumeHint { position:absolute; left:50%; top:60%; transform:translateX(-50%); color:#fff;
@@ -279,7 +297,7 @@
   <div id="gearBtn">⚙ MENU</div>
   <div id="objectives">
     <div>💩 Poop piles: <span class="n" id="pileCount">0/0</span></div>
-    <div>🧟 Rainbow Zombies: <span class="n" id="zombieCount">0/0</span></div>
+    <div>🫧 Townsfolk freed: <span class="n" id="zombieCount">0/0</span></div>
     <div>🦭 Sea lions saved: <span class="n" id="civCount">0/5</span></div>
   </div>
   <div id="compass" class="hidden"><div id="compassTicks"></div></div>
@@ -296,6 +314,7 @@
   <div id="novaCd" class="hidden"><div id="novaCdFill"></div></div>
   <div id="tutorial"></div>
   <div id="toastMsg"></div>
+  <div id="hitReadout"></div>
   <div id="dmgFlash"></div>
   <div id="fpsMeter" style="position:absolute; left:50%; bottom:8px; transform:translateX(-50%); display:none; color:#9fffcf; font-size:12px; font-family:monospace; text-shadow:0 1px 3px #000; letter-spacing:1px;"></div>
   <div id="resumeHint" class="hidden">Click to resume</div>
@@ -318,7 +337,7 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 15</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 16</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
@@ -351,6 +370,7 @@
 <div id="skillOverlay" class="overlay hidden">
   <h1 style="font-size:clamp(24px,4vw,40px);">TALENTS</h1>
   <div class="chip" id="skillPoints">POINTS: 0</div>
+  <div style="font-size:12px;color:#aeb8d8;margin:-10px 0 14px;letter-spacing:1px;">every level pays a point · spend them on the hose or on Jax</div>
   <div class="skillGrid" id="skillGrid"></div>
   <button id="skillResume" style="margin-top:24px;">RESUME</button>
 </div>
