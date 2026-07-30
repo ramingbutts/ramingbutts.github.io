@@ -1253,3 +1253,76 @@ can fire while a lock is pending (click-to-play, resume, wave banner,
 level start). In a real browser that is an unhandled rejection in the
 console on every double-click. One `grabPointer()` wrapper — skip if
 already locked, swallow the benign rejection — in both levels.
+
+## Rescue, a legible damage spread, and a tree worth filling (BUILD 16)
+
+Three requests, and each turned out to expose something already wrong.
+
+### They walk away clean
+
+Jax is a *janitor* with a power-washer, and the things on this pier are
+townsfolk buried under rainbow rot — so hosing the last of it off should
+free somebody, not leave a corpse. When goo hits zero the grimy rig still
+sprays apart (that is the filth coming off) and `spawnCleansed()` leaves a
+bright pastel citizen standing on the spot. It cheers with both arms, then
+turns, walks toward the rail and fades.
+
+Deliberately cheap: built on demand, holds no `cleanTargets` entries,
+never thinks, lives ~6 s, pool capped at 14. A run that frees forty people
+costs forty short-lived groups rather than forty AIs. Each kind leaves a
+different person behind — the brute and the crust get hard hats, the
+spitter a fisherman's cap — so you can see who you saved.
+
+The vocabulary had to follow the mechanic: the HUD counts "Townsfolk
+freed", `BRUTE DOWN!` became `BIG ONE SAVED!`, and the tutorial now says
+these aren't monsters. A rescue mechanic described in kill words reads as
+a bug.
+
+### A damage spread you can actually perceive
+
+The per-kind `dmg` multipliers were huddled between 1.0 and 1.6, which is
+not a spread — it is rounding. They now run 0.55× (spitter, which should
+never be in melee anyway) to 2.1× (brute), i.e. 7 to 27 points.
+
+But a spread the player cannot perceive is still not a spread. A health
+bar that just gets shorter teaches nothing, so every hit now names itself:
+`−27 BRUTE` above the crosshair, coloured by severity, plus shake and FOV
+punch scaled to the actual bite so a brute *feels* heavier rather than
+merely subtracting more. `damagePlayer` takes a `source` for exactly this.
+
+### The upgrade tree was starved
+
+The real bug behind "he should receive points to upgrade weapon and
+power": four talents at three ranks each want **twelve** points, and the
+XP curve had exactly five thresholds and then stopped. Five points was the
+lifetime maximum, the tree could never be filled halfway, and every point
+of XP earned after level 6 was discarded.
+
+- `RPG.xpFor(level)` continues past the hand-tuned early thresholds at
+  ×1.32 per level, so XP always pays. A story clear now reaches ~level 8;
+  a deep endless run reached level 24 for 23 points in testing.
+- Eight talents split the way a player thinks: **WEAPON** (Power Pressure
+  to 5 ranks, Core Focus, Long Reach, Beam Mastery) and **POWER** (Bigger
+  Tank, Heavy Landing, Swift Hooves, Rainbow Nova).
+- 26 ranks against ~23 points at best, on purpose. The tree is larger than
+  any single run can fill so you specialise; what was broken was the curve
+  ending, not the tree being big.
+
+Bigger Tank raises the *ceiling*, not just the refill rate, which meant
+`Meters.pressure` could no longer be clamped to a literal 100. Every clamp
+and the bar width now go through `maxPressure()`, and the empty-tank
+lockout threshold is a fraction of capacity rather than a fixed 25.
+
+### Two test lessons
+
+A unit check asserting exactly 2 runners in the layout had already been
+relaxed once; this build's equivalent trap was asserting the tree could be
+*filled*. Pinning a design intention you might reverse makes the test a
+liability. The assertion now reads "every level pays a point, and that is
+more than the old cap of five", which is the actual contract.
+
+And `BLAST cannot crit` was passing on luck: it fired six frames at an
+orbiting weak point, so whether the ray found the core on any one frame
+was chance. Twenty frames makes "did it ever crit" the claim instead of
+"did it crit immediately". A test that depends on a moving target being in
+the right place needs a window, not an instant.

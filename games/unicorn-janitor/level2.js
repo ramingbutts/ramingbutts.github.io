@@ -99,6 +99,9 @@ try { WIDE_NOZZLE = localStorage.getItem('uj_wide_nozzle') === '1'; } catch (e) 
 // resource meters (design doc): Pressure fuels the hose and refills when you
 // ease off; Rainbow fills as you clean and pays for the Magic Beam.
 const Meters = { pressure: 100, rainbow: 0 };
+// Bigger Tank raises the ceiling, not just the refill rate, so the bar is drawn
+// as a fraction of capacity and every clamp goes through this one function.
+function maxPressure() { return 100 * RPG.tankMul(); }
 const BEAM_COST = 35, PRESSURE_DRAIN = 16, PRESSURE_REGEN = 30, RAINBOW_FILL = 14;
 let pressureLocked = false; // emptied tank: trigger locks until it recovers
 
@@ -1610,9 +1613,9 @@ function updateWeakPoints(dt, t) {
 // held stream doesn't paper the screen with CRIT! popups.
 function applyCrit(ent, amount, point, dt) {
   if (ent.canCrit && !ent.canCrit()) { ent.clean(amount, point); return; } // armoured: no bonus
-  ent.clean(amount * CRIT.mul, point);
+  ent.clean(amount * CRIT.mul * RPG.critMul(), point);
   Tutorial.fire('firstCrit');
-  Meters.pressure = Math.min(100, Meters.pressure + CRIT.refund * dt);
+  Meters.pressure = Math.min(maxPressure(), Meters.pressure + CRIT.refund * dt);
   Hype.add(CRIT.hype * dt);
   const w = ent.weak;
   if (!w) return;
@@ -2231,13 +2234,133 @@ function updateGobs(dt) {
     const d = Player.pos.distanceTo(hit);
     if (d < 2.2) {
       _v1.subVectors(Player.pos, hit).setY(0).normalize();
-      damagePlayer(11 * (1 - d / 2.2) * DIFF.dmg(), _v1);
+      damagePlayer((ZKIND.spitter.gobDmg) * (1 - d / 2.2) * DIFF.dmg(), _v1, 'gob');
     }
     scene.remove(g.mesh); scene.remove(g.shadow);
     for (const m of [g.shadow.userData.ring, g.shadow.userData.fill]) {
       m.geometry.dispose(); m.material.dispose();
     }
     gobs.splice(i, 1);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   THE CLEANSED (BUILD 16)
+
+   Jax is a janitor with a power-washer, and the things on this pier are
+   townsfolk buried under rainbow rot — so hosing the last of it off should
+   free somebody, not leave a corpse. When an enemy's goo hits zero the
+   grimy rig still sprays apart (that is the filth coming off), and a clean
+   citizen is left standing on the spot: a bright pastel body, no swirl, no
+   drips. It cheers, waves, then walks off toward the rail and fades.
+
+   Deliberately cheap. These are built on demand, hold no `cleanTargets`
+   entries, never think, and live about six seconds — so a run that frees
+   forty of them costs forty short-lived groups rather than forty AIs. Each
+   kind leaves behind a different person, so you can see who you saved.
+   --------------------------------------------------------------------- */
+const CLEANSED = {
+  shambler: { skin: 0xffd9b0, cloth: 0x6fd8ff, hat: null,     say: 'Thank you!' },
+  runner:   { skin: 0xffcf9a, cloth: 0xff8fd0, hat: null,     say: 'I can breathe!' },
+  brute:    { skin: 0xf0c49a, cloth: 0xffc44f, hat: 'helmet', say: 'Much obliged!' },
+  spitter:  { skin: 0xffe0bd, cloth: 0x8fe86f, hat: 'cap',    say: 'Gah — that tasted awful!' },
+  crust:    { skin: 0xe8c39a, cloth: 0xbfc9e8, hat: 'helmet', say: 'Got the shell off me!' },
+  bloater:  { skin: 0xffd4c4, cloth: 0xd9a0ff, hat: null,     say: 'Oh, that\'s a relief.' },
+};
+const cleansed = [];
+const CLEANSED_GEO = {
+  body: new THREE.CapsuleGeometry(0.32, 0.62, 4, 8),
+  head: new THREE.SphereGeometry(0.27, 12, 10),
+  limb: new THREE.CapsuleGeometry(0.075, 0.42, 3, 6),
+  eye:  new THREE.SphereGeometry(0.045, 6, 5),
+};
+const CLEANSED_EYE = new THREE.MeshBasicMaterial({ color: 0x2a1a34 });
+function spawnCleansed(pos, kind) {
+  if (cleansed.length > 14) {             // bounded: recycle the oldest
+    const old = cleansed.shift();
+    scene.remove(old.g);
+    old.g.traverse(o => { if (o.isMesh && o.material.dispose) o.material.dispose(); });
+  }
+  const C = CLEANSED[kind] || CLEANSED.shambler;
+  const g = new THREE.Group();
+  g.position.set(pos.x, pos.y, pos.z);
+  g.scale.setScalar(1.15); // a person, not a monster — but still readable at 20m
+  g.rotation.y = Math.atan2(Player.pos.x - pos.x, Player.pos.z - pos.z); // turn and face their rescuer
+  const skin = new THREE.MeshStandardMaterial({ color: C.skin, roughness: 0.55 });
+  const cloth = new THREE.MeshStandardMaterial({ color: C.cloth, roughness: 0.5,
+    emissive: C.cloth, emissiveIntensity: 0.12 });
+  const body = new THREE.Mesh(CLEANSED_GEO.body, cloth);
+  body.position.y = 0.72; g.add(body);
+  const head = new THREE.Mesh(CLEANSED_GEO.head, skin);
+  head.position.y = 1.36; g.add(head);
+  for (const sx of [-1, 1]) {
+    const e = new THREE.Mesh(CLEANSED_GEO.eye, CLEANSED_EYE);
+    e.position.set(sx * 0.1, 1.4, 0.245); head.add(e);
+  }
+  const arms = [];
+  for (const sx of [-1, 1]) {
+    const sh = new THREE.Group();
+    sh.position.set(sx * 0.34, 1.02, 0);
+    const a = new THREE.Mesh(CLEANSED_GEO.limb, skin);
+    a.position.y = -0.21; sh.add(a);
+    g.add(sh); arms.push(sh);
+  }
+  for (const sx of [-1, 1]) {
+    const l = new THREE.Mesh(CLEANSED_GEO.limb, skin);
+    l.position.set(sx * 0.14, 0.22, 0); g.add(l);
+  }
+  if (C.hat === 'helmet') {
+    const h = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0xffc44f, roughness: 0.35, metalness: 0.2 }));
+    h.position.y = 1.46; g.add(h);
+  } else if (C.hat === 'cap') {
+    const h = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.12, 12),
+      new THREE.MeshStandardMaterial({ color: 0x4f7fd8, roughness: 0.5 }));
+    h.position.y = 1.56; g.add(h);
+  }
+  const halo = glowSprite(0xbfffe8, 2.0, 0.5);
+  halo.position.y = 1.1; g.add(halo);
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  scene.add(g);
+  cleansed.push({ g, arms, halo, t: 0, life: 6.2, kind,
+                  away: g.rotation.y + Math.PI + (Math.random() - 0.5) * 0.7 });
+  // one in three says something, so a big rescue is warm rather than noisy
+  if (Math.random() < 0.34) {
+    spawnFloatText(_v1.copy(pos).setY(pos.y + 2.5), C.say, '#bfffe8', { key: 'thanks' });
+  }
+  Game.cleansed++;
+}
+function updateCleansed(dt, t) {
+  for (let i = cleansed.length - 1; i >= 0; i--) {
+    const c = cleansed[i];
+    c.t += dt;
+    if ((c.life -= dt) <= 0) {
+      scene.remove(c.g);
+      c.g.traverse(o => { if (o.isMesh && o.material.dispose) o.material.dispose(); });
+      cleansed.splice(i, 1); continue;
+    }
+    if (c.t < 1.5) {            // cheer: both arms up, a couple of little hops
+      const w = Math.sin(c.t * 11);
+      c.arms[0].rotation.z = 2.2 + w * 0.35;
+      c.arms[1].rotation.z = -2.2 - w * 0.35;
+      c.g.position.y = Math.abs(Math.sin(c.t * 7)) * 0.16;
+    } else {                    // then head for the rail and wander off
+      const w = Math.sin(c.t * 9);
+      c.arms[0].rotation.z = 0.35 + w * 0.5;
+      c.arms[1].rotation.z = -0.35 + w * 0.5;
+      c.g.rotation.y += (c.away - c.g.rotation.y) * Math.min(1, dt * 3);
+      c.g.position.x += Math.sin(c.g.rotation.y) * 2.1 * dt;
+      c.g.position.z += Math.cos(c.g.rotation.y) * 2.1 * dt;
+      c.g.position.y = Math.abs(Math.sin(c.t * 12)) * 0.05;
+    }
+    // fade out over the last second so nobody blinks out of existence
+    const f = Math.min(1, c.life / 1.0);
+    c.halo.material.opacity = 0.5 * f * (c.t < 1.5 ? 1 : 0.55);
+    c.g.traverse(o => {
+      if (!o.isMesh) return;
+      o.material.transparent = f < 1;
+      o.material.opacity = f;
+    });
   }
 }
 
@@ -2294,22 +2417,23 @@ function updateZombies(dt, t) {
 const ZKIND = {
   shambler: { speedMul: 1,    goo: 110, sclX: 1,    sclY: 1,    xp: 50,  score: 100,
               body: 0x6b4426, emis: 0xff40c0, eye: 0xffd23f, eyeGlow: 0xffc400, eyeI: 0.9,
-              core: 1,    dmg: 1,   heavy: false },
+              core: 1,    dmg: 1,    hit: 'shoves you',        heavy: false },
   runner:   { speedMul: 1.5,  goo: 70,  sclX: 0.86, sclY: 1.08, xp: 60,  score: 140,
               body: 0x7a4a2a, emis: 0xff4060, eye: 0xff5f5f, eyeGlow: 0xff2040, eyeI: 1.1,
-              core: 0.85, dmg: 1,   heavy: false, turn: 1.4, accel: 1.6 },
+              core: 0.85, dmg: 0.72, hit: 'clips you fast',   heavy: false, turn: 1.4, accel: 1.6 },
   brute:    { speedMul: 0.6,  goo: 240, sclX: 1.42, sclY: 1.3,  xp: 110, score: 250,
               body: 0x4a2f18, emis: 0xff8000, eye: 0xffa23f, eyeGlow: 0xff6a00, eyeI: 1.3,
-              core: 1.25, dmg: 1.6, heavy: true },
+              core: 1.25, dmg: 2.1,  hit: 'flattens you',      heavy: true },
   spitter:  { speedMul: 0.9,  goo: 85,  sclX: 0.92, sclY: 1.14, xp: 90,  score: 190,
               body: 0x3f6b3a, emis: 0x7fff5f, eye: 0xc9ff5f, eyeGlow: 0x7fff2f, eyeI: 1.2,
-              core: 0.9,  dmg: 1,   heavy: false, standoff: 11, spitCd: [2.4, 3.8] },
+              core: 0.9,  dmg: 0.55, hit: 'barely touches you', heavy: false, standoff: 11, spitCd: [2.4, 3.8],
+              gobDmg: 14 },
   crust:    { speedMul: 0.72, goo: 150, sclX: 1.2,  sclY: 1.06, xp: 120, score: 240,
               body: 0x5a5560, emis: 0x8fb4ff, eye: 0x9fdcff, eyeGlow: 0x5fa8ff, eyeI: 1,
-              core: 1.05, dmg: 1.2, heavy: true, frontArmour: 0.16 },
+              core: 1.05, dmg: 1.45, hit: 'clubs you',          heavy: true, frontArmour: 0.16 },
   bloater:  { speedMul: 0.8,  goo: 130, sclX: 1.26, sclY: 1.16, xp: 100, score: 210,
               body: 0x7a4f7a, emis: 0xff5fd0, eye: 0xff9ff0, eyeGlow: 0xff3fc0, eyeI: 1.15,
-              core: 1.15, dmg: 1,   heavy: false, burstR: 5.2, burstDmg: 78, selfDmg: 26 },
+              core: 1.15, dmg: 0.7,  hit: 'bumps you',          heavy: false, burstR: 5.2, burstDmg: 78, selfDmg: 34 },
 };
 const ZKINDS = Object.keys(ZKIND);
 
@@ -2594,13 +2718,13 @@ class Zombie {
     spawnGlitter(c, Math.round(130 * Hype.glitterMul()), 7);
     // STYLE KILLS: how you finished it matters. Each one slams the brakes
     // for a beat, punches the lens and pays into the hype meter.
-    const style = this.state === 'downed' ? 'CURB SERVICE!'
+    const style = this.state === 'downed' ? 'SCRUBBED CLEAN!'
       : this.weak && this.weak.lit > 0 ? 'CORE POP!'
       : !Player.onGround ? 'AIRBORNE PURIFY!'
       : this._propStun > 0 ? 'STRIKE!'
-      : this.brute ? 'BRUTE DOWN!'
+      : this.brute ? 'BIG ONE SAVED!'
       : this.kind === 'crust' ? 'SHELL CRACKED!'
-      : this.kind === 'spitter' ? 'SNIPED!'
+      : this.kind === 'spitter' ? 'SPOTLESS SHOT!'
       : comboCount >= 3 ? 'PURIFY CHAIN!' : null;
     if (style) {
       hitStop = 0.22;
@@ -2632,17 +2756,20 @@ class Zombie {
       const pd = Player.pos.distanceTo(this.group.position);
       if (pd < K.burstR) {
         _v1.subVectors(Player.pos, this.group.position).setY(0).normalize();
-        damagePlayer(K.selfDmg * (1 - pd / K.burstR) * DIFF.dmg(), _v1);
+        damagePlayer(K.selfDmg * (1 - pd / K.burstR) * DIFF.dmg(), _v1, 'bloater');
       }
     }
     if (burstOnDeath(this)) chainBurst(this, c); // core kill: the goo goes off
-    spawnRagdoll(this.group.position); // physics chunks bounce off the deck
+    spawnRagdoll(this.group.position); // the gunk itself sprays off in gobs
     SFX.pop(panFor(this.group.position), 1);
+    SFX.chime(1.15);                   // and something good just happened
     registerCombo(this.group.position);
     removeCleanTargets(this.group);
-    // death animation: spin-shrink for 0.45s, then a final sparkle; the
-    // group is removed by the dying-list updater in the main loop
+    // BUILD 16: the filth sloughs away and what was under it stands up. The
+    // grimy rig spins off as before, but a clean citizen is left behind on
+    // the spot to celebrate and wander home.
     dyingZombies.push({ g: this.group, t: 0.45 });
+    spawnCleansed(this.group.position, this.kind);
     hitStop = 0.09; // brief slow-motion on every kill
     Meters.rainbow = Math.min(100, Meters.rainbow + 15);
     Game.zombiesDefeated++;
@@ -2803,7 +2930,7 @@ class Zombie {
         this.group.rotation.x = 0.4;
         if (dist < CFG.zombie.hitRange && this.hitCd <= 0) {
           this.hitCd = 1;
-          damagePlayer(CFG.zombie.damage * this.spec.dmg, this.lungeDir);
+          damagePlayer(CFG.zombie.damage * this.spec.dmg, this.lungeDir, this.kind);
         }
         if (this.stateT >= CFG.zombie.lungeTime) { this.group.rotation.x = 0; this.setState('recover'); }
         break;
@@ -4502,8 +4629,8 @@ function landSlam(groundY) {
   Player.slamming = false;
   const drop = Math.max(0, Player.slamFrom - groundY);
   const C = CFG.slam;
-  const radius = Math.min(C.rMax, C.rMin + drop * C.rPerM);
-  const damage = Math.min(C.dmgMax, C.dmgMin + drop * C.dmgPerM) * RPG.hoseMul() * Perks.hoseMul();
+  const radius = Math.min(C.rMax, C.rMin + drop * C.rPerM) * RPG.slamMul();
+  const damage = Math.min(C.dmgMax, C.dmgMin + drop * C.dmgPerM) * RPG.hoseMul() * Perks.hoseMul() * RPG.slamMul();
   const downFor = Math.min(C.downMax, C.downMin + drop * C.downPerM);
   const impact = _v1.copy(Player.pos).setY(groundY + 0.12);
 
@@ -4595,10 +4722,42 @@ function updateSlamHint() {
   slamHintEl.classList.toggle('on', armed);
 }
 
-function damagePlayer(amount, fromDir) {
+// `source` is a ZKIND key (or 'gob'). It exists so the hit readout can name
+// what got you: BUILD 16 spread the per-kind damage from a 1.0–1.6 huddle out
+// to 0.55–2.1, and a spread the player cannot perceive is not a spread — it is
+// just noise on the health bar.
+/* ---- hit readout (BUILD 16) --------------------------------------------
+   Six kinds now hit for 0.55x to 2.1x of the base, plus a 14-point gob and a
+   34-point bloater blast. None of that is learnable from a health bar that
+   just gets shorter, so every hit names its source and its number for a
+   moment. Colour tracks severity, so "that one hurt" registers before you
+   have read the word. */
+const HIT_LABEL = { shambler: 'SHAMBLER', runner: 'RUNNER', brute: 'BRUTE',
+  spitter: 'SPITTER', crust: 'CRUST', bloater: 'BLOATER', gob: 'GOB', tentacle: 'TENTACLE' };
+const hitReadoutEl = document.getElementById('hitReadout');
+let hitReadoutT = 0;
+function showHitReadout(amount, source) {
+  if (!hitReadoutEl) return;
+  const n = Math.max(1, Math.round(amount));
+  const name = HIT_LABEL[source] || '';
+  const sev = n >= 22 ? 'heavy' : n >= 13 ? 'mid' : 'light';
+  hitReadoutEl.className = sev;
+  hitReadoutEl.innerHTML = `<b>−${n}</b>${name ? ' <span>' + name + '</span>' : ''}`;
+  hitReadoutEl.style.opacity = 1;
+  hitReadoutT = 1.5;
+}
+function updateHitReadout(dt) {
+  if (hitReadoutT <= 0) return;
+  hitReadoutT -= dt;
+  if (hitReadoutT <= 0) hitReadoutEl.style.opacity = 0;
+}
+
+function damagePlayer(amount, fromDir, source) {
   if (Game.state !== 'playing') return;
-  Player.hp -= amount * DIFF.dmg();
+  const dealt = amount * DIFF.dmg();
+  Player.hp -= dealt;
   Player._fovPunch = Math.max(Player._fovPunch, 4);
+  showHitReadout(dealt, source);
   showDamageFrom(fromDir);
   Player.knock.copy(fromDir).setY(0).normalize().multiplyScalar(7);
   Game.dmgFlash = 1;
@@ -4610,6 +4769,10 @@ function damagePlayer(amount, fromDir) {
       { duration: 160, strongMagnitude: 0.8, weakMagnitude: 0.4 });
   } catch (e) {}
   hpFill.style.width = Math.max(0, Player.hp) + '%';
+  // the shake and the punch scale with the bite, so a brute FEELS heavier than
+  // a runner rather than merely subtracting more
+  Player.shake = Math.max(Player.shake, Math.min(0.85, 0.22 + dealt * 0.02));
+  Player._fovPunch = Math.max(Player._fovPunch, Math.min(11, 3 + dealt * 0.22));
   hpFill.style.background = Player.hp < 35 ? 'linear-gradient(90deg,#ff4f6e,#ff9e4f)' : 'linear-gradient(90deg,#4fff9e,#b8ff4f)';
   if (Player.hp <= 0) gameOver();
 }
@@ -4753,7 +4916,7 @@ function updateHose(dt) {
   const wantSpray = (Input.spray || Input.gpSpray) && Player.hasHorn && Game.state === 'playing';
   // pressure meter: drains while spraying, refills on release; running it
   // dry locks the trigger briefly — teaches the ease-off rhythm
-  if (pressureLocked && Meters.pressure > 25) pressureLocked = false;
+  if (pressureLocked && Meters.pressure > 0.25 * maxPressure()) pressureLocked = false;
   const spraying = wantSpray && !pressureLocked && Meters.pressure > 0;
   if (spraying) {
     Meters.pressure = Math.max(0, Meters.pressure - PRESSURE_DRAIN * Nozzle().drain * Perks.drainMul() * (1 - 0.08 * RPG.ranks.power) * dt);
@@ -4763,9 +4926,9 @@ function updateHose(dt) {
     }
     if (Meters.pressure <= 0) { pressureLocked = true; Tutorial.fire('pressureEmpty'); }
   } else {
-    Meters.pressure = Math.min(100, Meters.pressure + PRESSURE_REGEN * Perks.regenMul() * dt);
+    Meters.pressure = Math.min(maxPressure(), Meters.pressure + PRESSURE_REGEN * Perks.regenMul() * RPG.regenMul() * dt);
   }
-  pressureFill.style.width = Meters.pressure + '%';
+  pressureFill.style.width = (Meters.pressure / maxPressure() * 100) + '%';
   rainbowFill.style.width = Meters.rainbow + '%';
   if (spraying !== sprayWasOn) { SFX.setSpray(spraying); sprayWasOn = spraying; }
   Player.firing = spraying; // drives the GLB recoil lean
@@ -4813,7 +4976,7 @@ function updateHose(dt) {
     const NZ = Nozzle();
     const power = CFG.hose.dps * NZ.dps * RPG.hoseMul() * Hype.dmgMul() * Perks.hoseMul();
     raycaster.set(camera.position, Player.aim);
-    raycaster.far = NZ.range + 6; // camera sits ~5.4 behind the player
+    raycaster.far = NZ.range * RPG.reachMul() + 6; // camera sits ~5.4 behind the player
     const hits = raycaster.intersectObjects(cleanTargets, false);
     HoseFX.lastHits = hits.length; HoseFX.lastMode = NZ.key; // debug readout
     HoseFX.lastEntity = hits.length ? ((hits[0].object.userData.entity || {}).constructor || {}).name || 'none' : null;
@@ -5149,21 +5312,70 @@ function updateAudioCues(dt) {
    points the player allocates: speed, hose power, beam, or the Rainbow
    Nova superpower. Modifiers are multiplied into the base CFG values.
    ===================================================================== */
+/* ---------------------------------------------------------------------
+   PROGRESSION (reworked BUILD 16)
+
+   The tree was starved: four talents at three ranks each want twelve
+   points, and the XP curve stopped after five thresholds — so five points
+   was the lifetime maximum and the tree could never be filled even
+   halfway. Two fixes:
+
+   1. Levelling never stops. Past the hand-tuned early thresholds each
+      level costs 1.32x the last, so XP always pays into something.
+   2. The tree is bigger and split the way the player thinks about it:
+      WEAPON (what the hose does) and POWER (what Jax does).
+
+   Every rank is read at its call site through a `RPG.*Mul()` helper and
+   never written back into CFG, so respeccing or a difficulty change can
+   never leave a stale number behind.
+   --------------------------------------------------------------------- */
 const RPG = {
   xp: 0, level: 1, points: 0, kills: 0,
-  ranks: { speed: 0, power: 0, beam: 0, nova: 0 },
-  thresholds: [120, 300, 550, 850, 1250], // cumulative XP per level-up — raised vs level 1 because the wharf-toys bonus XP (grime, splats, barrels) would otherwise cap the tree; scarcity is the point
-  speedMul() { return 1 + 0.12 * this.ranks.speed; },
-  hoseMul() { return 1 + 0.25 * this.ranks.power; },
-  beamMul() { return 1 + 0.25 * this.ranks.beam; },
-  beamCdMul() { return 1 - 0.2 * this.ranks.beam; },
+  ranks: { speed: 0, power: 0, beam: 0, nova: 0, crit: 0, tank: 0, slam: 0, reach: 0 },
+  // cumulative XP per level-up. The first five are hand-tuned around the
+  // wharf's bonus XP (grime, splats, barrels); after that it grows smoothly
+  // rather than ending, so a long endless run keeps earning.
+  thresholds: [120, 300, 550, 850, 1250],
+  xpFor(level) {              // cumulative XP needed to REACH `level`
+    const t = this.thresholds;
+    if (level - 1 <= t.length) return t[level - 2] ?? 0;
+    let v = t[t.length - 1];
+    for (let i = t.length + 1; i < level; i++) v = Math.round(v * 1.32);
+    return v;
+  },
+  // ---- WEAPON
+  hoseMul()   { return 1 + 0.25 * this.ranks.power; },
+  critMul()   { return 1 + 0.40 * this.ranks.crit; },
+  reachMul()  { return 1 + 0.15 * this.ranks.reach; },
+  beamMul()   { return 1 + 0.25 * this.ranks.beam; },
+  beamCdMul() { return 1 - 0.20 * this.ranks.beam; },
+  // ---- POWER
+  speedMul()  { return 1 + 0.12 * this.ranks.speed; },
+  tankMul()   { return 1 + 0.25 * this.ranks.tank; },   // pressure capacity
+  regenMul()  { return 1 + 0.30 * this.ranks.tank; },   // and how fast it comes back
+  slamMul()   { return 1 + 0.30 * this.ranks.slam; },
+  spent()     { return Object.values(this.ranks).reduce((a, b) => a + b, 0); },
 };
 
 const SKILLS = [
-  { key: 'speed', name: 'Swift Hooves', icon: '👟', desc: '+12% run speed per rank', max: 3 },
-  { key: 'power', name: 'Power Pressure', icon: '💦', desc: '+25% hose cleaning power per rank', max: 3 },
-  { key: 'beam', name: 'Beam Mastery', icon: '🌈', desc: '+25% beam damage and −20% cooldown per rank', max: 3 },
-  { key: 'nova', name: 'Rainbow Nova', icon: '⭐', desc: 'Unlock a purifying blast around Jax (F / NOVA). Ranks widen it and cut its cooldown', max: 3 },
+  // ---- WEAPON: what the hose does
+  { key: 'power', tree: 'WEAPON', name: 'Power Pressure', icon: '💦', max: 5,
+    desc: '+25% hose cleaning power per rank' },
+  { key: 'crit',  tree: 'WEAPON', name: 'Core Focus',     icon: '🎯', max: 3,
+    desc: '+40% damage on weak-point hits per rank' },
+  { key: 'reach', tree: 'WEAPON', name: 'Long Reach',     icon: '📏', max: 3,
+    desc: '+15% hose range per rank — outranges a spitter' },
+  { key: 'beam',  tree: 'WEAPON', name: 'Beam Mastery',   icon: '🌈', max: 3,
+    desc: '+25% beam damage and −20% cooldown per rank' },
+  // ---- POWER: what Jax does
+  { key: 'tank',  tree: 'POWER',  name: 'Bigger Tank',    icon: '🛢️', max: 3,
+    desc: '+25% pressure capacity and +30% refill speed per rank' },
+  { key: 'slam',  tree: 'POWER',  name: 'Heavy Landing',  icon: '🥾', max: 3,
+    desc: '+30% ground-pound damage and radius per rank' },
+  { key: 'speed', tree: 'POWER',  name: 'Swift Hooves',   icon: '👟', max: 3,
+    desc: '+12% run speed per rank' },
+  { key: 'nova',  tree: 'POWER',  name: 'Rainbow Nova',   icon: '⭐', max: 3,
+    desc: 'Unlock a purifying blast around Jax (F / NOVA). Ranks widen it and cut its cooldown' },
 ];
 
 const xpFill = document.getElementById('xpFill');
@@ -5188,28 +5400,26 @@ function gainXP(amount, worldPos) {
     spawnGlitter(_v1.copy(worldPos).add(new THREE.Vector3(0, 1, 0)), 16, 3);
     spawnFloatText(worldPos.clone().add(new THREE.Vector3(0, 1.9, 0)), '+' + xpRun + ' XP', '#ffd94f', { tier: 'ticker', key: 'xp' });
   }
+  // levelling never stops now — see RPG.xpFor(). A deep endless run keeps
+  // paying, and the tree is big enough to absorb it.
   let gained = 0;
-  while (RPG.level - 1 < RPG.thresholds.length && RPG.xp >= RPG.thresholds[RPG.level - 1]) {
+  while (RPG.xp >= RPG.xpFor(RPG.level + 1) && gained < 40) {
     RPG.level++; RPG.points++; gained++;
   }
   if (gained > 0) { // single feedback burst even for multi-level jumps
     SFX.fanfare();
     Player.shake = Math.max(Player.shake, 0.2);
     spawnGlitter(Player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 80, 6);
-    showToast('⭐ LEVEL UP! Skill point earned' + (IS_TOUCH ? ' — tap TALENTS' : ' — press T'));
-    narrate('Level up! You earned a talent point.');
+    const pts = gained > 1 ? gained + ' skill points' : 'Skill point';
+    showToast(`⭐ LEVEL ${RPG.level}! ${pts} earned` + (IS_TOUCH ? ' — tap TALENTS' : ' — press T'));
+    narrate(gained > 1 ? 'Level up! Points to spend.' : 'Level up! You earned a talent point.');
   }
   updateRPGHUD();
 }
 
 function updateRPGHUD() {
-  const li = RPG.level - 1;
-  if (li >= RPG.thresholds.length) {
-    xpFill.style.width = '100%';
-  } else {
-    const prev = li > 0 ? RPG.thresholds[li - 1] : 0;
-    xpFill.style.width = THREE.MathUtils.clamp((RPG.xp - prev) / (RPG.thresholds[li] - prev) * 100, 0, 100) + '%';
-  }
+  const prev = RPG.xpFor(RPG.level), next = RPG.xpFor(RPG.level + 1);
+  xpFill.style.width = THREE.MathUtils.clamp((RPG.xp - prev) / Math.max(1, next - prev) * 100, 0, 100) + '%';
   lvBadge.textContent = 'LV ' + RPG.level;
   const spent = Object.values(RPG.ranks).some(r => r > 0);
   skillBtn.style.display = (RPG.points > 0 || spent) ? 'block' : 'none';
@@ -5224,37 +5434,47 @@ function updateRPGHUD() {
 // ---- talents panel (tactical pause) ----
 function buildSkillPanel() {
   const grid = document.getElementById('skillGrid');
-  grid.innerHTML = SKILLS.map(s => `
-    <div class="skillCard" data-skill="${s.key}">
-      <div class="ico">${s.icon}</div>
-      <div style="flex:1;">
-        <h3>${s.name}</h3><p>${s.desc}</p>
-        <div class="pips">${'<span class="pip"></span>'.repeat(s.max)}</div>
-      </div>
-      <button class="plusBtn">+</button>
-    </div>`).join('');
+  const col = (tree) => `
+    <div class="skillCol">
+      <h4>${tree}</h4>
+      ${SKILLS.filter(s => s.tree === tree).map(s => `
+        <div class="skillCard" data-skill="${s.key}">
+          <div class="ico">${s.icon}</div>
+          <div style="flex:1;">
+            <h3>${s.name} <span class="rank"></span></h3><p>${s.desc}</p>
+            <div class="pips">${'<span class="pip"></span>'.repeat(s.max)}</div>
+          </div>
+          <button class="plusBtn">+</button>
+        </div>`).join('')}
+    </div>`;
+  grid.innerHTML = col('WEAPON') + col('POWER');
   grid.querySelectorAll('.skillCard').forEach(card => {
     card.querySelector('.plusBtn').addEventListener('click', () => {
       const key = card.dataset.skill;
       const def = SKILLS.find(s => s.key === key);
       if (RPG.points <= 0 || RPG.ranks[key] >= def.max) return;
       RPG.points--; RPG.ranks[key]++;
-      SFX.chime();
+      SFX.chime(1 + 0.06 * RPG.ranks[key]);
       if (key === 'nova' && RPG.ranks.nova === 1) {
         showToast(IS_TOUCH ? '⭐ RAINBOW NOVA unlocked — tap NOVA!' : '⭐ RAINBOW NOVA unlocked — press F!');
       }
+      if (key === 'tank') Meters.pressure = maxPressure(); // a bigger tank arrives full
       refreshSkillPanel();
       updateRPGHUD();
     });
   });
 }
 function refreshSkillPanel() {
-  document.getElementById('skillPoints').textContent = 'POINTS: ' + RPG.points;
+  document.getElementById('skillPoints').textContent =
+    `LEVEL ${RPG.level} · POINTS: ${RPG.points}` + (RPG.spent() ? ` · ${RPG.spent()} SPENT` : '');
   document.querySelectorAll('.skillCard').forEach(card => {
     const key = card.dataset.skill;
     const def = SKILLS.find(s => s.key === key);
-    card.querySelectorAll('.pip').forEach((p, r) => p.classList.toggle('on', r < RPG.ranks[key]));
-    card.querySelector('.plusBtn').disabled = RPG.points <= 0 || RPG.ranks[key] >= def.max;
+    const r = RPG.ranks[key];
+    card.querySelectorAll('.pip').forEach((p, i) => p.classList.toggle('on', i < r));
+    card.querySelector('.rank').textContent = r > 0 ? `${r}/${def.max}` : '';
+    card.classList.toggle('maxed', r >= def.max);
+    card.querySelector('.plusBtn').disabled = RPG.points <= 0 || r >= def.max;
   });
 }
 function toggleSkillPanel(open) {
@@ -5972,10 +6192,10 @@ const Tutorial = {
           : 'Sparkling! Cleaning filled your RAINBOW METER — RIGHT CLICK (or Q) unleashes the Magic Beam!');
         break;
       case 'firstBeam':
-        this.show('Beautiful — the beam blasts AND stuns! Now listen… groans in the fog. Hose the rainbow slime off the poop zombies to melt them!');
+        this.show('Beautiful — the beam blasts AND stuns! Now listen… groans in the fog. Those aren’t monsters, they’re townsfolk buried in rot — hose every last drop off and you’ll free them.');
         break;
       case 'zombieDefeated':
-        this.show('FABULOUS! Purify the whole wharf: every pile, every zombie, every sea lion. Let your ears guide you.', true);
+        this.show('FABULOUS — they walk away clean! Purify the whole wharf: every pile, every soul, every sea lion. Let your ears guide you.', true);
         break;
     }
   },
@@ -6001,6 +6221,7 @@ const resumeHint = document.getElementById('resumeHint');
 const Game = {
   state: 'menu', // menu | intro | playing | skills | won | dead
   pilesCleaned: 0, zombiesDefeated: 0,
+  cleansed: 0,                       // BUILD 16: townsfolk freed, not killed
   crits: 0, bursts: 0, bestChain: 0, // BUILD 12 precision telemetry
   slams: 0, bestSlam: 0,             // BUILD 13 ground pound telemetry
   totalPiles: 0, totalZombies: 0,
@@ -6067,7 +6288,7 @@ function checkWin() {
       `Cleared in ${fmt(secs)} · HP left: ${Math.max(0, Math.round(Player.hp))} · Level ${RPG.level} · ${RPG.xp} XP${bestTxt}`;
     document.getElementById('winObjectives').innerHTML = [
       ['Cleaned every poop pile', true],
-      [`Defeated ${Game.zombiesDefeated} Rainbow Zombies (goal: 5)`, Game.zombiesDefeated >= 5],
+      [`Freed ${Game.zombiesDefeated} townsfolk from the rot (goal: 5)`, Game.zombiesDefeated >= 5],
       [`Civilians saved: ${Game.civSaved}/${Game.civTotal}`, Game.civSaved >= Game.civTotal],
       [`Weak points hit: ${Game.crits} · goo detonations: ${Game.bursts}${Game.bestChain > 1 ? ` (best chain x${Game.bestChain})` : ''}`, Game.crits > 0],
     [`Ground pounds: ${Game.slams}${Game.bestSlam > 0 ? ` (longest drop ${Game.bestSlam} m)` : ''}`, Game.slams > 0],
@@ -6305,6 +6526,9 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 16 progression + damage readout + the cleansed
+  cleansed, spawnCleansed, updateCleansed, CLEANSED,
+  SKILLS, maxPressure, showHitReadout, HIT_LABEL,
   // BUILD 15 enemy roster
   ZKIND, ZKINDS, gobs, throwGob, updateGobs,
   // BUILD 14 particle budget + feedback tiers
@@ -6357,12 +6581,14 @@ function simulate(dt, t) {
   updateGlitter(dt);
   updateSplashes(dt);
   updateDamageArcs(dt);
+  updateHitReadout(dt);
   updatePhysics(dt); updateCars(dt);
   updatePileJelly(dt, t);
   updateWeakPoints(dt, t);
   updateBurstRings(dt);
   updateSlamRings(dt);
   updateDying(dt);
+  updateCleansed(dt, t);
   updateFloatTexts(dt);
 
   // filmic post: grain always breathing, aberration only when you're hurt
