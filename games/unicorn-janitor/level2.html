@@ -122,6 +122,13 @@
   #slamHint.on { opacity:1; transform:translate(-50%,0); }
   #slamHint b { color:#fff; letter-spacing:1px; }
 
+  /* FOCUS (BUILD 17): braced. The reticle tightens to a fine cross so the
+     precision mode looks like precision, and a hairline pair of ticks marks
+     the exact centre column. */
+  #crosshair.focused { width:16px; height:16px; }
+  #crosshair.focused::after { inset:-2px; border-width:1px; opacity:.75; }
+  #crosshair.focused::before { width:2px; height:2px; }
+
   /* BUILD 12 crit sense: sitting on a weak point reads cyan and opens up,
      so you can see the 3x is there before you spend the pressure */
   #crosshair.onCore::before { background:#9ffcff; box-shadow:0 0 12px rgba(159,252,255,1); }
@@ -337,13 +344,14 @@
 <div id="startOverlay" class="overlay">
   <h1>UNICORN JANITOR</h1>
   <h2>POOPOCALYPSE</h2>
-  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 16</div>
+  <div class="chip">LEVEL 2 · FISHERMAN’S WHARF · BUILD 17</div>
   <div class="controls" id="controlsText">
     <b>WASD</b> move &nbsp;·&nbsp; <b>Shift</b> sprint &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Space</b> jump<br>
     <b>Hold Left Click</b> power-hose &nbsp;·&nbsp; <b>Right Click / Q</b> magic beam &nbsp;·&nbsp; <b>T</b> talents<br>
     <b>Jump, then hose straight down</b> to ride the jet — the recoil is a rocket. Chain cleans to go <b>disco</b>.<br>
     <b>Space again in mid-air</b> to GROUND POUND. The higher the drop the harder it lands, and anything flattened takes double.<br>
     Fog is thick out there — <b>trust your ears</b>, or press <b>C</b> for a sixth-sense ping.<br>
+    <b>Z</b> or <b>middle-click</b> FOCUS — brace and zoom for a precise shot (🎮 L2)<br>
     <b>P</b> pause &amp; settings &nbsp;·&nbsp; <b>Shift+R</b> rotate Jax · <b>[ ]</b> / <b>; '</b> aim the water jet &nbsp;·&nbsp; 🎮 gamepad supported
   </div>
   <div class="setRow" style="justify-content:center; margin-bottom:16px;">

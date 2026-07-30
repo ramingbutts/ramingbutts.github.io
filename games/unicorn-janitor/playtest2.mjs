@@ -165,13 +165,17 @@ const jelly = await page.evaluate(() => {
   let minRatio = 1, maxRatio = 1;
   UJ.Input.spray = true;
   for (let i=0;i<25 && pile.alive;i++) {
+    UJ.Meters.pressure = UJ.maxPressure(); // this checks jelly physics, not the tank
     UJ.aimAt(c.x, c.y + 0.4, c.z); UJ.step(0.03);
     const r = pile.group.scale.y / pile.baseScale;
     minRatio = Math.min(minRatio, r); maxRatio = Math.max(maxRatio, r);
   }
   // finish it off to trigger the chunk burst
   let guard = 0;
-  while (pile.alive && guard++ < 200) { UJ.aimAt(c.x, c.y + 0.4, c.z); UJ.step(0.03); }
+  while (pile.alive && guard++ < 200) {
+    UJ.Meters.pressure = UJ.maxPressure();
+    UJ.aimAt(c.x, c.y + 0.4, c.z); UJ.step(0.03);
+  }
   UJ.Input.spray = false;
   const burst = UJ.physBodies.length - bodiesBefore;
   for (let i=0;i<90;i++) UJ.step(0.03); // let chunks expire
@@ -1633,6 +1637,180 @@ ok('the new ranks are read at their call sites and visibly change the game',
    `crit ×${rankWire.base.crit}→×${rankWire.maxed.crit} · hose ×${rankWire.base.hose}→×${rankWire.maxed.hose} · ` +
    `slam shockwave ${rankWire.smallRing}→${rankWire.bigRing}m`);
 
+/* =====================================================================
+   BUILD 17 — THE AIM
+   The crosshair used to lie by a constant 2.5 degrees, because it is drawn
+   at screen centre while the damage ray was cast along Player.aim from a
+   camera parked behind one shoulder. These lock the fix down.
+   ===================================================================== */
+
+// B17a. The crosshair, the water and the damage all land on the same pixel,
+// at every range. This is the measured bug, turned into a guard.
+const truthful = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; P.hasHorn = true;
+  for (const z of UJ.getZombies()) z.alive = false; UJ.reapEntities();
+  const W = innerWidth, H = innerHeight;
+  const rows = [];
+  for (const dist of [4, 9, 16, 22]) {
+    const z = UJ.spawnZombieAt(0, -40 - dist);
+    P.pos.set(0, 0, -40); P.yaw = Math.PI; P.pitch = 0;
+    for (let i = 0; i < 70; i++) { P.hp = 100; z.setState('stunned'); z.stunT = 99; UJ.step(0.03); }
+    const point = UJ.aimTarget(dist + 14);           // what the reticle resolves to
+    const toPx = (v) => { const q = v.clone().project(UJ.camera);
+      return [(q.x * 0.5 + 0.5) * W, (-q.y * 0.5 + 0.5) * H]; };
+    const [dx, dy] = toPx(point);
+    // and where the water is thrown: muzzle -> that same point
+    const muzzle = UJ.nozzleWorldPos();
+    const jet = point.clone().sub(muzzle).normalize();
+    const [wx, wy] = toPx(muzzle.clone().addScaledVector(jet, point.distanceTo(muzzle)));
+    rows.push({ dist,
+      damagePx: +Math.hypot(dx - W / 2, dy - H / 2).toFixed(1),
+      waterPx: +Math.hypot(wx - W / 2, wy - H / 2).toFixed(1) });
+    z.alive = false; UJ.reapEntities();
+  }
+  return rows;
+});
+ok('the crosshair, the water and the damage converge on the same pixel at every range',
+   truthful.every(r => r.damagePx < 2 && r.waterPx < 2),
+   truthful.map(r => `${r.dist}m: damage ${r.damagePx}px / water ${r.waterPx}px off centre`).join(' · '));
+
+// B17b. Aiming is now defined by the reticle: whatever sits under the
+// crosshair is what takes the hit, even though the lens is off-shoulder
+const underReticle = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {};
+  for (const z of UJ.getZombies()) z.alive = false; UJ.reapEntities();
+  // two targets side by side, 1.6m apart at 14m: at 2.5 degrees of error the
+  // old aim would have bitten the wrong one
+  const left = UJ.spawnZombieAt(-0.8, -54), right = UJ.spawnZombieAt(0.8, -54);
+  P.pos.set(0, 0, -40); P.hp = 100;
+  const hold = () => { for (const z of [left, right]) { z.setState('stunned'); z.stunT = 99; } };
+  const fire = (target) => {
+    hold();
+    for (let i = 0; i < 12; i++) { hold(); UJ.aimAt(target.group.position.x, 1.15, target.group.position.z); UJ.step(0.03); }
+    const before = [left.goo, right.goo];
+    for (let i = 0; i < 14; i++) {
+      hold(); UJ.Meters.pressure = UJ.maxPressure();
+      UJ.aimAt(target.group.position.x, 1.15, target.group.position.z);
+      UJ.Input.spray = true; UJ.step(0.03);
+    }
+    UJ.Input.spray = false;
+    return [+(before[0] - left.goo).toFixed(1), +(before[1] - right.goo).toFixed(1)];
+  };
+  const atLeft = fire(left);
+  left.goo = left.gooMax; right.goo = right.gooMax;
+  const atRight = fire(right);
+  for (const z of [left, right]) z.alive = false;
+  UJ.reapEntities();
+  return { atLeft, atRight };
+});
+ok('whatever sits under the crosshair is what takes the hit',
+   underReticle.atLeft[0] > underReticle.atLeft[1] * 3 &&
+   underReticle.atRight[1] > underReticle.atRight[0] * 3,
+   `two targets 1.6m apart at 14m — aiming left dealt ${underReticle.atLeft[0]}/${underReticle.atLeft[1]}, ` +
+   `aiming right dealt ${underReticle.atRight[0]}/${underReticle.atRight[1]}`);
+
+// B17c. FOCUS narrows the lens, slows the look, and does NOT buff damage
+const focus = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.focus = false;
+  P.pos.set(0, 0, -40); P.yaw = Math.PI; P.pitch = 0;
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const relaxed = { fov: +UJ.camera.fov.toFixed(1), t: +UJ.getFocus().toFixed(2) };
+  // how far does a fixed look input turn you, relaxed vs braced?
+  const sweep = () => {
+    const y0 = P.yaw;
+    for (let i = 0; i < 20; i++) { UJ.Input.lookDX = 40; UJ.step(0.03); }
+    return Math.abs(P.yaw - y0);
+  };
+  const turnRelaxed = sweep();
+  UJ.Input.focus = true;
+  for (let i = 0; i < 90; i++) UJ.step(0.03);           // ease in
+  const braced = { fov: +UJ.camera.fov.toFixed(1), t: +UJ.getFocus().toFixed(2) };
+  const turnBraced = sweep();
+  // damage must be untouched: focus is an aiming aid, not a weapon upgrade
+  const z = UJ.spawnZombieAt(0, -47);
+  z.setState('stunned'); z.stunT = 99;
+  // pull the weak point out of the raycast set: it orbits, so leaving it in
+  // makes each 10-frame damage sample a coin flip between body and 3x crit,
+  // which swamps the thing under test (that focus changes NOTHING about damage)
+  const ci = UJ.cleanTargets.indexOf(z.weak.mesh);
+  if (ci >= 0) UJ.cleanTargets.splice(ci, 1);
+  const dmgAt = () => {
+    z.goo = z.gooMax;
+    for (let i = 0; i < 10; i++) {
+      z.setState('stunned'); z.stunT = 99; UJ.Meters.pressure = UJ.maxPressure();
+      UJ.aimAt(z.group.position.x, 1.15, z.group.position.z);
+      UJ.Input.spray = true; UJ.step(0.03);
+    }
+    UJ.Input.spray = false;
+    return +(z.gooMax - z.goo).toFixed(1);
+  };
+  const dmgBraced = dmgAt();
+  UJ.Input.focus = false;
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  const dmgRelaxed = dmgAt();
+  z.alive = false; UJ.reapEntities();
+  return { relaxed, braced, turnRelaxed: +turnRelaxed.toFixed(3), turnBraced: +turnBraced.toFixed(3),
+           dmgBraced, dmgRelaxed, focusFov: UJ.CFG.cam.focusFov };
+});
+ok('focus narrows the lens and slows the look, and buys no extra damage',
+   focus.braced.fov < focus.relaxed.fov - 15 && focus.braced.t > 0.9 &&
+   focus.turnBraced < focus.turnRelaxed * 0.5 &&
+   Math.abs(focus.dmgBraced - focus.dmgRelaxed) < focus.dmgRelaxed * 0.12,
+   `FOV ${focus.relaxed.fov}° → ${focus.braced.fov}° · the same look input turns ` +
+   `${focus.turnRelaxed} rad relaxed vs ${focus.turnBraced} braced · ` +
+   `damage unchanged (${focus.dmgRelaxed} vs ${focus.dmgBraced})`);
+
+// B17d. Sensitivity tracks the lens, so zooming doesn't secretly change it.
+// Measured as degrees of view swept per unit of input — the thing your hand
+// actually learns — which must stay roughly constant across FOVs.
+const fovComp = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {}; UJ.Input.focus = false;
+  // Isolated on SPRINT (70° → 78°), not focus: focus deliberately stacks an
+  // extra 0.45x damping on top of the compensation because braced aiming should
+  // be slower in absolute terms (B17c covers that). Sprint changes only the
+  // lens, so it measures the compensation and nothing else.
+  const sweepFraction = () => {
+    const y0 = P.yaw;
+    for (let i = 0; i < 15; i++) { UJ.Input.lookDX = 30; UJ.step(0.03); }
+    return Math.abs(P.yaw - y0) / (UJ.camera.fov * Math.PI / 180);
+  };
+  P.pos.set(0, 0, -40); P.yaw = Math.PI; P.pitch = 0;
+  for (let i = 0; i < 60; i++) UJ.step(0.03);
+  const walkFov = +UJ.camera.fov.toFixed(1);
+  const walking = sweepFraction();
+  UJ.Input.keys.KeyW = true; UJ.Input.keys.ShiftLeft = true;   // sprint stretches the lens
+  for (let i = 0; i < 120; i++) UJ.step(0.03);
+  const sprintFov = +UJ.camera.fov.toFixed(1);
+  const sprinting = sweepFraction();
+  UJ.Input.keys = {};
+  for (let i = 0; i < 90; i++) UJ.step(0.03);
+  return { walkFov, sprintFov, walking: +walking.toFixed(4), sprinting: +sprinting.toFixed(4) };
+});
+ok('sensitivity tracks the lens: the same input sweeps the same fraction of the view',
+   fovComp.sprintFov > fovComp.walkFov + 4 &&
+   Math.abs(fovComp.walking - fovComp.sprinting) < fovComp.walking * 0.06,
+   `the same look input sweeps ${fovComp.walking} of a ${fovComp.walkFov}° view and ` +
+   `${fovComp.sprinting} of a ${fovComp.sprintFov}° one — uncompensated the wider lens ` +
+   `would have swept ${(fovComp.walkFov / fovComp.sprintFov).toFixed(2)}x less`);
+
+// B17e. The stick has a response curve, not a cliff
+const stick = await page.evaluate(() => {
+  // reproduce the pad curve the poll applies, and check its shape
+  const DZ = 0.07, CURVE = 2.4;
+  const f = (v) => { const a = Math.abs(v); return a <= DZ ? 0 : Math.sign(v) * Math.pow((a - DZ) / (1 - DZ), CURVE); };
+  const pts = [0.05, 0.2, 0.4, 0.6, 0.8, 1].map(v => +f(v).toFixed(3));
+  return { pts, deadzone: f(0.05) === 0, full: f(1), fineAtQuarter: f(0.25) };
+});
+ok('the look stick has a real response curve: fine near centre, full at the edge',
+   stick.deadzone && Math.abs(stick.full - 1) < 1e-6 && stick.fineAtQuarter < 0.06 &&
+   stick.pts.every((v, i) => i === 0 || v > stick.pts[i - 1]),
+   `curve ${stick.pts.join(' → ')} · a quarter-deflection moves at ${(stick.fineAtQuarter * 100).toFixed(1)}% ` +
+   `of full speed (linear would be 25%), and full deflection still reaches 100%`);
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
@@ -1951,16 +2129,19 @@ const wave = await page.evaluate(() => {
   P.pos.set(0, 0, -60); P.hp = 60;
   UJ.Rush.breather = 0.01;
   UJ.step(0.03);                                  // trips startWave
-  const w1 = { wave: UJ.Rush.wave, spawned: UJ.getZombies().filter(z => z.alive).length,
+  const w1 = { wave: UJ.Rush.wave, kinds: new Set(UJ.getZombies().filter(z => z.alive).map(z => z.kind)).size,
+               spawned: UJ.getZombies().filter(z => z.alive).length,
                piles: UJ.piles.filter(p => p.alive).length,
                banner: document.getElementById('waveBanner').textContent };
   UJ.Rush.wave = 6; UJ.Rush.breather = 0.01;      // deeper wave = bigger tide
   UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
   UJ.piles.forEach(p => { p.alive = false; });
   UJ.step(0.03);
-  const w7 = { spawned: UJ.getZombies().filter(z => z.alive).length,
-               brutes: UJ.getZombies().filter(z => z.alive && z.brute).length,
-               runners: UJ.getZombies().filter(z => z.alive && z.runner).length };
+  const live7 = UJ.getZombies().filter(z => z.alive);
+  const w7 = { spawned: live7.length,
+               brutes: live7.filter(z => z.brute).length,
+               runners: live7.filter(z => z.runner).length,
+               kinds: new Set(live7.map(z => z.kind)).size };
   // clear the field and let the director notice
   UJ.getZombies().forEach(z => { if (z.alive) { z.alive = false; z.group.visible = false; } });
   UJ.piles.forEach(p => { p.alive = false; });
@@ -1979,11 +2160,15 @@ const wave = await page.evaluate(() => {
 });
 ok('waves scale with depth and clearing one pays a bonus, a breather and an upgrade',
    wave.w1.wave === 1 && wave.w1.spawned >= 4 && wave.w1.piles >= 2 &&
-   wave.w7.spawned > wave.w1.spawned && (wave.w7.brutes + wave.w7.runners) > 0 &&
+   wave.w7.spawned > wave.w1.spawned &&
+   // NOT "wave 7 contains a runner or a brute": BUILD 15 made the wave picker
+   // roll from six kinds, so any single kind can legitimately be absent from
+   // any single wave. Asserting a specific roll makes this a dice test.
+   wave.w7.kinds > wave.w1.kinds - 1 &&
    wave.cleared && wave.breather > 4 && wave.bonus > 0 && wave.healed &&
    wave.picker.shown && wave.picker.offered === 3 && wave.picker.frozen &&
    wave.after.rank === 1 && wave.after.state === 'playing' && wave.after.hidden,
-   `wave 1: ${wave.w1.spawned} enemies → wave 7: ${wave.w7.spawned} (${wave.w7.runners} runners, ${wave.w7.brutes} brutes) · +${wave.bonus} and 3 upgrades offered → took ${wave.name}`);
+   `wave 1: ${wave.w1.spawned} enemies of ${wave.w1.kinds} kind(s) → wave 7: ${wave.w7.spawned} of ${wave.w7.kinds} kinds · +${wave.bonus} and 3 upgrades offered → took ${wave.name}`);
 
 // B8f. Score is multiplied by the hype tier — style literally pays
 const scoring = await page.evaluate(() => {

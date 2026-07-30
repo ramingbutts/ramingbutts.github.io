@@ -44,7 +44,16 @@ const CFG = {
   // BUILD 5 cinematic camera rig: a spring arm that collides with the world,
   // slides over the shoulder while you aim, and leads the direction of travel
   cam: { dist: 5.4, height: 0.4, shoulder: 0.55, aimPull: 1.1, aimShoulder: 0.5,
-         lead: 0.075, minDist: 1.3, fov: 70, sprintFov: 78 },
+         lead: 0.075, minDist: 1.3, fov: 70, sprintFov: 78,
+         // FOCUS: hold to brace. Narrows the lens, pulls the boom in and slows
+         // the look — a weak point is a 0.17m orb, and at 70 degrees of FOV
+         // tracking one at 15m is a coin flip rather than a skill.
+         // focusShoulder is POSITIVE on purpose: braced, you want the clearest
+         // possible sight line, and leaning further off the shoulder is what
+         // moves Jax out from in front of the reticle. Pulling the boom hard in
+         // (the first attempt) did the opposite — it filled the frame with him.
+         focusFov: 46, focusSens: 0.45, focusPull: 0.55, focusShoulder: 0.42,
+         focusRise: 0.28 },
 };
 
 // BUILD 5: difficulty presets — every multiplier is applied at the call site,
@@ -500,6 +509,7 @@ function narrate(text, pitch = 1.15) {
    ===================================================================== */
 const Input = {
   keys: {}, spray: false, beamPressed: false, jumpPressed: false, novaPressed: false, pingPressed: false,
+  focus: false, gpFocus: false,   // FOCUS: held, not toggled — see CFG.cam.focusFov
   lookDX: 0, lookDY: 0, joy: { x: 0, y: 0 },
   locked: false,
 
@@ -513,6 +523,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyQ') Input.beamPressed = true;
   if (e.code === 'KeyF') Input.novaPressed = true;
   if (e.code === 'KeyC') Input.pingPressed = true;
+  if (e.code === 'KeyZ') Input.focus = true;
   if (e.code === 'KeyT') toggleSkillPanel();
   if (e.code === 'KeyR' && e.shiftKey) cycleModelYaw();
   else if (e.code === 'KeyR') cycleNozzle(1);
@@ -524,19 +535,26 @@ window.addEventListener('keydown', e => {
   if (Game.state === 'perks' && /^Digit[123]$/.test(e.code)) takePerk(+e.code.slice(5) - 1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
 });
-window.addEventListener('keyup', e => { Input.keys[e.code] = false; });
+window.addEventListener('keyup', e => {
+  Input.keys[e.code] = false;
+  if (e.code === 'KeyZ') Input.focus = false;
+});
 window.addEventListener('contextmenu', e => e.preventDefault());
 
 window.addEventListener('mousedown', e => {
   if (Game.state === 'intro') { introSkip = true; return; }
   if (!Input.locked) return;
   if (e.button === 0) Input.spray = true;
+  if (e.button === 1) { Input.focus = true; e.preventDefault(); } // middle mouse braces
   if (e.button === 2) Input.beamPressed = true;
 });
 window.addEventListener('touchstart', () => {
   if (Game.state === 'intro') introSkip = true;
 }, { passive: true });
-window.addEventListener('mouseup', e => { if (e.button === 0) Input.spray = false; });
+window.addEventListener('mouseup', e => {
+  if (e.button === 0) Input.spray = false;
+  if (e.button === 1) Input.focus = false;
+});
 window.addEventListener('mousemove', e => {
   if (!Input.locked) return;
   Input.lookDX += e.movementX; Input.lookDY += e.movementY;
@@ -4055,6 +4073,7 @@ const Player = {
   _aimT: 0, _fovPunch: 0,    // camera-rig state (BUILD 5)
   yaw: Math.PI, pitch: -0.05, onGround: true, hp: CFG.player.hp,
   slamming: false, slamFrom: 0, // ground pound: state + the height it started from
+  focusT: 0,                    // 0..1 brace-for-a-precise-shot blend
   hasHorn: false, horn: null, hornLight: null, shake: 0,
   forward: new THREE.Vector3(), aim: new THREE.Vector3(),
   // muzzle offset from the player origin; swapped for the long GLB gun below
@@ -4326,12 +4345,74 @@ function buildHornPickup() {
   scene.add(hornPickup);
 }
 
+/* ---------------------------------------------------------------------
+   AIM (reworked BUILD 17)
+
+   The crosshair was lying. It is drawn at screen centre, but the camera is
+   a spring arm parked BEHIND and OFF TO ONE SHOULDER, aimed via
+   `lookAt(head + aim*10)` — so screen centre coincided with `Player.aim`
+   at exactly 10 m and nowhere else, while the damage ray was cast from the
+   lens along `Player.aim` and so never matched the crosshair at all.
+   Measured: a constant 2.5 degrees, 23 px at 720p, at every range.
+
+   Now there is one axis and it is defined by the reticle. `aimAxis()`
+   returns the camera's true world forward — by definition the direction
+   under the crosshair. Everything that decides what you HIT uses it, and
+   the water is then thrown from the muzzle at the point that ray found, so
+   the reticle, the jet and the damage all converge on the same spot at
+   every distance.
+
+   `Player.aim` survives as the LOOK vector: it drives the camera boom and
+   the jet-boost thrust. Boost deliberately keeps using it rather than the
+   jet axis, because thrust should follow where you are pointing and not
+   jitter as targets drift through the stream.
+   --------------------------------------------------------------------- */
+// How far ahead of the head the boom converges. The camera aims at
+// head + aim*CAM_LOOK_AHEAD, which is precisely why screen centre used to agree
+// with Player.aim at this distance and nowhere else. Named so the reticle
+// solver below and the camera itself can never disagree about the rig.
+const CAM_LOOK_AHEAD = 10;
+const _aimAxis = new THREE.Vector3();
+const _retHead = new THREE.Vector3(), _retLook = new THREE.Vector3();
+// The direction the crosshair WOULD point if Jax's look vector were `aim`,
+// derived from the same relation the camera block uses. Lets a caller solve
+// for "put the reticle on X" without stepping a frame.
+function reticleDirFor(aim, out) {
+  _retHead.copy(Player.pos).setY(Player.pos.y + 1.9);
+  _retLook.copy(_retHead).addScaledVector(aim, CAM_LOOK_AHEAD);
+  return out.subVectors(_retLook, camera.position).normalize();
+}
+const _aimPoint = new THREE.Vector3();
+const _jetDir = new THREE.Vector3();
+function aimAxis() { return camera.getWorldDirection(_aimAxis); }
+
+// Where the crosshair is actually pointing in the world, and how far away.
+// `maxRange` is measured from the lens, which sits ~5.4 m behind Jax.
+function aimTarget(maxRange, out = _aimPoint) {
+  const ax = aimAxis();
+  raycaster.set(camera.position, ax);
+  raycaster.far = maxRange;
+  const hits = raycaster.intersectObjects(cleanTargets, false);
+  if (hits.length) out.copy(hits[0].point);
+  else out.copy(camera.position).addScaledVector(ax, maxRange);
+  return hits;
+}
+
 function updatePlayer(dt, t) {
   // --- look ---
+  // FOCUS is held, and eases rather than snaps, so it never fights the camera
+  const wantFocus = (Input.focus || Input.gpFocus) && Game.state === 'playing';
+  Player.focusT += ((wantFocus ? 1 : 0) - Player.focusT) * (1 - Math.pow(0.0008, dt));
   const [dx, dy] = Input.consumeLook();
-  const sens = 0.0023 * (Settings.sens || 1); // mouse, touch-drag and gamepad all funnel through consumeLook
-  Player.yaw -= dx * sens;
-  Player.pitch = THREE.MathUtils.clamp(Player.pitch - dy * sens, -0.9, 0.7);
+  // Sensitivity tracks the LENS, not a constant. Sprint stretches the FOV to 78
+  // and focus narrows it to 46, and without this the same wrist movement swept a
+  // different arc in each — which is exactly why zoom used to feel wrong.
+  const fovComp = Math.tan(camera.fov * 0.5 * Math.PI / 180) /
+                  Math.tan(CFG.cam.fov * 0.5 * Math.PI / 180);
+  const sens = 0.0023 * (Settings.sens || 1) * fovComp; // mouse, touch-drag and gamepad all funnel through consumeLook
+  const look = sens * THREE.MathUtils.lerp(1, CFG.cam.focusSens, Player.focusT);
+  Player.yaw -= dx * look;
+  Player.pitch = THREE.MathUtils.clamp(Player.pitch - dy * look, -0.9, 0.7);
 
   Player.forward.set(Math.sin(Player.yaw), 0, Math.cos(Player.yaw));
   // the sky sphere rides along (xz only) so its gradient stays horizon-true
@@ -4512,13 +4593,16 @@ function updatePlayer(dt, t) {
   _camRightV.crossVectors(Player.aim, THREE.Object3D.DEFAULT_UP).normalize();
   // ease over the shoulder while spraying, ease back out when idle
   Player._aimT += ((Player.firing ? 1 : 0) - Player._aimT) * (1 - Math.pow(0.03, dt));
-  const boom = C.dist - Player._aimT * C.aimPull;
-  const shoulder = C.shoulder + Player._aimT * C.aimShoulder;
+  const boom = C.dist - Player._aimT * C.aimPull - Player.focusT * C.focusPull;
+  // focus also walks the lens back toward centre: a shoulder offset is what
+  // makes the reticle sit off Jax's body, but for a precise shot you want the
+  // straightest possible line rather than the prettiest framing
+  const shoulder = C.shoulder + Player._aimT * C.aimShoulder + Player.focusT * C.focusShoulder;
   _camDesired.copy(headPos)
     .addScaledVector(Player.aim, -boom)
     .addScaledVector(_camRightV, shoulder)
     .addScaledVector(Player.hvel, C.lead); // lead the run — the world slides in ahead of you
-  _camDesired.y += C.height;
+  _camDesired.y += C.height + Player.focusT * C.focusRise; // braced sits a touch higher, over the shoulder
 
   // boom collision: never let a shop wall, cart or piling sit between lens and Jax
   _camArm.subVectors(_camDesired, headPos);
@@ -4537,7 +4621,7 @@ function updatePlayer(dt, t) {
   // and drift OUT slowly (so leaving cover feels like a crane pull-back)
   const closing = _camDesired.distanceToSquared(headPos) < camera.position.distanceToSquared(headPos);
   camera.position.lerp(_camDesired, 1 - Math.pow(closing ? 0.000000001 : 0.0001, dt));
-  _camLook.copy(headPos).addScaledVector(Player.aim, 10);
+  _camLook.copy(headPos).addScaledVector(Player.aim, CAM_LOOK_AHEAD);
   camera.lookAt(_camLook);
 
   // trauma-based shake: intensity is trauma SQUARED, so hits punch and then
@@ -4558,7 +4642,8 @@ function updatePlayer(dt, t) {
 
   // FOV: sprint stretch plus a decaying punch from beams, novas and hits
   Player._fovPunch = Math.max(0, (Player._fovPunch || 0) - dt * 14);
-  const targetFov = (sprinting ? C.sprintFov : C.fov) + Player._fovPunch;
+  const targetFov = THREE.MathUtils.lerp(sprinting ? C.sprintFov : C.fov, C.focusFov, Player.focusT)
+                  + Player._fovPunch;
   if (Math.abs(camera.fov - targetFov) > 0.05) {
     camera.fov += (targetFov - camera.fov) * (1 - Math.pow(0.005, dt));
     camera.updateProjectionMatrix();
@@ -4937,9 +5022,19 @@ function updateHose(dt) {
     sprayHeldTime += dt;
     if (sprayHeldTime > 0.4) Tutorial.fire('firstSpray');
 
-    // spawn spray particles from the muzzle along the aim — a tight, fast,
-    // dense cone that reads as a high-pressure jet
     const nozzle = nozzleWorldPos(_v1);
+    // Resolve the aim ONCE, before anything uses it: `AX` is the direction
+    // under the crosshair, `hits` is what it found, and `_jetDir` points from
+    // the barrel at that spot. Reticle, water and damage therefore agree at
+    // every distance — see the aimAxis() note above.
+    const NZ = Nozzle();
+    const AX = aimAxis();
+    const hits = aimTarget(NZ.range * RPG.reachMul() + 6); // lens sits ~5.4 behind Jax
+    _jetDir.subVectors(_aimPoint, nozzle);
+    if (_jetDir.lengthSq() < 1e-6) _jetDir.copy(AX); else _jetDir.normalize();
+
+    // spawn spray particles from the muzzle along the jet — a tight, fast,
+    // dense cone that reads as a high-pressure stream
     HoseFX.muzzle.position.copy(nozzle);
     HoseFX.muzzle.material.opacity = 0.5 + 0.4 * Math.random(); // flicker at the barrel
     HoseFX.muzzle.scale.setScalar(0.6 + 0.25 * Math.random());
@@ -4948,11 +5043,11 @@ function updateHose(dt) {
       sprayAccum -= 1;
       const i = HoseFX.idx = (HoseFX.idx + 1) % HoseFX.N;
       // start just ahead of the muzzle so the stream reads as continuous
-      HoseFX.pos[i * 3] = nozzle.x + Player.aim.x * 0.2;
-      HoseFX.pos[i * 3 + 1] = nozzle.y + Player.aim.y * 0.2;
-      HoseFX.pos[i * 3 + 2] = nozzle.z + Player.aim.z * 0.2;
+      HoseFX.pos[i * 3] = nozzle.x + _jetDir.x * 0.2;
+      HoseFX.pos[i * 3 + 1] = nozzle.y + _jetDir.y * 0.2;
+      HoseFX.pos[i * 3 + 2] = nozzle.z + _jetDir.z * 0.2;
       const spread = Nozzle().spread; // tight for JET/LANCE, blooming for BLAST
-      HoseFX.vel[i].copy(Player.aim).multiplyScalar(Nozzle().speed)
+      HoseFX.vel[i].copy(_jetDir).multiplyScalar(Nozzle().speed)
         .add(_v2.set((Math.random() - 0.5) * spread, (Math.random() - 0.4) * spread, (Math.random() - 0.5) * spread));
       HoseFX.life[i] = 0.6;
     }
@@ -4972,18 +5067,15 @@ function updateHose(dt) {
     }
     Player._boosting = Math.max(0, (Player._boosting || 0) - dt);
 
-    // the actual cleaning: ray from the camera through the crosshair
-    const NZ = Nozzle();
+    // the actual cleaning: everything below measures against AX, the axis the
+    // crosshair defines, so "it looked like a hit" and "it was a hit" agree
     const power = CFG.hose.dps * NZ.dps * RPG.hoseMul() * Hype.dmgMul() * Perks.hoseMul();
-    raycaster.set(camera.position, Player.aim);
-    raycaster.far = NZ.range * RPG.reachMul() + 6; // camera sits ~5.4 behind the player
-    const hits = raycaster.intersectObjects(cleanTargets, false);
     HoseFX.lastHits = hits.length; HoseFX.lastMode = NZ.key; // debug readout
     HoseFX.lastEntity = hits.length ? ((hits[0].object.userData.entity || {}).constructor || {}).name || 'none' : null;
     HoseFX.lastHitDist = hits.length ? +hits[0].distance.toFixed(1) : -1;
     HoseFX.lastCore = hits.length ? !!hits[0].object.userData.core : false;
     // ride the jet light out to whatever the water is hitting (or ~3m ahead)
-    HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(Player.aim, 3));
+    HoseFX.light.position.copy(hits.length ? hits[0].point : _v2.copy(nozzle).addScaledVector(AX, 3));
     HoseFX.light.intensity = 1.7 + (Settings.reduceMotion ? 0 : Math.random() * 0.5);
 
     if (NZ.key === 'blast') {
@@ -5000,7 +5092,7 @@ function updateHose(dt) {
           const d = _v2.length();
           const blastRange = NZ.range * Perks.blastMul();
           if (d > blastRange || d < 0.01) continue;
-          if (_v2.dot(Player.aim) / d < BLAST_COS / Perks.blastMul()) continue;
+          if (_v2.dot(AX) / d < BLAST_COS / Perks.blastMul()) continue;
           const falloff = 1 - 0.5 * (d / blastRange);
           tgt.clean(power * falloff * dt, tgt.group.position);
           if (tgt.push) { tgt.push(dt * 1.35); if (tgt.stun && Math.random() < dt * 1.6) tgt.stun(0.35); }
@@ -5011,7 +5103,7 @@ function updateHose(dt) {
       if (boss && boss.alive) { // the beast is one big target, not in those lists
         for (const tn of boss.tentacles) {
           _v2.subVectors(tn.tip, nozzle); const d = _v2.length();
-          if (d < NZ.range && d > 0.01 && _v2.dot(Player.aim) / d >= BLAST_COS) { tn.clean(power * dt, tn.tip); any = true; }
+          if (d < NZ.range && d > 0.01 && _v2.dot(AX) / d >= BLAST_COS) { tn.clean(power * dt, tn.tip); any = true; }
         }
       }
       if (any) { Meters.rainbow = Math.min(100, Meters.rainbow + RAINBOW_FILL * dt); hitPulse = 1; }
@@ -5072,7 +5164,7 @@ function updateHose(dt) {
           const gp = tgt.group.position;
           _v2.subVectors(gp, camera.position);
           _v2.y += tgt.aimY ?? 0.9; // flat targets (grime, splats) aim at deck level
-          const along = _v2.dot(Player.aim);
+          const along = _v2.dot(AX);
           if (along < 1 || along > NZ.range + 4) continue;
           const off2 = _v2.lengthSq() - along * along;
           if (off2 < bestOff) { bestOff = off2; assisted = tgt; }
@@ -5096,7 +5188,7 @@ function updateHose(dt) {
           const gp = tgt.group.position;
           _v2.subVectors(gp, camera.position);
           _v2.y += tgt.aimY ?? 0.9; // aim at the target's body, not its feet
-          const along = _v2.dot(Player.aim);
+          const along = _v2.dot(AX);
           if (along < 1 || along > NZ.range + 4) continue;
           if (_v2.lengthSq() - along * along > 3.2) continue; // ~1.8m off-axis fan
           tgt.clean(CFG.hose.dps * RPG.hoseMul() * Hype.dmgMul() * 0.55 * dt, gp);
@@ -5104,12 +5196,12 @@ function updateHose(dt) {
         }
       }
     }
-    if (!hits.length && Player.aim.y < -0.05) {
+    if (!hits.length && AX.y < -0.05) {
       // no target: the water hits the planks — splash, and leave them slick
       // (wet patches are the zombie slip-trap, see the wharf-toys section)
-      const tGround = (camera.position.y - 0.05) / -Player.aim.y;
+      const tGround = (camera.position.y - 0.05) / -AX.y;
       if (tGround < NZ.range + 6) {
-        _v2.copy(camera.position).addScaledVector(Player.aim, tGround);
+        _v2.copy(camera.position).addScaledVector(AX, tGround);
         if (Math.random() < dt * 10) spawnSplash(_v2);
         if (Math.random() < dt * 5) spawnWetPatch(_v2);
       }
@@ -5119,12 +5211,12 @@ function updateHose(dt) {
     for (const b of physBodies) {
       _v2.subVectors(b.g.position, nozzle);
       _v2.y += b.aimY; // offset to the prop's middle (0 for center-origin bodies)
-      const along = _v2.dot(Player.aim);
+      const along = _v2.dot(AX);
       if (along < 0.5 || along > NZ.range) continue;
       const off2 = _v2.lengthSq() - along * along; // squared distance off the jet axis
       if (off2 > 0.55) continue;
       const kick = 30 * (1 - along / NZ.range) * dt / b.mass;
-      b.vel.addScaledVector(Player.aim, kick);
+      b.vel.addScaledVector(AX, kick);
       b.vel.y += kick * 0.45; // pressure lifts as it shoves
       b.angVel.x += (Math.random() - 0.5) * kick * 6;
       b.angVel.z += (Math.random() - 0.5) * kick * 6;
@@ -5133,7 +5225,7 @@ function updateHose(dt) {
     // too heavy to launch, but the jet rocks the abandoned cars on their springs
     for (const c of cars) {
       _v2.subVectors(c.mesh.position, nozzle);
-      const along = _v2.dot(Player.aim);
+      const along = _v2.dot(AX);
       if (along < 0.5 || along > NZ.range) continue;
       if (_v2.lengthSq() - along * along > 2.6) continue;
       c.rockV += 4.5 * dt * Math.sign(Math.random() - 0.3);
@@ -5152,7 +5244,7 @@ function updateHose(dt) {
   targetSenseT -= dt;
   if (targetSenseT <= 0) {
     targetSenseT = 0.08;
-    raycaster.set(camera.position, Player.aim);
+    raycaster.set(camera.position, aimAxis());
     raycaster.far = CFG.hose.range + 6;
     const ts = Game.state === 'playing' ? raycaster.intersectObjects(cleanTargets, false) : [];
     let on = false, core = false;
@@ -5161,6 +5253,7 @@ function updateHose(dt) {
       if (!e || e.alive === false || e.resolved) continue;
       on = true; core = !!h.object.userData.core; break;
     }
+    crosshairEl.classList.toggle('focused', Player.focusT > 0.5);
     if (on !== crosshairOnTarget || core !== crosshairOnCore) {
       crosshairOnTarget = on; crosshairOnCore = core;
       crosshairEl.classList.toggle('onTarget', on && !core);
@@ -5198,7 +5291,8 @@ function updateBeam(dt) {
       SFX.beam();
       Tutorial.fire('firstBeam');
 
-      raycaster.set(camera.position, Player.aim);
+      const BX = aimAxis();
+      raycaster.set(camera.position, BX);
       raycaster.far = CFG.beam.range + 6;
       const hits = raycaster.intersectObjects(cleanTargets, false);
       const nozzle = nozzleWorldPos(_v1.clone());
@@ -5228,7 +5322,7 @@ function updateBeam(dt) {
             if (!tgt || tgt.resolved || tgt.alive === false) continue;
             _v2.subVectors(tgt.group.position, camera.position);
             _v2.y += tgt.aimY ?? 0.9;
-            const along = _v2.dot(Player.aim);
+            const along = _v2.dot(BX);
             if (along < 1 || along > CFG.beam.range) continue;
             const off2 = _v2.lengthSq() - along * along;
             if (off2 < bestOff) { bestOff = off2; graze = tgt; }
@@ -5989,10 +6083,21 @@ function pollGamepad() {
   const gp = (navigator.getGamepads && navigator.getGamepads()[0]) || null;
   Input.gpSpray = false; Input.gpSprint = false; Input.gpX = 0; Input.gpY = 0;
   if (!gp || !gp.connected) return;
-  const dz = v => (Math.abs(v || 0) > 0.16 ? v : 0);
+  // Sticks are not mice. A raw axis with a fat deadzone is twitchy at the edge
+  // and useless for the small corrections a weak point needs, so the look axes
+  // get a proper response curve: a small deadzone to kill drift, then the
+  // remainder re-normalised and raised to a power, which buys fine control near
+  // centre while keeping full speed available at full deflection.
+  const DZ = 0.07, CURVE = 2.4;
+  const curve = (v) => {
+    const a = Math.abs(v || 0);
+    if (a <= DZ) return 0;
+    return Math.sign(v) * Math.pow((a - DZ) / (1 - DZ), CURVE);
+  };
+  const dz = v => (Math.abs(v || 0) > 0.16 ? v : 0);   // movement stick: plain
   Input.gpX = dz(gp.axes[0]); Input.gpY = dz(gp.axes[1]);
-  Input.lookDX += dz(gp.axes[2]) * 16;
-  Input.lookDY += dz(gp.axes[3]) * 12;
+  Input.lookDX += curve(gp.axes[2]) * 26;
+  Input.lookDY += curve(gp.axes[3]) * 19;
   const down = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
   Input.gpSpray = down(7) || down(0);
   Input.gpSprint = down(10);
@@ -6001,6 +6106,7 @@ function pollGamepad() {
   edge(3, () => Input.novaPressed = true);
   edge(1, () => Input.jumpPressed = true);
   edge(5, () => Input.pingPressed = true);
+  Input.gpFocus = down(6); // L2: brace for a precise shot
   edge(9, () => { if (Game.state === 'intro') introSkip = true; else togglePause(); });
   edge(8, () => toggleSkillPanel());
 }
@@ -6491,10 +6597,42 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   getZombies: () => zombies,
   getFrames: () => _frameCount,
   camera,
-  aimAt: (tx, ty, tz) => { // point the player's aim from the camera toward a world point
-    const d = new THREE.Vector3(tx, ty, tz).sub(camera.position).normalize();
-    Player.yaw = Math.atan2(d.x, d.z); Player.pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1));
+  // Put the CROSSHAIR on a world point. "Aim at this" has to mean the reticle,
+  // not Player.aim — the camera is a spring arm parked behind one shoulder, so
+  // its forward and Player.aim are 2.5 degrees apart (see aimAxis). This closes
+  // the loop on the angular error between camera-forward and camera->target,
+  // which converges in two or three frames and needs to know nothing about the
+  // rig's geometry. Call it once per frame while settling, as the suites do.
+  aimAt: (tx, ty, tz) => {
+    const want = new THREE.Vector3(tx, ty, tz).sub(camera.position);
+    if (want.lengthSq() < 1e-8) return;
+    want.normalize();
+    const have = new THREE.Vector3(), test = new THREE.Vector3();
+    // Six Newton-ish steps against reticleDirFor(): each one nudges yaw/pitch
+    // by the angular error between where the reticle would point and where we
+    // want it, recomputing without advancing the sim. Converges to well under
+    // a pixel, so a caller can aim and fire in the same frame.
+    for (let i = 0; i < 6; i++) {
+      const cp = Math.cos(Player.pitch);
+      test.set(Math.sin(Player.yaw) * cp, Math.sin(Player.pitch), Math.cos(Player.yaw) * cp);
+      reticleDirFor(test, have);
+      let dYaw = Math.atan2(want.x, want.z) - Math.atan2(have.x, have.z);
+      dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+      const dPitch = Math.asin(THREE.MathUtils.clamp(want.y, -1, 1))
+                   - Math.asin(THREE.MathUtils.clamp(have.y, -1, 1));
+      Player.yaw += dYaw;
+      Player.pitch = THREE.MathUtils.clamp(Player.pitch + dPitch, -0.9, 0.7);
+      if (Math.abs(dYaw) < 1e-5 && Math.abs(dPitch) < 1e-5) break;
+    }
+    const cp = Math.cos(Player.pitch);
+    Player.aim.set(Math.sin(Player.yaw) * cp, Math.sin(Player.pitch), Math.cos(Player.yaw) * cp);
+    // and make the live camera agree, so a same-frame raycast is truthful
+    reticleDirFor(Player.aim, _retLook);
+    camera.lookAt(_retLook.multiplyScalar(1000).add(camera.position));
+    camera.updateMatrixWorld(true);
   },
+  aimAxis: () => aimAxis().clone(),
+  aimTarget: (r) => { aimTarget(r); return _aimPoint.clone(); },
   // deterministic single-frame advance for headless testing, where the browser
   // throttles requestAnimationFrame. Runs the same updates as the 'playing' tick.
   // Advances its own time accumulator so `t`-driven animation (sway, breathe,
@@ -6526,6 +6664,9 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 17 aim: one truthful axis, focus mode, stick curve
+  reticleDirFor, CAM_LOOK_AHEAD, getJetDir: () => _jetDir.clone(),
+  getFocus: () => Player.focusT,
   // BUILD 16 progression + damage readout + the cleansed
   cleansed, spawnCleansed, updateCleansed, CLEANSED,
   SKILLS, maxPressure, showHitReadout, HIT_LABEL,

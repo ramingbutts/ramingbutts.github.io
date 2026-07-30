@@ -1326,3 +1326,93 @@ orbiting weak point, so whether the ray found the core on any one frame
 was chance. Twenty frames makes "did it ever crit" the claim instead of
 "did it crit immediately". A test that depends on a moving target being in
 the right place needs a window, not an instant.
+
+## The crosshair was lying (BUILD 17)
+
+"Improve the aim" turned out to have a measurable, specific answer.
+
+The reticle is drawn at screen centre. The camera is a spring arm parked
+*behind and off to one shoulder*, pointed with `lookAt(head + aim*10)`. The
+damage ray was cast from the lens along `Player.aim`. Those are three
+different things, and the consequences were exact:
+
+- Screen centre coincided with `Player.aim` at **exactly 10 m** — the boom's
+  convergence distance — and nowhere else.
+- The damage ray never matched screen centre at all: a constant **2.5°,
+  23 px at 720p**, at every range.
+- The water left the muzzle along `Player.aim` too, so the stream and the
+  damage agreed with each other and both disagreed with the reticle.
+
+So: **the crosshair is the contract.** `aimAxis()` returns the camera's true
+world forward, which is by definition the direction under the reticle.
+Everything that decides what you *hit* uses it. `aimTarget()` resolves the
+point that ray lands on, and the jet is then thrown from the muzzle at that
+point — so reticle, water and damage converge on the same pixel at any
+distance. Measured after: **0 px at 4, 9, 16 and 22 m.**
+
+`Player.aim` survives as the *look* vector. It drives the camera boom and
+the jet-boost thrust, and boost deliberately keeps using it rather than the
+jet axis: thrust should follow where you are pointing, not jitter as targets
+drift through the stream.
+
+### The beam had the same split brain
+
+Its ray had been switched to the new axis but its graze test still projected
+along `Player.aim`, so an off-aim beam measured its miss distance against the
+wrong line. One axis per weapon, resolved once at the top — the shape the
+hose now uses.
+
+### `aimAt` had to be rebuilt, and that is the tell
+
+Nine checks failed the moment the axis changed, all for the same reason: the
+test helper set yaw/pitch so `Player.aim` pointed at a target, which no
+longer means "the reticle covers it". That the helper needed rewriting *is*
+the evidence the old aim was wrong.
+
+It now closes the loop on the reticle: correct yaw/pitch by the angular error
+between where the crosshair would point and where you want it, iterating six
+times against `reticleDirFor()` — the rig relation extracted into one
+function so the camera and the solver cannot drift apart. Converges to well
+under a pixel without advancing a frame, so a caller can aim and fire in the
+same tick.
+
+### FOCUS, and why the first framing was backwards
+
+A weak point is a 0.17 m orb; tracking one at 15 m through a 70° lens is a
+coin flip. Hold Z / middle-click / L2 to brace: FOV 70 → 46, look speed
+×0.45, boom eased in, reticle tightens. No damage change — it is an aiming
+aid, and the test asserts that explicitly.
+
+The first attempt pulled the boom hard in (`focusPull: 1.6`) and moved the
+lens *toward* centre. The screenshot showed the result immediately: Jax
+filled the frame and eclipsed the target. Braced aiming wants the clearest
+sight line, not the tightest framing, so focus now leans **further** off the
+shoulder (+0.42) and rises slightly, and pulls in only a little.
+
+### Sensitivity has to track the lens
+
+Sprint stretches the FOV to 78 and focus narrows it to 46. Without
+compensation the same wrist movement swept a different arc in each, which is
+the usual reason a zoom "feels wrong". Look speed is now scaled by
+`tan(fov/2)`, so a given input sweeps a constant *fraction of the view*.
+Measured across the sprint change: 0.847 vs 0.874 of the view — and focus
+then applies its 0.45× on top, deliberately.
+
+### Sticks are not mice
+
+The pad had a raw axis with a 0.16 deadzone: twitchy at full deflection,
+useless for the small corrections a weak point needs. The look axes now get a
+0.07 deadzone, the remainder re-normalised and raised to 2.4 — a quarter
+deflection moves at 1.9% of full speed instead of 25%, while full deflection
+still reaches 100%.
+
+### Three flaky checks, all the same root cause
+
+Isolating a damage measurement now means removing the weak point from
+`cleanTargets` first. A core orbits, so a ten-frame damage sample is a coin
+flip between body damage and a 3× crit — which swamped whatever the test was
+actually about (twice: focus-buys-no-damage, and BLAST-cannot-crit). The
+jelly check had a different version of the same disease: it never refilled
+pressure, so it was sometimes measuring an empty tank rather than jelly.
+And "wave 7 contains a runner or a brute" became a dice roll the moment
+BUILD 15 gave the picker six kinds to choose from.
