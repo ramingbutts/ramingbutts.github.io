@@ -625,6 +625,98 @@ function setupTouch() {
   bindBtn('btnPing', () => Input.pingPressed = true);
 }
 
+/* ---------------------------------------------------------------------
+   THE BUILD STAMP AND THE REPORT (BUILD 18)
+
+   Six builds went out verified only by tests I wrote and screenshots from a
+   software renderer in a sandbox. Nobody ever measured the machine the game
+   is actually played on, and there was no way for a player to tell me what
+   they were seeing — or even to confirm which build they had. Both of those
+   are fixed here, because no amount of design work matters if it never
+   reaches the player or lands at 15fps.
+   --------------------------------------------------------------------- */
+const BUILD = 18;
+
+// Real frame timing, always collected — not the optional on-screen counter.
+// Percentiles, not an average: an average of 60 and 20 reads as "fine", and
+// what actually ruins a game is the slow 1 frame in 10.
+const Perf = {
+  frames: [], max: 900, worstDraw: 0, worstTris: 0,
+  sample(ms, info) {
+    if (this.frames.length >= this.max) this.frames.shift();
+    this.frames.push(ms);
+    if (info) {
+      this.worstDraw = Math.max(this.worstDraw, info.calls);
+      this.worstTris = Math.max(this.worstTris, info.triangles);
+    }
+  },
+  pct(p) {
+    if (!this.frames.length) return 0;
+    const a = [...this.frames].sort((x, y) => x - y);
+    return a[Math.min(a.length - 1, Math.floor(a.length * p))];
+  },
+  fps(p) { const ms = this.pct(p); return ms > 0 ? Math.round(1000 / ms) : 0; },
+  reset() { this.frames.length = 0; this.worstDraw = 0; this.worstTris = 0; },
+};
+
+// The GPU string is the single most useful fact about a player's machine and
+// the game has never once looked at it.
+function gpuName() {
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (ext) return gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+    return gl.getParameter(gl.RENDERER);
+  } catch (e) { return 'unavailable'; }
+}
+
+function buildReport() {
+  const L = [];
+  const add = (k, v) => L.push(k.padEnd(16) + v);
+  add('build', 'Level 2 BUILD ' + BUILD);
+  add('url', location.href);
+  add('when', new Date().toISOString());
+  add('screen', `${innerWidth}x${innerHeight} @ dpr ${devicePixelRatio}`);
+  add('gpu', gpuName());
+  add('ua', navigator.userAgent);
+  L.push('');
+  add('fps median', Perf.fps(0.5) + ' fps  (' + Perf.pct(0.5).toFixed(1) + ' ms)');
+  add('fps 1% low', Perf.fps(0.99) + ' fps  (' + Perf.pct(0.99).toFixed(1) + ' ms)  <- the one that matters');
+  add('frames seen', Perf.frames.length);
+  add('draw calls', 'peak ' + Perf.worstDraw);
+  add('triangles', 'peak ' + Perf.worstTris.toLocaleString());
+  add('quality', Settings.quality + ' (running: ' + activeTier() + ')');
+  L.push('');
+  add('state', Game.state + (Rush.on ? ' · RUSH wave ' + Rush.wave : ''));
+  add('progress', `${Game.pilesCleaned}/${Game.totalPiles} piles · ` +
+      `${Game.zombiesDefeated}/${Game.totalZombies} freed · ${Game.civSaved}/${Game.civTotal} sea lions`);
+  add('level', `LV ${RPG.level} · ${RPG.points} unspent · ranks ` + JSON.stringify(RPG.ranks));
+  add('live', `${zombies.filter(z => z.alive).length} enemies · ${piles.filter(p => p.alive).length} piles · ` +
+      `${cleanTargets.length} ray targets · ${scene.children.length} scene children`);
+  add('3d characters', !Settings.models ? 'OFF (primitive rig)'
+      : !modelsActive() ? 'ON but inactive (low quality tier)'
+      : `ON — jax:${modelStatus.jax} zombie:${modelStatus.zombie}` +
+        (modelStatus.jax === 'failed' || modelStatus.zombie === 'failed'
+          ? '   <<< MODELS FAILED TO LOAD — you are seeing the primitive block rig' : ''));
+  add('settings', JSON.stringify({ sens: Settings.sens, difficulty: Settings.difficulty,
+      music: Settings.music, reduceMotion: Settings.reduceMotion }));
+  L.push('');
+  const errs = (window.__ujErrors || []);
+  add('js errors', errs.length ? String(errs.length) : 'none');
+  for (const e of errs.slice(-8)) L.push('  ! ' + e);
+  return L.join('\n');
+}
+
+// catch everything, from the very first line, so the report can show it
+window.__ujErrors = window.__ujErrors || [];
+addEventListener('error', e => {
+  window.__ujErrors.push((e.message || 'error') + ' @ ' +
+    (e.filename || '?').split('/').pop() + ':' + (e.lineno || '?'));
+});
+addEventListener('unhandledrejection', e => {
+  window.__ujErrors.push('unhandled promise: ' + (e.reason && e.reason.message || e.reason));
+});
+
 /* =====================================================================
    3. RENDERER, SCENE, FOG
    ===================================================================== */
@@ -645,6 +737,7 @@ function grabPointer() {
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); // clamp for mid-range GPUs
 renderer.setSize(innerWidth, innerHeight);
+renderer.info.autoReset = false; // the frame owns the counters — see tick()
 renderer.toneMapping = THREE.ACESFilmicToneMapping; // filmic response, cinematic highlights
 renderer.toneMappingExposure = 0.98; // pulled back from 1.15 to recover highlight detail
 renderer.shadowMap.enabled = true;
@@ -3186,27 +3279,37 @@ function computeGunNozzle(wrap) {
 
 // try the vendored local file first, fall back to the CDN, then give up quietly
 // (the improved primitive rig stays on). onLoad only fires on success.
-function loadModelWithFallback(spec, label, onLoad) {
+// The 3D characters live on a CDN with no vendored copy in the repo. If that
+// fetch fails — offline, blocked, dead link — the game quietly drops to the
+// primitive block rig while the menu still cheerfully reads "CHARACTERS: 3D".
+// A player would see a visibly worse game and be told nothing. Record the
+// outcome so the UI and the diagnostic report can both say what happened.
+const modelStatus = { jax: 'loading', zombie: 'loading' };
+function loadModelWithFallback(spec, label, key, onLoad) {
   gltfLoader.load(spec.local,
-    gltf => { console.info(`${label}: loaded vendored ${spec.local}`); onLoad(gltf); },
+    gltf => { modelStatus[key] = 'local'; console.info(`${label}: loaded vendored ${spec.local}`); onLoad(gltf); },
     undefined,
     () => gltfLoader.load(spec.url,
-      gltf => { console.info(`${label}: loaded from CDN (no local copy)`); onLoad(gltf); },
+      gltf => { modelStatus[key] = 'cdn'; console.info(`${label}: loaded from CDN (no local copy)`); onLoad(gltf); },
       undefined,
-      () => console.info(`${label}: no local or CDN model — primitive rig stays on`)));
+      () => {
+        modelStatus[key] = 'failed';
+        console.warn(`${label}: no local or CDN model — primitive rig stays on`);
+        applyModelSetting();   // repaint the menu so it stops claiming 3D
+      }));
 }
 
 function loadCharacterModels() {
   if (modelsLoadStarted || MODELS.jax.url.startsWith('MODEL_URL')) return;
   modelsLoadStarted = true;
-  loadModelWithFallback(MODELS.jax, 'Jax', gltf => {
+  loadModelWithFallback(MODELS.jax, 'Jax', 'jax', gltf => {
     Player.glbVisual = normalizeModel(gltf.scene, MODELS.jax);
     Player.group.add(Player.glbVisual);
     computeGunNozzle(Player.glbVisual); // place the muzzle at the measured barrel tip
     if (Player.hasHorn) { Player.horn.visible = false; Player.hornRing.visible = false; }
     applyModelSetting();
   });
-  loadModelWithFallback(MODELS.zombie, 'Zombie', gltf => {
+  loadModelWithFallback(MODELS.zombie, 'Zombie', 'zombie', gltf => {
     zombieProto = { scene: gltf.scene, spec: MODELS.zombie };
     for (const z of zombies) if (z.alive) z.applyModel();
     applyModelSetting();
@@ -6036,7 +6139,11 @@ function refreshSettingsUI() {
     Settings.quality.toUpperCase() + (Settings.quality === 'auto' ? ' · ' + autoTier.toUpperCase() : '');
   document.getElementById('setMotion').textContent = Settings.reduceMotion ? 'ON' : 'OFF';
   document.getElementById('setFps').textContent = Settings.showFps ? 'ON' : 'OFF';
-  document.getElementById('setModels').textContent = Settings.models ? '3D' : 'CLASSIC';
+  // say the truth, not the setting: if the GLBs never arrived the player is
+  // looking at the block rig regardless of what this toggle is set to
+  const modelsBroken = modelStatus.jax === 'failed' && modelStatus.zombie === 'failed';
+  document.getElementById('setModels').textContent =
+    !Settings.models ? 'CLASSIC' : modelsBroken ? '3D — UNAVAILABLE' : '3D';
   fpsEl.style.display = Settings.showFps ? 'block' : 'none';
 }
 
@@ -6526,6 +6633,22 @@ buildSkillPanel();
 // settings menu wiring
 document.getElementById('gearBtn').addEventListener('click', () => togglePause());
 document.getElementById('pauseResume').addEventListener('click', () => togglePause(false));
+document.getElementById('copyReport').addEventListener('click', async (e) => {
+  const txt = buildReport();
+  const btn = e.currentTarget;
+  try {
+    await navigator.clipboard.writeText(txt);
+    btn.textContent = '✓ COPIED — PASTE IT TO ME';
+  } catch (err) {
+    // clipboard blocked (insecure context, permissions): show it instead so it
+    // can still be selected by hand — the report must never be unreachable
+    const box = document.getElementById('reportBox');
+    box.value = txt; box.classList.remove('hidden'); box.select();
+    btn.textContent = 'SELECT ALL AND COPY ↑';
+  }
+  Diag && Diag.log && Diag.log('report', 'diagnostic copied');
+  setTimeout(() => { btn.textContent = '📋 COPY DIAGNOSTIC REPORT'; }, 4000);
+});
 document.getElementById('pauseRestart').addEventListener('click', () => location.reload());
 document.getElementById('setVol').addEventListener('input', e => {
   Settings.volume = +e.target.value; saveSettings(); applySettings();
@@ -6664,6 +6787,8 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts
+  // BUILD 18 the feedback loop
+  BUILD, Perf, buildReport, gpuName, modelStatus,
   // BUILD 17 aim: one truthful axis, focus mode, stick curve
   reticleDirFor, CAM_LOOK_AHEAD, getJetDir: () => _jetDir.clone(),
   getFocus: () => Player.focusT,
@@ -6803,12 +6928,28 @@ function tick() {
     }
   }
 
+  // renderer.info resets itself per render() call, and EffectComposer calls
+  // render() once per pass — so reading it afterwards reports the last pass
+  // (one fullscreen quad) and nothing else. Turn the auto-reset off, clear it
+  // ourselves before the frame, and the counters accumulate across every pass
+  // into a real total. Without this the report would have quoted "1 draw call"
+  // to a player whose machine was drowning in twelve hundred.
+  renderer.info.reset();
   simulate(Math.min(rawDt, 0.05), t);
   composer.render();
+  if (_frameCount > 10) Perf.sample(rawDt * 1000, renderer.info.render);
 }
 tick();
 
 // the shell shows LOADING… until this module is evaluated
+// stamp the running build everywhere it can be read without opening a console
+for (const el of document.querySelectorAll('.chip')) {
+  if (/BUILD/.test(el.textContent)) el.textContent = el.textContent.replace(/BUILD \d+/, 'BUILD ' + BUILD);
+}
+document.getElementById('buildStamp').textContent = 'BUILD ' + BUILD;
+console.info('%cUnicorn Janitor — Level 2 BUILD ' + BUILD,
+  'background:#2a1a4a;color:#ffd94f;padding:3px 8px;border-radius:4px;font-weight:700');
+
 const _sb = document.getElementById('startBtn');
 _sb.disabled = false;
 _sb.textContent = 'WAKE UP, JAX';

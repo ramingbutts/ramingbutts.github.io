@@ -1811,6 +1811,68 @@ ok('the look stick has a real response curve: fine near centre, full at the edge
    `curve ${stick.pts.join(' → ')} · a quarter-deflection moves at ${(stick.fineAtQuarter * 100).toFixed(1)}% ` +
    `of full speed (linear would be 25%), and full deflection still reaches 100%`);
 
+/* =====================================================================
+   BUILD 18 — THE FEEDBACK LOOP
+   Six builds shipped verified only by tests I wrote and screenshots from a
+   software renderer. Nothing ever measured the machine the game is played
+   on, and a player had no way to tell me what they saw — or even which
+   build they had. These guard the fix.
+   ===================================================================== */
+
+// B18a. The running build is stamped where it can be read without a console,
+// and the script is cache-busted so a deploy cannot be swallowed silently
+const stamp = await page.evaluate(() => {
+  const el = document.getElementById('buildStamp');
+  const chips = [...document.querySelectorAll('.chip')].map(c => c.textContent).filter(t => /BUILD/.test(t));
+  const src = [...document.querySelectorAll('script[src], link[rel=modulepreload]')]
+    .map(n => n.src || n.href).filter(u => /level2\.js/.test(u));
+  return { BUILD: window.UJ.BUILD, stamp: el && el.textContent,
+           visible: el && getComputedStyle(el).display !== 'none',
+           chips, busted: src.every(u => /\?v=\d+/.test(u)), src };
+});
+ok('the running build is stamped on screen, and the script is cache-busted',
+   stamp.stamp === 'BUILD ' + stamp.BUILD && stamp.visible &&
+   stamp.chips.every(c => c.includes('BUILD ' + stamp.BUILD)) &&
+   stamp.busted && stamp.src.length > 0,
+   `stamp reads "${stamp.stamp}" and the title chip agrees · ` +
+   `${stamp.src.length} reference(s) to level2.js, all version-tagged`);
+
+// B18b. The report carries the things I actually need and cannot otherwise
+// see: the real GPU, percentile framerate, and any errors
+const report = await page.evaluate(() => {
+  const UJ = window.UJ;
+  UJ.Perf.reset();
+  // feed it a deliberately uneven frame history: a mean would call this fine,
+  // and the 1% low is the number that says it is not
+  for (let i = 0; i < 200; i++) UJ.Perf.sample(i % 10 === 0 ? 60 : 16.7, { calls: 900 + i, triangles: 50000 });
+  const txt = UJ.buildReport();
+  return { txt, gpu: UJ.gpuName(),
+           median: UJ.Perf.fps(0.5), low: UJ.Perf.fps(0.99),
+           has: ['build', 'gpu', 'fps median', 'fps 1% low', 'draw calls', 'quality',
+                 'js errors', 'ua'].filter(k => txt.includes(k)) };
+});
+ok('the diagnostic report carries the GPU, percentile framerate and errors',
+   report.has.length === 8 && report.txt.length > 400 &&
+   report.median > report.low * 1.5 && report.gpu && report.gpu !== 'unavailable',
+   `report covers ${report.has.length}/8 required fields · GPU read as "${report.gpu}" · ` +
+   `on a deliberately uneven history it reports ${report.median} fps median but ` +
+   `${report.low} fps at the 1% low — which an average would have hidden`);
+
+// B18c. Errors are captured from the very first line, and surface in the report
+const errs = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const before = (window.__ujErrors || []).length;
+  dispatchEvent(new ErrorEvent('error', { message: 'synthetic probe failure',
+    filename: 'https://example/level2.js', lineno: 42 }));
+  const txt = UJ.buildReport();
+  window.__ujErrors.length = before;   // tidy up
+  return { captured: txt.includes('synthetic probe failure'),
+           counted: /js errors\s+\d/.test(txt) };
+});
+ok('runtime errors are captured and show up in the report',
+   errs.captured && errs.counted,
+   'a synthetic window error was caught by the global handler and listed in the report body');
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;

@@ -249,6 +249,14 @@
   #hitReadout.mid   { color:#ff9e6a; }
   #hitReadout.heavy { color:#ff5f6e; }
   #hitReadout.heavy b { font-size:32px; }
+  /* Always visible, deliberately: neither of us could previously tell which
+     build was actually running in the browser. */
+  #buildStamp { position:absolute; left:10px; bottom:8px; font-size:10px; letter-spacing:2px;
+                color:rgba(255,255,255,.32); text-shadow:0 1px 2px #000; pointer-events:none; }
+  #reportBox { width:min(520px,88vw); height:150px; margin-top:8px; font-size:11px;
+               font-family:monospace; background:rgba(10,6,20,.9); color:#cfe9ff;
+               border:1px solid rgba(159,220,255,.4); border-radius:8px; padding:8px;
+               pointer-events:auto; }
   #dmgFlash { position:absolute; inset:0; background:radial-gradient(ellipse at center, transparent 40%, rgba(255,30,60,.55));
               opacity:0; }
   #resumeHint { position:absolute; left:50%; top:60%; transform:translateX(-50%); color:#fff;
@@ -324,6 +332,7 @@
   <div id="hitReadout"></div>
   <div id="dmgFlash"></div>
   <div id="fpsMeter" style="position:absolute; left:50%; bottom:8px; transform:translateX(-50%); display:none; color:#9fffcf; font-size:12px; font-family:monospace; text-shadow:0 1px 3px #000; letter-spacing:1px;"></div>
+  <div id="buildStamp"></div>
   <div id="resumeHint" class="hidden">Click to resume</div>
 </div>
 <div id="cineTop"></div><div id="cineBot"></div>
@@ -395,6 +404,11 @@
   <div class="setRow"><span>FPS COUNTER</span><button class="tog" id="setFps">OFF</button></div>
   <div class="setRow"><span>CHARACTERS</span><button class="tog" id="setModels">3D</button></div>
   <button id="pauseResume" style="margin-top:20px;">RESUME</button>
+  <button id="copyReport" style="margin-top:10px; font-size:13px; padding:9px 22px; background:rgba(159,220,255,.18); color:#cfe9ff; box-shadow:none; animation:none;">📋 COPY DIAGNOSTIC REPORT</button>
+  <div style="font-size:11px; color:#8b95b8; margin-top:6px; max-width:min(420px,86vw); line-height:1.5;">
+    Tells you your GPU, your real framerate (including the bad frames), which build you’re on and any errors. Paste it back to me.
+  </div>
+  <textarea id="reportBox" class="hidden" readonly></textarea>
   <button id="pauseRestart" style="margin-top:10px; font-size:14px; padding:9px 24px; background:rgba(255,255,255,.14); color:#fff; box-shadow:none; animation:none;">RESTART LEVEL</button>
 </div>
 
@@ -417,7 +431,7 @@
 </script>
 
 <link rel="modulepreload" href="./lib/three.module.min.js">
-<link rel="modulepreload" href="./level2.js">
+<link rel="modulepreload" href="./level2.js?v=18">
 <script>
 // Boot the engine only after the shell has painted and the page has "loaded".
 // The page itself is just HTML+CSS, so load fires in milliseconds; Three.js
@@ -427,7 +441,10 @@
   const boot = () => {
     const s = document.createElement('script');
     s.type = 'module';
-    s.src = './level2.js';
+    // ?v= is not decoration: without it a browser can hold a cached level2.js
+    // for as long as it likes, so a deploy updates the page around a game that
+    // never changes. Bump it with BUILD.
+    s.src = './level2.js?v=18';
     document.body.appendChild(s);
   };
   if (document.readyState === 'complete') boot();

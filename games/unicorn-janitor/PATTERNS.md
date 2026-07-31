@@ -1416,3 +1416,67 @@ jelly check had a different version of the same disease: it never refilled
 pressure, so it was sometimes measuring an empty tank rather than jelly.
 And "wave 7 contains a runner or a brute" became a dice roll the moment
 BUILD 15 gave the picker six kinds to choose from.
+
+## Grading my own homework (BUILD 18)
+
+The player said the game keeps not getting better no matter what is asked
+for. That is worth writing down properly, because the process failure is
+more interesting than any of the features.
+
+**Six builds went out verified entirely by instruments I built.** Tests I
+wrote, measuring things I chose, plus screenshots from a software renderer
+inside a sandbox that cannot reach the internet. Every one of them was
+green, deployed and documented. Not one of them was ever checked against the
+machine the game is actually played on, and the player was never once asked
+a diagnostic question. That is not thorough work; it is a closed loop with
+confident output.
+
+Three concrete failures fell out of finally looking:
+
+**1. Nothing guaranteed a deploy reached the browser.** `level2.js` was
+loaded with no version query. A cached module means the HTML updates around
+a game that never changes — which is *exactly* the reported symptom, and
+would have been invisible from this side forever. Now `?v=<BUILD>`, and the
+build number is stamped on screen during play so both of us can see which
+version is actually running.
+
+**2. The 3D characters silently were not there.** They load from a CDN with
+no vendored copy in the repo; when that fetch fails the game drops to the
+primitive block rig and logs a line to a console nobody opens, while the
+pause menu keeps reading `CHARACTERS: 3D`. A player could have spent every
+one of those six builds looking at a visibly worse game than the one being
+described to them. The toggle now reads `3D — UNAVAILABLE` when the models
+did not arrive, and the report says so in capitals.
+
+**3. Every build added draw calls.** Weak points, a roster of six, a second
+terrain tier, chain bursts, freed citizens. If the frame rate was already
+bad, each "improvement" made it worse, and no amount of design cleverness
+survives that. Nothing in this project had ever measured a real frame.
+
+### The report
+
+A button in the pause menu that copies: build number, GPU string (via
+`WEBGL_debug_renderer_info` — the single most useful fact about a machine,
+and the game had never looked at it), **percentile** frame times, peak draw
+calls and triangles, quality tier, live entity counts, model load status,
+settings and captured runtime errors.
+
+Percentiles, not an average, because the average of 60 and 20 reads as
+"fine" and what actually ruins a game is the slow one frame in ten. The
+report labels the 1% low as the number that matters.
+
+Two instrumentation bugs found while testing the instrument itself, both of
+which would have made the report lie to the player:
+
+- `renderer.info` resets per `render()` call and `EffectComposer` calls it
+  once per pass, so reading it after the composer reported the *last* pass —
+  one fullscreen quad. It would have told a player whose machine was
+  drowning in 1200 draw calls that it was drawing 1. Fixed with
+  `autoReset = false` plus an explicit reset at the top of the frame.
+- The warm-up gate was 30 frames, which on a genuinely slow machine is
+  several seconds of collecting nothing.
+
+The lesson worth keeping: **when you build an instrument, test the
+instrument, not just the thing it measures.** Both bugs above passed every
+existing check and would have quietly wasted the one piece of real
+information anybody had.
