@@ -1873,6 +1873,84 @@ ok('runtime errors are captured and show up in the report',
    errs.captured && errs.counted,
    'a synthetic window error was caught by the global handler and listed in the report body');
 
+/* =====================================================================
+   BUILD 19 — DRAW-CALL BUDGET
+   Profiled at 1242 meshes for 71,000 triangles: ~55 triangles per draw
+   call, i.e. never triangle-bound, just drowning in draw calls — and every
+   build since 12 added more. These lock in the cuts.
+   ===================================================================== */
+
+// B19a. Fine detail hides by distance, and hiding it costs no gameplay:
+// nothing in the LOD group is a raycast target
+const lod = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.Input.keys = {};
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  const z = UJ.spawnZombieAt(0, -70);
+  const parts = () => { let n = 0; z.group.traverse(c => { if ((c.isMesh || c.isSprite) && c.visible) n++; }); return n; };
+  const range = UJ.getLodRange();
+  P.pos.set(0, 0, -70 + 4); for (let i = 0; i < 12; i++) UJ.step(0.03);
+  const near = parts();
+  P.pos.set(0, 0, -70 + range + 12); for (let i = 0; i < 12; i++) UJ.step(0.03);
+  const far = parts();
+  // and nothing that vanished was ever hittable
+  let hidTargets = 0;
+  z.group.traverse(c => { if (!c.visible && UJ.cleanTargets.includes(c)) hidTargets++; });
+  // it comes back
+  P.pos.set(0, 0, -70 + 4); for (let i = 0; i < 12; i++) UJ.step(0.03);
+  const backAgain = parts();
+  z.alive = false; UJ.reapEntities();
+  P.pos.set(0, 0, -30);
+  return { near, far, backAgain, range, hidTargets };
+});
+// The gate is modest on purpose. Fusing already absorbed most of the win
+// (37 parts -> 22), so LOD is the second bite, not the first: what it must do
+// is cut further at range without touching anything hittable.
+ok('fine character detail hides past the LOD range, and none of it was hittable',
+   lod.far < lod.near * 0.85 && lod.hidTargets === 0 && lod.backAgain === lod.near,
+   `a zombie was 37 parts before this build; it is ${lod.near} up close and ` +
+   `${lod.far} past ${lod.range}m — ${Math.round((1 - lod.far / 37) * 100)}% down on the original · ` +
+   `0 raycast targets hidden · detail returns on approach`);
+
+// B19b. Rigid same-material clusters are fused, not one-mesh-per-tooth
+const fused = await page.evaluate(() => {
+  const UJ = window.UJ;
+  for (const z of UJ.getZombies()) z.alive = false;
+  UJ.reapEntities();
+  const z = UJ.spawnZombieAt(0, -70);
+  let meshes = 0;
+  z.group.traverse(c => { if (c.isMesh) meshes++; });
+  // the head is one mesh now and still takes hits
+  const headIsTarget = UJ.cleanTargets.some(m => m.userData.entity === z && m.parent === z.headG);
+  const g0 = z.goo;
+  z.clean(30, z.group.position);
+  z.alive = false; UJ.reapEntities();
+  return { meshes, headIsTarget, tookDamage: z.goo < g0 };
+});
+ok('rigid same-material clusters are fused into single meshes',
+   fused.meshes < 30 && fused.headIsTarget && fused.tookDamage,
+   `a zombie is ${fused.meshes} meshes (was 37 before fusing) · the fused head is still a raycast target and still takes damage`);
+
+// B19c. The quality tiers now change the SCENE, not just bloom and DPR — and
+// the weakest tier skips the post chain entirely
+const tiers19 = await page.evaluate(() => {
+  const UJ = window.UJ;
+  const was = UJ.Settings.quality;
+  const at = (t) => {
+    UJ.Settings.quality = t; UJ.applyQuality();
+    return { post: UJ.getUsePost(), lod: UJ.getLodRange(), bloom: UJ.QUALITY_TIERS[t].bloom };
+  };
+  const out = { high: at('high'), medium: at('medium'), low: at('low') };
+  UJ.Settings.quality = was; UJ.applyQuality();
+  return out;
+});
+ok('quality tiers cut scene complexity, and the weakest one skips post entirely',
+   tiers19.high.post && tiers19.medium.post && !tiers19.low.post &&
+   tiers19.low.lod < tiers19.medium.lod && tiers19.medium.lod < tiers19.high.lod,
+   `detail range high ${tiers19.high.lod}m → medium ${tiers19.medium.lod}m → low ${tiers19.low.lod}m · ` +
+   `low renders straight to the screen (no render target, no fullscreen passes)`);
+
 // B9c. PERKS — upgrades compound and are read at the call site
 const perks = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;
