@@ -636,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 19;
+const BUILD = 20;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -2832,7 +2832,14 @@ class Zombie {
   applyModel() {
     if (!zombieProto || this.glb || !this.alive || !Settings.models) return;
     this.glb = normalizeModel(zombieProto.scene.clone(true), zombieProto.spec);
-    this.glb.traverse(o => { if (o.isMesh) o.userData.entity = this; });
+    // One GLB dresses all six kinds, which would erase the BUILD 15 rule that
+    // the silhouette/colour reads the threat. Tint the clone's materials per
+    // kind (cached, so twenty zombies of a kind share the same materials).
+    this.glb.traverse(o => {
+      if (!o.isMesh) return;
+      o.userData.entity = this;
+      if (o.material && !Array.isArray(o.material)) o.material = kindTintedMaterial(this.kind, o.material);
+    });
     this.group.add(this.glb);
     this.rig.visible = false;
   }
@@ -3299,15 +3306,41 @@ class Zombie {
 // primitive rig on. Dropping a vendored copy at `local` (e.g. models/jax.glb)
 // makes the AAA mesh load offline and on GitHub Pages with zero code change —
 // which is the whole project's "no CDN dependency, works offline" principle.
+// The character GLBs. NOTE: these are remote and there is no vendored copy in
+// the repo, which bit hard — the previous pair 403'd for everyone, so the game
+// silently ran on the primitive block rig from the day they broke until BUILD
+// 18 finally made the failure visible. `local:` is checked first precisely so
+// a copy dropped into models/ takes over permanently; until someone can do
+// that download, modelStatus + the diagnostic report are the safety net.
 const MODELS = {
   jax: { local: 'models/jax.glb',
-    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/651c2d90-8eff-463e-87fb-60b765c0c03b.glb',
+    url: 'https://d8j0ntlcm91z4.cloudfront.net/user_3D0y1wfkvw4qmSd5X9Kg4fpbdfm/hf_20260803_173249_c0b651f7-d29d-43d6-8829-bfc3b10a0ef3.glb',
     height: 2.05, rotY: 0 }, // gun-toting Jax with red pressure tank + power-washer
   zombie: { local: 'models/zombie.glb',
-    url: 'https://d3u0tzju9qaucj.cloudfront.net/7d051b5a-7bfe-49fe-a484-24e7b3a9458a/9c49e60c-c41e-4331-9580-519b0903b524.glb',
+    url: 'https://d8j0ntlcm91z4.cloudfront.net/user_3D0y1wfkvw4qmSd5X9Kg4fpbdfm/hf_20260803_173256_8eb15b1e-32f5-4af1-91a0-620600fa1249.glb',
     height: 1.95, rotY: 0 },
 };
 let zombieProto = null, modelsLoadStarted = false;
+
+// Per-kind tinted clones of the GLB's materials, cached so every zombie of a
+// kind shares one set. Shamblers keep the authored texture untouched; the
+// other kinds pull toward their ZKIND body colour and glow faintly in their
+// emissive, so runner/brute/spitter/crust/bloater stay readable at a glance
+// even when they all wear the same generated mesh.
+const _kindMatCache = new Map();
+function kindTintedMaterial(kind, mat) {
+  if (kind === 'shambler') return mat;
+  const key = kind + ':' + mat.uuid;
+  let m = _kindMatCache.get(key);
+  if (!m) {
+    m = mat.clone();
+    const K = ZKIND[kind] || ZKIND.shambler;
+    if (m.color) m.color.lerp(new THREE.Color(K.body), 0.45);
+    if ('emissive' in m) { m.emissive = new THREE.Color(K.emis); m.emissiveIntensity = 0.14; }
+    _kindMatCache.set(key, m);
+  }
+  return m;
+}
 const gltfLoader = new GLTFLoader();
 
 // scale to a target height, center on the origin, plant feet at y = 0

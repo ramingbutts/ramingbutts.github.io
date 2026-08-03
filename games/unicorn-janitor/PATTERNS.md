@@ -1535,3 +1535,92 @@ the machine this game is actually played on is not something this repo can
 answer. BUILD 18's diagnostic report exists precisely to close that gap, and
 until one comes back this is an educated guess with good numbers behind it —
 not a confirmed fix.
+
+## The characters were never there (BUILD 20)
+
+BUILD 18 added `modelStatus` so a player could see whether the GLB character
+models had loaded. It reports `local` / `cdn` / `failed`. Nobody had ever
+looked, because until BUILD 18 there was nothing to look at.
+
+Checked from a machine with unrestricted internet — not this sandbox, whose
+egress policy denies the asset CDN and would have made a dead URL look
+identical to a blocked one:
+
+```
+651c2d90-8eff-463e-87fb-60b765c0c03b.glb -> 403
+9c49e60c-c41e-4331-9580-519b0903b524.glb -> 403
+```
+
+Both character models had been returning 403 for everyone, for an unknown
+number of builds. `loadModel()` falls back to a primitive block rig on
+failure and says nothing, so **the game has been silently shipping the
+fallback**. Every "how does it look" judgement recorded in this file was
+made about placeholder geometry.
+
+That is the same failure shape as the `renderer.info` bug in BUILD 18 and
+the `UJ.step()` divergence in BUILD 14: a silent fallback that produced
+plausible output. The instrument existed; nobody read it.
+
+Regenerated both models and pointed `MODELS` at the new URLs. Verified
+end-to-end from the unrestricted machine, driving the real page:
+
+```
+{"status":{"jax":"cdn","zombie":"cdn"},"jaxAttached":true,
+ "zombieAttached":true,"modelsActive":true,"tier":"high"}
+ERRORS: []
+```
+
+**Draw calls fell 919 -> ~280.** Twenty zombies at ~22 meshes each became
+twenty at roughly one. Triangles rose to ~330,000, which is the right trade:
+BUILD 19 established this frame is draw-call bound, not triangle bound.
+
+### One model, six enemies
+
+BUILD 15's roster rule is that each kind must be readable at a glance by
+silhouette and colour. A single shared zombie GLB threatens that. Rather
+than authoring six models, `kindTintedMaterial(kind, mat)` clones the GLB's
+materials once per kind and lerps the base colour 45% toward
+`ZKIND[kind].body` with the kind's emissive tint. The cache is keyed
+`kind + ':' + mat.uuid`, so every zombie of a kind shares one material set
+and the draw-call win survives. Shamblers deliberately keep the authored
+texture untouched — they are the baseline the others read as variations of.
+
+The per-kind scale multipliers (`sclX`/`sclY`) still apply, so silhouette
+still separates brute from runner. Colour is the second channel, not the
+only one.
+
+### The dependency this leaves behind
+
+`MODELS` checks `local:` first, then falls back to `url:`. There is still no
+vendored copy in `models/`, so **the new URLs can expire exactly the way the
+old pair did.** The honest fix is committing the two GLBs (4.9 MB and 3.8 MB)
+to the repo. That could not be done here: this sandbox cannot reach the CDN
+to download them, and creating a CI workflow to fetch them was blocked.
+
+Until someone drops the files into `games/unicorn-janitor/models/`, the
+safety net is `modelStatus` plus the diagnostic report — which is how this
+bug was finally caught, and is the only reason it will be caught faster next
+time.
+
+### What was and was not verified visually
+
+Verified by eye, from a byte-exact screenshot of the running game: **Jax
+renders as a real character model** — flowing mane, layered body — not the
+block rig.
+
+Not verified by eye: a close-up of a zombie. The screenshot channel out of
+the remote sandbox is lossy, and repeated attempts to transfer a larger
+image corrupted it. The evidence that the zombie model is attached is
+instrumental rather than visual — `modelStatus.zombie === 'cdn'`, the
+draw-call collapse that is only explicable if each zombie became one mesh,
+and zero page errors across every run. That is strong, but it is not the
+same as having looked, and it is recorded here as such.
+
+### A harness note worth keeping
+
+The headless suites reach `playing` via `page.click('#startBtn')` **then**
+`UJ.skipIntro()`. Calling `skipIntro()` alone leaves `Game.state === 'menu'`
+forever — `introSkip` only shortens an intro that has already started. A
+screenshot taken from that state photographs the title card, which looks
+enough like "the game" to be mistaken for it. Wait on
+`Game.state === 'playing'` before believing anything a screenshot shows.
