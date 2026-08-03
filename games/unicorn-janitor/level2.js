@@ -7059,9 +7059,13 @@ function tick() {
 tick();
 
 // the shell shows LOADING… until this module is evaluated
-// stamp the running build everywhere it can be read without opening a console
+// stamp the running build everywhere it can be read without opening a console.
+// the static markup says "BUILD ?" on purpose: a hard-coded number there goes
+// stale the moment BUILD is bumped and then lies to anyone reading the chip
+// (level2.html sat on BUILD 17 through builds 18-20). "?" cannot drift, and it
+// reads unambiguously as "this module never evaluated" when the load fails.
 for (const el of document.querySelectorAll('.chip')) {
-  if (/BUILD/.test(el.textContent)) el.textContent = el.textContent.replace(/BUILD \d+/, 'BUILD ' + BUILD);
+  if (/BUILD/.test(el.textContent)) el.textContent = el.textContent.replace(/BUILD [\d?]+/, 'BUILD ' + BUILD);
 }
 document.getElementById('buildStamp').textContent = 'BUILD ' + BUILD;
 console.info('%cUnicorn Janitor — Level 2 BUILD ' + BUILD,
