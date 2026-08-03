@@ -1480,3 +1480,58 @@ The lesson worth keeping: **when you build an instrument, test the
 instrument, not just the thing it measures.** Both bugs above passed every
 existing check and would have quietly wasted the one piece of real
 information anybody had.
+
+## The draw-call budget (BUILD 19)
+
+Profiled before touching anything: **1242 meshes drawing 71,000 triangles.**
+That is ~55 triangles per draw call. This game was never triangle-bound —
+it was drowning in draw calls, and every build since 12 added more of them.
+Zombies alone were 745 meshes, **37 apiece**, for twenty enemies.
+
+That is a strong candidate for why six builds of "improvements" did not feel
+like improvements: each one added scene complexity to a frame that was
+already CPU-bound on draw submission.
+
+Two cuts, both subtractive:
+
+**Fuse.** Teeth (4), hand claws (3 per arm), toe claws (2 per foot) and head
+scoops (3) are rigid relative to their parent and share a material — one
+mesh pretending to be eleven. `fuse()` bakes their transforms and merges the
+geometry. The fused head keeps `userData.entity` and its place in
+`cleanTargets`, so hit detection is unchanged and the ray set shrinks too.
+**37 parts → 22.**
+
+**LOD.** Under `FogExp2` at 0.03 a 5 cm tooth is sub-pixel past about 18 m.
+Fine detail lives in a `detail` group (plus `_lodExtra` for pieces stuck
+under animated pivots) and hides by distance with a 2 m hysteresis band so a
+zombie on the boundary cannot strobe. **Nothing in there is a raycast
+target** — asserted, not assumed. **22 → 20 at range**, and the eye stays
+because it is the threat tell.
+
+**The quality tiers now change the scene.** Before this, "low" only turned
+off bloom and shadows and dropped the pixel ratio — it drew all 1086 calls
+regardless. Tiers now also set the LOD range (18/13/8 m) and, on `low`,
+**skip the EffectComposer entirely**. Turning bloom off still paid for a
+render-target round trip plus the vignette and output passes every frame, on
+exactly the hardware that cannot afford them.
+
+Measured, same viewpoint and entity state:
+
+| | before | high | medium | low |
+|---|---|---|---|---|
+| story pier | 1086 | 919 | 683 | **649** |
+| rush wave 8 (26 enemies) | ~1300 | 763 | 512 | **411** |
+
+### What is still wrong, stated plainly
+
+919 draw calls for 59,000 triangles is *still* badly batched. The remaining
+bulk is static wharf geometry — deck, railings, shopfronts, pilings — none
+of which moves and most of which shares a material. Merging it is the next
+real win and is untouched here.
+
+And the honest limit of all of this: it is measured in a software renderer
+in a sandbox. Whether ~650 draw calls is comfortable or still hopeless on
+the machine this game is actually played on is not something this repo can
+answer. BUILD 18's diagnostic report exists precisely to close that gap, and
+until one comes back this is an educated guess with good numbers behind it —
+not a confirmed fix.

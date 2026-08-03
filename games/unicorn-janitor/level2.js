@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* =====================================================================
    0. CONFIG — one place to tune the whole level
@@ -635,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 18;
+const BUILD = 19;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -2547,6 +2548,46 @@ const ZKIND = {
               core: 1.15, dmg: 0.7,  hit: 'bumps you',          heavy: false, burstR: 5.2, burstDmg: 78, selfDmg: 34 },
 };
 const ZKINDS = Object.keys(ZKIND);
+// Past this range the fine parts (teeth, claws, pupil, mouth, swirl tip) are
+// smaller than a pixel through FogExp2 0.03. None of them is a raycast target.
+const LOD_DETAIL = 18; // default; the active value is `lodRange`, set per quality tier
+
+
+/* ---------------------------------------------------------------------
+   DRAW-CALL BUDGET (BUILD 19)
+
+   Profiled: 1242 meshes drawing 71,000 triangles. That is ~55 triangles per
+   draw call — the game was never triangle-bound, it was drowning in draw
+   calls, and every build since 12 added more. Zombies alone were 745 of
+   them, 37 apiece, for twenty enemies.
+
+   Two cuts, both subtractive:
+
+   1. FUSE. Teeth, claws and head scoops are rigid within their parent and
+      share a material, so they are one mesh pretending to be eleven.
+   2. LOD. Under FogExp2 at 0.03 you cannot resolve a 5cm tooth past about
+      18 m. Fine detail is parked in a `detail` group and hidden by
+      distance, with hysteresis so it cannot strobe on the boundary. Nothing
+      in there is a raycast target, so hit detection is untouched.
+   --------------------------------------------------------------------- */
+// Fuse same-material meshes into one. Positions are baked, so the parts must
+// be rigid relative to each other — never use this across an animated pivot.
+function fuse(meshes, material) {
+  if (meshes.length < 2) return meshes[0] || null;
+  const geos = meshes.map(m => {
+    m.updateMatrix();
+    return m.geometry.clone().applyMatrix4(m.matrix);
+  });
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  if (!merged) return meshes[0] || null;
+  const parent = meshes[0].parent;
+  for (const m of meshes) { if (m.parent) m.parent.remove(m); }
+  const out = new THREE.Mesh(merged, material);
+  out.castShadow = true;
+  if (parent) parent.add(out);
+  return out;
+}
 
 class Zombie {
   constructor(x, z, opts = {}) {
@@ -2575,6 +2616,9 @@ class Zombie {
     this.lureT = 0;                       // harbor-bell mesmerize timer
     this.lurePos = new THREE.Vector3();
     this.slipCd = 0;                      // wet-plank pratfall cooldown
+    this._lodOn = true;                   // LOD state, flipped by distance in update()
+    this._lodExtra = [];                  // fine parts that live under animated pivots, so they
+                                          // cannot join `detail` but still hide at range
 
     const g = this.group = new THREE.Group();
     g.position.set(x, 0, z);
@@ -2599,34 +2643,46 @@ class Zombie {
     const headG = new THREE.Group();
     headG.position.y = 1.66;
     const swirlGeo = new THREE.SphereGeometry(1, 10, 8);
+    const scoops = [];
     [[0.42, 0.3, 0.42, 0], [0.3, 0.24, 0.3, 0.24], [0.18, 0.16, 0.18, 0.45]].forEach(([sx, sy, sz, y]) => {
       const s = new THREE.Mesh(swirlGeo, poopDark);
       s.scale.set(sx, sy, sz); s.position.y = y;
-      s.userData.entity = this;
-      headG.add(s); cleanTargets.push(s);
+      headG.add(s); scoops.push(s);
     });
+    // three scoops that never move apart are one mesh pretending to be three.
+    // The fused result inherits the raycast role, which also shrinks the ray set.
+    const head = fuse(scoops, poopDark);
+    head.userData.entity = this;
+    cleanTargets.push(head);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.24, 6), poopDark);
     tip.position.set(0.06, 0.64, 0); tip.rotation.z = -0.55;
     headG.add(tip);
+    // everything under here vanishes past LOD_DETAIL — none of it is a
+    // raycast target, and none of it is resolvable through the fog anyway
+    const detail = this.detail = new THREE.Group();
+    headG.add(detail);
+    detail.add(tip);
 
     // one big yellow eye + pupil, and a toothy grin (runners burn red)
     this.eyeMat = new THREE.MeshStandardMaterial({ color: K.eye, emissive: K.eyeGlow,
       emissiveIntensity: K.eyeI });
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), this.eyeMat);
-    eye.position.set(0.12, 0.08, 0.34); headG.add(eye);
+    eye.position.set(0.12, 0.08, 0.34); headG.add(eye); // the eye stays: it is the tell
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5),
       new THREE.MeshBasicMaterial({ color: 0x231206 }));
-    pupil.position.set(0.12, 0.08, 0.45); headG.add(pupil);
+    pupil.position.set(0.12, 0.08, 0.45); detail.add(pupil);
     const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.06),
       new THREE.MeshStandardMaterial({ color: 0x2a1408, roughness: 0.6 }));
-    mouth.position.set(0, -0.16, 0.34); headG.add(mouth);
+    mouth.position.set(0, -0.16, 0.34); detail.add(mouth);
     const toothGeo = new THREE.BoxGeometry(0.055, 0.07, 0.03);
     const toothMat = new THREE.MeshStandardMaterial({ color: 0xf2ead8, roughness: 0.4 });
+    const teeth = [];
     for (let i = 0; i < 4; i++) {
       const t = new THREE.Mesh(toothGeo, toothMat);
       t.position.set(-0.14 + i * 0.095, -0.12, 0.37);
-      headG.add(t);
+      detail.add(t); teeth.push(t);
     }
+    fuse(teeth, toothMat);   // four meshes that never move apart -> one
     g.add(headG);
     this.headG = headG;
 
@@ -2642,12 +2698,16 @@ class Zombie {
       arm.position.y = -0.3; // hang below the joint
       shoulder.add(arm);
       g.add(shoulder); this.arms.push(shoulder);
+      const handClaws = [];
       for (let c = 0; c < 3; c++) {
         const claw = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.12, 5), clawMat);
         claw.position.set((c - 1) * 0.055, -0.42, 0.03);
         claw.rotation.x = Math.PI; // point down from the paw
         arm.add(claw);
+        handClaws.push(claw);
       }
+      const hand = fuse(handClaws, clawMat);  // rigid within the arm -> one mesh
+      if (hand) this._lodExtra.push(hand);
     }
 
     // clawed feet — each in an ankle pivot so the waddle actually steps
@@ -2658,12 +2718,15 @@ class Zombie {
       ankle.position.set(s * 0.24, 0.07, 0.08);
       const foot = new THREE.Mesh(footGeo, poopDark);
       ankle.add(foot);
+      const toeClaws = [];
       for (let c = 0; c < 2; c++) {
         const claw = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.12, 5), clawMat);
         claw.position.set((c - 0.5) * 0.11, -0.01, 0.26);
         claw.rotation.x = Math.PI / 2;
-        ankle.add(claw);
+        ankle.add(claw); toeClaws.push(claw);
       }
+      const toes = fuse(toeClaws, clawMat);
+      if (toes) this._lodExtra.push(toes);
       g.add(ankle); this.feet.push(ankle);
     }
 
@@ -2694,7 +2757,7 @@ class Zombie {
     this.downT = 0; // BUILD 13 knockdown (ground pound)
     this.stunStars = glowSprite(0x9fdcff, 1.3, 0);
     this.stunStars.position.y = 2.55;
-    g.add(this.stunStars);
+    g.add(this.stunStars); this._lodExtra.push(this.stunStars);
 
     // partition: primitive cosmetics into a rig subgroup (hidden when the
     // generated GLB loads — they stay forever as invisible hitboxes);
@@ -2724,7 +2787,7 @@ class Zombie {
       }
       const ridge = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.42, 5), plateMat);
       ridge.position.set(0, 2.0, 0.18); ridge.rotation.x = 0.25;
-      g.add(ridge);
+      g.add(ridge); this._lodExtra.push(ridge); // cosmetic, not a target
     }
     if (K.burstR) {
       // a taut, over-inflated sac that grows as you hurt it
@@ -2752,7 +2815,7 @@ class Zombie {
       this.gullet = gullet;
       const sling = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.72, 3, 6), this.bodyMat);
       sling.position.set(0.72, 1.42, 0.1); sling.rotation.z = -0.9;
-      g.add(sling);
+      g.add(sling); this._lodExtra.push(sling); // cosmetic, not a target
     }
 
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
@@ -3076,6 +3139,16 @@ class Zombie {
     }
 
     if (!this._moved) this.speed = Math.max(0, this.speed - CFG.zombie.decel * dt);
+
+    // ---- LOD: fine detail is invisible through the fog past ~18m, and it is
+    // 60% of this rig's draw calls. Hysteresis (2m band) so a zombie hovering
+    // on the boundary cannot strobe.
+    const wantDetail = dist < (this._lodOn ? lodRange + 2 : lodRange);
+    if (wantDetail !== this._lodOn) {
+      this._lodOn = wantDetail;
+      if (this.detail) this.detail.visible = wantDetail;
+      for (const m of this._lodExtra) m.visible = wantDetail;
+    }
 
     // ---- per-kind tells, every frame
     if (this.plates) {  // a hit that sheeted off the armour sparks the plate
@@ -6099,11 +6172,17 @@ if (!DIFFICULTIES[Settings.difficulty]) Settings.difficulty = 'normal';
 function saveSettings() { try { localStorage.setItem('uj_settings', JSON.stringify(Settings)); } catch (e) {} }
 
 const QUALITY_TIERS = {
-  high: { bloom: true, shadows: true, dpr: 1.75 },
-  medium: { bloom: true, shadows: false, dpr: 1.25 },
-  low: { bloom: false, shadows: false, dpr: 1 },
+  // `post`: run the EffectComposer at all. Turning bloom off still paid for a
+  // render-target round trip plus the vignette and output passes every frame —
+  // three fullscreen shader passes on exactly the hardware that cannot afford
+  // them. On `low` the scene now goes straight to the screen.
+  // `lod`: how far fine character detail survives (see LOD_DETAIL).
+  high:   { bloom: true,  shadows: true,  dpr: 1.75, post: true,  lod: 18 },
+  medium: { bloom: true,  shadows: false, dpr: 1.25, post: true,  lod: 13 },
+  low:    { bloom: false, shadows: false, dpr: 1,    post: false, lod: 8 },
 };
 let autoTier = 'high', appliedTier = 'high';
+let usePost = true, lodRange = 18;
 function activeTier() { return Settings.quality === 'auto' ? autoTier : Settings.quality; }
 function applyQuality() {
   const tier = activeTier();
@@ -6116,6 +6195,8 @@ function applyQuality() {
     sun.castShadow = q.shadows;
     scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
   }
+  usePost = q.post;
+  lodRange = q.lod;
   renderer.setPixelRatio(Math.min(devicePixelRatio, q.dpr));
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
@@ -6789,6 +6870,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   // BUILD 12 weak points / crits / chain bursts
   // BUILD 18 the feedback loop
   BUILD, Perf, buildReport, gpuName, modelStatus,
+  QUALITY_TIERS, getUsePost: () => usePost, getLodRange: () => lodRange, fuse,
   // BUILD 17 aim: one truthful axis, focus mode, stick curve
   reticleDirFor, CAM_LOOK_AHEAD, getJetDir: () => _jetDir.clone(),
   getFocus: () => Player.focusT,
@@ -6936,7 +7018,9 @@ function tick() {
   // to a player whose machine was drowning in twelve hundred.
   renderer.info.reset();
   simulate(Math.min(rawDt, 0.05), t);
-  composer.render();
+  // straight to the screen on the low tier: no render target, no fullscreen
+  // passes. renderer.render() refreshes matrixWorld exactly as composer does.
+  if (usePost) composer.render(); else renderer.render(scene, camera);
   if (_frameCount > 10) Perf.sample(rawDt * 1000, renderer.info.render);
 }
 tick();
