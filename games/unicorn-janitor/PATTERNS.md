@@ -1624,3 +1624,122 @@ forever — `introSkip` only shortens an intro that has already started. A
 screenshot taken from that state photographs the title card, which looks
 enough like "the game" to be mistaken for it. Wait on
 `Game.state === 'playing'` before believing anything a screenshot shows.
+
+## The wharf was a painted hallway (BUILD 21)
+
+Two asks: make the map explorable, and put physics on the objects and
+buildings. Reading the level first turned both into the same finding — the
+wharf described "this thing occupies space" three separate ways, and not one
+of them stopped anything:
+
+- **`platforms`** knew only the **top** of a box. You could stand on a
+  shipping container and walk straight through its side.
+- **`camBlockers`** was consulted by the camera boom. Nothing else read it.
+- **The rigid-body sim** knew about a flat plane and two corridor walls.
+
+So the only thing that ever stopped the player was `clamp()` on x and z: an
+invisible wall in open air, 22.8 m apart, down a 243 m pier. Every shop,
+cart and container was scenery you clipped through. The map wasn't a space,
+it was a corridor with pictures on the walls.
+
+Worse, the flanking world was already built and already unreachable. The
+shop row sits at x −16.2 with lit signs and awnings; the sea-lion docks sit
+at x +17.5. The clamp was at 11.4. Both had been visible, signposted and
+untouchable the whole time.
+
+### One list
+
+`solids` is now the single description: `{x0,x1,z0,z1,y0,y1,y,stand}`.
+`addSolid` registers it once, and everything reads it — what you stand on
+(`groundHeightAt`), what you bump into (`collideSolids`), what the camera
+hides behind (`camBlockers`, populated automatically), and what a flying
+traffic cone caroms off. `platforms` is the same array under its old name,
+so existing callers still work.
+
+`collideSolids` pushes a cylinder out along the shallowest axis, which for
+AABBs is what "slide along the wall" means. Two escapes stop it fighting the
+ground code: anything whose top is within `STEP_UP` (0.55 m) of your feet is
+walked over rather than into, and anything entirely above your head or below
+your feet isn't in the way at all. That is what lets you cross a kerb, duck
+under an awning, and not be blocked by the container you're standing on.
+
+Ramps came free. A solid can carry a `slope`, and `solidTop(s,x,z)` lerps
+along one axis; every consumer goes through it, so a gangway is a slope you
+walk down rather than a stair you hop.
+
+### The floor that wasn't there
+
+`groundHeightAt` used to bottom out at `0`. That quietly asserted a floor at
+deck height across the entire bay — which is why a dock at −1.25 m was
+unreachable *in principle*: 0 always won. The pier deck is a registered
+solid now, so 0 is a real answer where it's true and `VOID_Y` everywhere
+else. Six call sites, none of which needed changing.
+
+That unlocked the edge. `keepOnStructure` holds the horde on the pier; the
+**player deliberately gets no such rail**, because an edge you can go over is
+the difference between a corridor and somewhere to explore. Going over it is
+a dunking, not a death: splash, 6 HP, and you're fished out at the last place
+you were honestly standing.
+
+### Physics on everything
+
+- Props rest on **whatever is under them**, not a global deck height — blast
+  a bucket onto a container and it lands on the container.
+- Props carom off containers, shopfronts and carts. `collideSolids` reports
+  which axis it pushed along, which is exactly the axis to reflect.
+- **Prop-vs-prop**, which never existed: a blasted crate used to fly straight
+  through a bucket. One O(n²) pass over the body list resolving overlap and
+  trading momentum along the contact normal, mass-weighted so a crate barely
+  notices a cone. Bounded by the prop budget (tens); if that stops being true
+  it wants a grid.
+- Zombies collide with the same list, so they shoulder into containers and
+  slide around them. That is what turns a container from a decoration into
+  cover you can actually break line of sight behind.
+
+Buildings are **solid, not destructible**. Toppling a shop would punch a hole
+in the level and delete platforms the combat layer depends on. Noted as a
+deliberate stop, not an oversight.
+
+### Scenery that contradicts the code
+
+The first gangway worked and still read as blocked, because the pier railing
+ran unbroken across it. A level saying "you can't go here" while the
+collision says you can is exactly how a map keeps feeling closed after you
+open it. The rail is now segmented with a doorway at each dock, and `DOCK_Z`
+is one list both the railing and the docks read — two places that must agree
+or the route is blocked by its own scenery.
+
+### Three tests changed, and why that IS the evidence
+
+Every existing check passed on the first run after the collision system went
+in. That proved nothing: they were written for a world you could walk
+through. What actually found the behaviour was probing for it directly, and
+what found the *bugs* was three suite failures whose premises the solid world
+had invalidated:
+
+- **the sprint/FOV check** measured the lens after a 3.6 s sprint. Its own
+  `sweepFraction()` leaves the yaw swept ~59° off north, so post-BUILD 21 the
+  sprint ran diagonally into the shop row, never reached full speed, and the
+  lens never stretched. Re-aim down the empty centreline.
+- **the container-terrain check** probed "9 m to the side" for open deck.
+  There are floating docks there now. Probe across the pier instead.
+- **the rooftop-dive check** hard-coded stepping off "+z" and staged the
+  player at the roof centre *at deck level* — which is now **inside** the
+  container the stack sits on, so collision shoved him out mid-climb. It had
+  also been quietly measuring a 3 m fall onto a newly-solid fish cart. It now
+  searches for an edge that is clear all the way down, starts the climb from
+  the lower tier (which is what BUILD 13 said the route was), and puts the
+  crowd where he will actually land.
+
+Four checks were added for the new behaviour itself — walls stop you, the
+shop roofs and docks are reachable, the bay fishes you out, props rest on
+what's under them. 105/105, 9/9, 19/19.
+
+### Cost
+
+65 solids. With 40 zombies and 33 loose bodies the whole simulation step is
+**1.58 ms** — about 5,400 trivial AABB tests per frame, which is not where
+this game's budget goes. The six gangways added 18 meshes, so they ship
+through BUILD 19's `fuse()` as 6: deck plus two kerbs share a material and
+never move relative to each other. Net **+12 draw calls** for a third of the
+map becoming reachable.

@@ -636,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 20;
+const BUILD = 21;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -889,24 +889,195 @@ function makePlankTexture() {
    to break line of sight, high ground to fight from, and a bounce-and-jet
    route along the tops for anyone who wants to skip the deck entirely.
    --------------------------------------------------------------------- */
-const platforms = [];   // {x0,x1,z0,z1,y} axis-aligned tops the player can stand on
+/* ---------------------------------------------------------------------
+   SOLID VOLUMES (BUILD 21). Up to here the level described "this thing
+   occupies space" three different ways and none of them stopped anything:
+
+     • `platforms` knew only the TOP of a box, so you could stand on a
+       shipping container but walk straight through its side.
+     • `camBlockers` was consulted by the camera boom and by nothing else.
+     • the rigid-body sim knew about a flat plane and two corridor walls.
+
+   So the wharf was a painted hallway. Every shop, cart and container was
+   scenery you clipped through, and the only thing that actually stopped
+   the player was a `clamp()` on x and z — an invisible wall in open air.
+
+   One AABB list now answers all of it: what you stand on, what you bump
+   into, what the camera hides behind, and what a flying traffic cone
+   caroms off. Anything solid registers once with `addSolid`, and every
+   mover — the player, every zombie, every loose prop — reads that list.
+   --------------------------------------------------------------------- */
+// Where the floating docks sit. One list, because the railing has to know
+// where to leave a doorway and the docks have to know where to put a ramp —
+// two places that must agree or the route is blocked by its own scenery.
+const DOCK_Z = [-16, -38, -64, -98, -132, -166];
+const solids = [];      // {x0,x1,z0,z1,y0,y1,y,stand}
+// `platforms` is the same array under its historical name: each solid carries
+// `y` = its top, so anything that used to read a platform still can.
+const platforms = solids;
 const bouncePads = [];  // {x,z,r,power,mesh}
 
-// highest platform top under (x,z) that we're allowed to land on. `fromY` is
+/* A solid's walking surface at a point. Flat boxes answer `y` everywhere;
+   a ramp (`slope`) lerps its top along one axis, which is what lets a gangway
+   be a slope you walk down rather than a stair you hop. Everything downstream
+   — ground height, step-up, prop resting height — goes through here, so ramps
+   cost the rest of the system nothing. */
+function solidTop(s, x, z) {
+  if (!s.slope) return s.y;
+  const sl = s.slope;
+  const t = sl.axis === 'x' ? (x - s.x0) / (s.x1 - s.x0) : (z - s.z0) / (s.z1 - s.z0);
+  return sl.from + (sl.to - sl.from) * THREE.MathUtils.clamp(t, 0, 1);
+}
+
+/* No-ground sentinel. Until BUILD 21 this function bottomed out at 0, which
+   quietly asserted a floor at deck height across the entire bay — so a dock
+   sitting at -1.25 was unreachable in principle (0 always won) and anything
+   off the pier stood on thin air. The pier deck is a registered solid now, so
+   0 is a real answer in the place it is true and VOID is the answer
+   everywhere else. Finite on purpose: callers do arithmetic on this. */
+const VOID_Y = -40;
+
+// highest solid top under (x,z) that we're allowed to land on. `fromY` is
 // where we were before this frame's fall, so you pass up through a platform
 // from underneath instead of snapping onto its roof.
 function groundHeightAt(x, z, fromY) {
-  let best = 0;
-  for (const p of platforms) {
+  let best = VOID_Y;
+  for (const p of solids) {
+    if (!p.stand) continue;
     if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
-    if (p.y > best && fromY >= p.y - 0.35) best = p.y;
+    const top = solidTop(p, x, z);
+    if (top > best && fromY >= top - 0.35) best = top;
   }
   return best;
 }
 
-function addPlatform(mesh, x, z, w, d, y) {
-  platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y });
+// STEP: how high a lip you walk over instead of into. Deck seams, the awning
+// pads and a cart's kerb are all below it; a container wall is not.
+const STEP_UP = 0.55;
+
+/* Push a vertical cylinder (a body, at `pos`, radius `r`, standing `h` tall)
+   out of anything solid it has ended up inside. Resolves along the shallowest
+   axis, which for axis-aligned boxes is what "slide along the wall" means.
+
+   Two escapes keep this from fighting the ground code:
+     • a solid whose top is within STEP_UP of your feet is walked over, not
+       into — `groundHeightAt` lifts you onto it next frame.
+     • a solid entirely above your head, or entirely below your feet, is not
+       in your way at all, so you can run under an awning and over a kerb.  */
+const _colPrev = new THREE.Vector3();
+function collideSolids(pos, r, h, opts = {}) {
+  const feet = pos.y, head = pos.y + h;
+  const step = opts.step ?? STEP_UP;
+  let hit = null;
+  for (const s of solids) {
+    if (s.y0 >= head || s.y1 <= feet + 0.001) continue;   // clears over / under
+    if (pos.x <= s.x0 - r || pos.x >= s.x1 + r) continue;
+    if (pos.z <= s.z0 - r || pos.z >= s.z1 + r) continue;
+    // low enough to step onto — measured at the point you're touching, so a
+    // ramp lets you on at its low end and blocks you at its high wall
+    if (s.stand && solidTop(s, pos.x, pos.z) <= feet + step) continue;
+    // shallowest push wins — that's the face we actually came through
+    const dxL = pos.x - (s.x0 - r), dxR = (s.x1 + r) - pos.x;
+    const dzL = pos.z - (s.z0 - r), dzR = (s.z1 + r) - pos.z;
+    const px = dxL < dxR ? -dxL : dxR, pz = dzL < dzR ? -dzL : dzR;
+    if (Math.abs(px) < Math.abs(pz)) { pos.x += px; hit = hit || {}; hit.x = Math.sign(px); }
+    else { pos.z += pz; hit = hit || {}; hit.z = Math.sign(pz); }
+  }
+  return hit;
+}
+
+/* Register a solid volume. `y0`/`y1` are its bottom and top in world space.
+   `stand:false` marks something you collide with but never land on (railings),
+   so it blocks movement without becoming a ledge the player can perch on. */
+function addSolid(mesh, x, z, w, d, y0, y1, opts = {}) {
+  const s = { x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2,
+              y0, y1, y: y1, stand: opts.stand !== false };
+  solids.push(s);
   if (mesh) camBlockers.push(mesh);
+  return s;
+}
+
+// historical call shape: a box sitting on the deck, described by its top only
+function addPlatform(mesh, x, z, w, d, y) { return addSolid(mesh, x, z, w, d, 0, y); }
+
+/* Is there anything solid holding this point up out over the water? Used to
+   decide whether leaving the pier is exploring or walking off a jetty. */
+function supportUnder(pos) {
+  for (const s of solids) {
+    if (!s.stand) continue;
+    if (pos.x < s.x0 - 0.5 || pos.x > s.x1 + 0.5) continue;
+    if (pos.z < s.z0 - 0.5 || pos.z > s.z1 + 0.5) continue;
+    if (solidTop(s, pos.x, pos.z) <= pos.y + 0.6) return s;
+  }
+  return null;
+}
+
+/* Keeps a mover on solid structure. The pier railing is the edge of the world
+   only where there is nothing past it — step onto a gangway or a floating dock
+   and it stops applying. The horde uses this so they never wander into the
+   sea; the PLAYER deliberately does not, because an edge you can go over is
+   the difference between a corridor and somewhere to explore. */
+function keepOnStructure(pos) {
+  const edge = CFG.bridge.width / 2 - 0.4;   // the railing line, x ±12.6
+  if (Math.abs(pos.x) <= edge) return;
+  if (supportUnder(pos)) return;
+  pos.x = Math.sign(pos.x) * edge;
+}
+
+/* Going in the drink. The whole pier edge is live now, so this is the thing
+   that makes that fair rather than fatal: a splash, a dunking, and you are
+   fished out at the last place you were honestly standing. Cheap on purpose —
+   the hazard should make you respect the edge, not reload the level. */
+const BAY_Y = -2.2;   // below the floating docks (-1.25), at the waterline
+// a dunking has no attacker: a zero vector makes damagePlayer's directional
+// arc fall back to its neutral marker and contributes no knockback
+const _bayDir = new THREE.Vector3(0, 0, 0);
+function bayFall() {
+  const at = Player.pos.clone(); at.y = -1.4;
+  spawnSplash(at, true);
+  spawnGlitter(at, 26, 3.5);
+  SFX.splat(panFor(at), 0.9);
+  damagePlayer(6, _bayDir, 'the bay');
+  spawnFloatText(at.clone().setY(0.6), 'SPLASH!', '#9fdcff');
+  const back = Player._safe || new THREE.Vector3(0, 0, -30);
+  Player.pos.copy(back); Player.pos.y += 0.2;
+  Player.vel.y = 0; Player.hvel.set(0, 0, 0);
+  Player.knock.set(0, 0, 0);
+  Player.slamming = false;
+  Player.onGround = true;
+}
+
+/* A plank gangway spanning x0→x1 at depth z, dropping from height yA to yB.
+   These are the reason the flanking world is reachable at all: the shop row
+   and the sea-lion docks have always been out there, 3–5 m past an invisible
+   wall, close enough to read the signs and impossible to touch. */
+const _gwUp = new THREE.Vector3(0, 1, 0);
+function gangway(grp, mat, x0, x1, z, yA, yB, width = 2.4) {
+  const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
+  const span = hi - lo, midX = (lo + hi) / 2;
+  const drop = yB - yA;
+  const tilt = Math.atan2(-(x1 > x0 ? drop : -drop), span);
+  const parts = [];
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(span, drop), 0.18, width), mat);
+  deck.position.set(midX, (yA + yB) / 2 + 0.09, z);
+  deck.rotation.z = tilt;
+  parts.push(deck);
+  // low kerbs, so the ramp reads as a walkway and a rolling bucket stays on it
+  for (const k of [-1, 1]) {
+    const kerb = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(span, drop), 0.22, 0.12), mat);
+    kerb.position.set(midX, (yA + yB) / 2 + 0.24, z + k * (width / 2 - 0.06));
+    kerb.rotation.z = tilt;
+    parts.push(kerb);
+  }
+  // deck + two kerbs share one material and never move relative to each other,
+  // so they ship as one draw call — BUILD 19's rule for anything static and
+  // repeated, applied on the way in rather than retrofitted later
+  for (const m of parts) grp.add(m);
+  const fused = fuse(parts, mat) || deck;
+  fused.receiveShadow = true;
+  const s = addSolid(fused, midX, z, span, width, Math.min(yA, yB) - 0.4, Math.max(yA, yB));
+  s.slope = { axis: 'x', from: x0 < x1 ? yA : yB, to: x0 < x1 ? yB : yA };
+  return s;
 }
 
 function buildTerrain(grp) {
@@ -934,7 +1105,7 @@ function buildTerrain(grp) {
       rib.position.set(x + (w > d ? k * w * 0.28 : w / 2 + 0.01), h / 2, z + (w > d ? d / 2 + 0.01 : k * d * 0.28));
       grp.add(rib);
     }
-    addPlatform(m, x, z, w, d, h);
+    addSolid(m, x, z, w, d, 0, h);
   });
 
   // SECOND TIER (BUILD 13): the ground pound needs somewhere worth falling
@@ -955,7 +1126,7 @@ function buildTerrain(grp) {
     const rim = glowSprite(0xffd94f, 2.4, 0.22); // a faint crown so the high ground reads through fog
     rim.position.set(x, baseH + h + 0.5, z);
     grp.add(rim);
-    addPlatform(m, x, z, w, d, baseH + h);
+    addSolid(m, x, z, w, d, baseH, baseH + h);
   });
 
   // springy awnings: land on one and it throws you back up. Chained with the
@@ -1015,6 +1186,10 @@ function buildWharf() {
   deck.position.set(0, -0.5, zMid);
   deck.receiveShadow = true;
   grp.add(deck);
+  // the pier is a solid like everything else, so "the deck is at 0" stops
+  // being an assumption baked into the ground query and becomes a fact the
+  // query can read — which is what lets anything sit below deck height
+  addSolid(null, 0, zMid, B.width, len, -1, 0);
 
   // Pilings and railings repeat ~230 times down a 243m pier. As individual
   // meshes that was ~230 draw calls of scenery that never moves or reacts —
@@ -1056,13 +1231,34 @@ function buildWharf() {
   // post-and-rail wooden railings (waist height, rope sag between posts)
   const ropeMat = new THREE.MeshStandardMaterial({ color: 0x9a8563, roughness: 0.95 });
   const postSpots = [], ropeSpots = [];
+  // A gangway that leaves through an unbroken railing reads as "you can't go
+  // there" no matter what the collision says — and the level saying one thing
+  // while the code says another is exactly how a map stops feeling explorable.
+  // Cut a gap in the +x rail at every dock, and break the run into segments.
+  const GAP = 2.1;
+  const gapAt = (side, z) => side > 0 && DOCK_Z.some(dz => Math.abs(z - dz) < GAP);
   for (const side of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, len), wood);
-    rail.position.set(side * (B.width / 2 - 0.4), 1.35, zMid);
-    grp.add(rail);
+    // rail segments: the whole span, minus a doorway at each gangway
+    const cuts = side > 0
+      ? DOCK_Z.filter(dz => dz < B.zStart && dz > B.zEnd).sort((a, b) => b - a)
+      : [];
+    let from = B.zStart;
+    const segs = [];
+    for (const dz of cuts) { segs.push([from, dz + GAP]); from = dz - GAP; }
+    segs.push([from, B.zEnd]);
+    for (const [z0, z1] of segs) {
+      const segLen = z0 - z1;
+      if (segLen < 0.5) continue;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, segLen), wood);
+      rail.position.set(side * (B.width / 2 - 0.4), 1.35, (z0 + z1) / 2);
+      grp.add(rail);
+    }
     for (let z = B.zStart; z > B.zEnd; z -= 6) {
+      if (gapAt(side, z)) continue;
       postSpots.push([side * (B.width / 2 - 0.4), 0.75, z]);
-      if (z - 6 > B.zEnd) ropeSpots.push([side * (B.width / 2 - 0.4), 0.95, z - 3, Math.PI / 2]);
+      if (z - 6 > B.zEnd && !gapAt(side, z - 3)) {
+        ropeSpots.push([side * (B.width / 2 - 0.4), 0.95, z - 3, Math.PI / 2]);
+      }
     }
   }
   instanced(new THREE.BoxGeometry(0.18, 1.5, 0.18), wood, postSpots);
@@ -1091,6 +1287,11 @@ function buildWharf() {
       new THREE.MeshStandardMaterial({ color: awn, roughness: 0.7 }));
     awning.position.set(3.6, 3.4, 0); awning.rotation.z = -0.28;
     shop.add(awning);
+    // BUILD 21: the awning is a ledge. It sits at 3.4 m — out of reach of a
+    // standing jump (1.5 m) and of a bounce pad alone, but comfortably inside
+    // a pad-into-jet-boost. That makes the shop roofs an earned route rather
+    // than free height, which is the rule BUILD 13 set for the second tier.
+    addSolid(null, shopX + 3.6, z, 2.2, w - 1, 3.2, 3.46);
     // glowing sign strip — reads through the dusk fog
     const signMesh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.7, w * 0.6),
       new THREE.MeshStandardMaterial({ color: sign, emissive: sign, emissiveIntensity: 1.6, roughness: 0.4 }));
@@ -1101,7 +1302,11 @@ function buildWharf() {
     shop.add(glow);
     shop.position.set(shopX, 0, z);
     grp.add(shop);
-    camBlockers.push(body, roof);
+    // BUILD 21: the shop row is real estate now, not a backdrop. The hull is
+    // solid to the waist and the roof is a 4.9 m ledge — the highest continuous
+    // run on the map once the gangways reach it.
+    addSolid(body, shopX, z, 6, w, 0, 4.6);
+    addSolid(roof, shopX, z, 6.6, w + 0.6, 4.6, 4.93);
   }
 
   // floating docks on the +x side, hauled-out sea lions dozing on them —
@@ -1109,7 +1314,7 @@ function buildWharf() {
   const slBody = new THREE.CapsuleGeometry(0.55, 1.5, 4, 8);
   const slMat = new THREE.MeshStandardMaterial({ color: 0x6b5643, roughness: 0.7 });
   const slDark = new THREE.MeshStandardMaterial({ color: 0x57452f, roughness: 0.75 });
-  for (const [dz, n] of [[-16, 2], [-38, 3], [-64, 2], [-98, 3], [-132, 2], [-166, 3]]) {
+  for (const [dz, n] of DOCK_Z.map((z, i) => [z, [2, 3, 2, 3, 2, 3][i]])) {
     const dock = new THREE.Group();
     const plat = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.5, 7), woodDark);
     dock.add(plat);
@@ -1152,9 +1357,14 @@ function buildWharf() {
       cleanTargets.push(body, head);
       ambientSeaLions.push(entry);
     }
-    dock.position.set(B.width / 2 + 4.5, -1.5, dz);
+    const dockX = B.width / 2 + 4.5;
+    dock.position.set(dockX, -1.5, dz);
     grp.add(dock);
     ambientSeaLions.push({ g: dock, phase: dz, isDock: true });
+    // BUILD 21: you can get out here now. The dock deck sits at -1.25 — a step
+    // DOWN off the pier, which is why the gangway ramps rather than bridges.
+    addSolid(plat, dockX, dz, 5.5, 7, -1.75, -1.25);
+    gangway(grp, wood, B.width / 2, dockX - 2.75, dz, 0, -1.25);
   }
 
   // two wooden fish carts (reuse the car suspension springs — jet rocks them)
@@ -1173,7 +1383,9 @@ function buildWharf() {
     }
     b.castShadow = true;
     grp.add(b);
-    camBlockers.push(b);
+    // waist-high: you go around it or jump onto it, but you no longer walk
+    // through it — the deck stops being a flat plane with pictures on it
+    addSolid(b, x, z, 1.6, 2.6, 0, 0.9);
     cars.push({ mesh: b, rock: 0, rockV: 0 });
   });
 
@@ -1464,7 +1676,41 @@ function addPhysBody(g, r, restY, opts = {}) {
   physBodies.push(b);
   return b;
 }
+/* Prop-vs-prop (BUILD 21). Until now every loose object was invisible to
+   every other one: a blasted crate flew straight through a bucket. One pass
+   over the pairs, resolving overlap and trading momentum along the contact
+   normal — the cheapest thing that makes a pile of junk behave like a pile of
+   junk. O(n²) over the body list, which is bounded by the ragdoll/prop budget
+   (tens, not thousands); if that ever stops being true this wants a grid. */
+const _pp = new THREE.Vector3();
+function collideBodies() {
+  for (let i = 0; i < physBodies.length; i++) {
+    const a = physBodies[i], pa = a.g.position;
+    for (let j = i + 1; j < physBodies.length; j++) {
+      const b = physBodies[j], pb = b.g.position;
+      if (Math.abs(pa.y - pb.y) > a.r + b.r) continue;   // cheap vertical reject
+      _pp.subVectors(pb, pa);
+      const min = a.r + b.r, d2 = _pp.lengthSq();
+      if (d2 > min * min || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2);
+      _pp.multiplyScalar(1 / d);
+      // separate by mass share, so a heavy crate barely notices a cone
+      const total = a.mass + b.mass, push = (min - d);
+      pa.addScaledVector(_pp, -push * (b.mass / total));
+      pb.addScaledVector(_pp, push * (a.mass / total));
+      // exchange the closing part of their velocities, damped
+      const rel = (b.vel.x - a.vel.x) * _pp.x + (b.vel.y - a.vel.y) * _pp.y + (b.vel.z - a.vel.z) * _pp.z;
+      if (rel >= 0) continue;                            // already separating
+      const imp = -(1.3) * rel / total;
+      a.vel.addScaledVector(_pp, -imp * b.mass);
+      b.vel.addScaledVector(_pp, imp * a.mass);
+      a.angVel.y += imp * 0.5; b.angVel.y -= imp * 0.5;
+    }
+  }
+}
+
 function updatePhysics(dt) {
+  collideBodies();
   for (let i = physBodies.length - 1; i >= 0; i--) {
     const b = physBodies[i], p = b.g.position;
     // ragdoll chunks expire: shrink out, then free the mesh
@@ -1483,9 +1729,15 @@ function updatePhysics(dt) {
     b.g.rotation.x += b.angVel.x * dt;
     b.g.rotation.y += b.angVel.y * dt;
     b.g.rotation.z += b.angVel.z * dt;
+    // BUILD 21: the surface under a prop is whatever it is standing on, not a
+    // global deck height. Blast a bucket onto a container roof and it lands on
+    // the roof; knock it off and it falls the rest of the way. `restY` is now
+    // the object's offset from whatever it came to rest on.
+    const support = groundHeightAt(p.x, p.z, b._prevY ?? p.y) + b.restY;
+    b._prevY = p.y;
     // deck contact: bounce if falling fast, else rest + roll friction
-    if (p.y <= b.restY) {
-      p.y = b.restY;
+    if (p.y <= support) {
+      p.y = support;
       if (b.vel.y < -1.4) {
         b.vel.y *= -b.rest;
         b.angVel.set((Math.random() - 0.5) * 4, b.angVel.y, (Math.random() - 0.5) * 4);
@@ -1497,9 +1749,16 @@ function updatePhysics(dt) {
       // settle upright-ish tumble to a stop
       if (b.vel.lengthSq() < 0.01 && b.angVel.lengthSq() < 0.01) { b.vel.set(0, 0, 0); b.angVel.set(0, 0, 0); }
     }
-    // rails + level bounds reflect
-    const wallX = CFG.bridge.playHalfW;
-    if (Math.abs(p.x) > wallX) { p.x = Math.sign(p.x) * wallX; b.vel.x *= -0.45; }
+    // walls: a prop caroms off containers, shopfronts and carts the same way
+    // it caroms off the pier ends. `collideSolids` reports which axis it had
+    // to push along, which is exactly the axis to reflect.
+    const wall = collideSolids(p, b.r, Math.max(0.2, b.r * 1.4), { step: 0.02 });
+    if (wall) {
+      if (wall.x) { b.vel.x *= -0.45; b.angVel.z += b.vel.x * 0.4; }
+      if (wall.z) { b.vel.z *= -0.45; b.angVel.x += b.vel.z * 0.4; }
+    }
+    const wallX = CFG.bridge.width / 2 - 0.5;
+    if (Math.abs(p.x) > wallX && !supportUnder(p)) { p.x = Math.sign(p.x) * wallX; b.vel.x *= -0.45; }
     if (p.z > CFG.bridge.zStart - 1) { p.z = CFG.bridge.zStart - 1; b.vel.z *= -0.45; }
     if (p.z < CFG.bridge.playZEnd) { p.z = CFG.bridge.playZEnd; b.vel.z *= -0.45; }
     // walking through a prop boots it aside — the deck feels solid
@@ -3189,8 +3448,12 @@ class Zombie {
       pos.z += (sz / d) * push;
     }
 
-    // keep on the deck
-    pos.x = THREE.MathUtils.clamp(pos.x, -(CFG.bridge.playHalfW + 0.1), CFG.bridge.playHalfW + 0.1);
+    // BUILD 21: the horde shares the player's world. They shoulder into the
+    // same containers, carts and shopfronts and slide around them instead of
+    // strolling through — which is what turns a container from a decoration
+    // into cover you can actually break line of sight behind.
+    collideSolids(pos, 0.42, 1.6);
+    keepOnStructure(pos);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
 
     // wet planks: a hustling zombie that crosses a slick patch wipes out
@@ -4711,9 +4974,18 @@ function updatePlayer(dt, t) {
     Player.onGround = false; // walked off an edge
   }
 
-  // stay on the playable deck
-  Player.pos.x = THREE.MathUtils.clamp(Player.pos.x, -(CFG.bridge.playHalfW + 0.2), CFG.bridge.playHalfW + 0.2);
+  // BUILD 21: the world pushes back instead of an invisible wall holding you
+  // in. Shops, containers, carts and gangways are solid volumes now, so this
+  // is the only movement constraint left — and it is the one the level
+  // actually has: the far ends of the pier, and the water.
+  collideSolids(Player.pos, 0.45, 1.7);
   Player.pos.z = THREE.MathUtils.clamp(Player.pos.z, CFG.bridge.playZEnd, 13);
+  // remember the last honest footing, so a fall has somewhere to put you back
+  if (Player.onGround && Player.pos.y > VOID_Y + 1) {
+    Player._safe = Player._safe || new THREE.Vector3();
+    Player._safe.copy(Player.pos);
+  }
+  if (Player.pos.y < BAY_Y) bayFall();
 
   // body follows the camera yaw with a beat of lag — fast flicks read as
   // the camera leading and the body catching up, not a statue on a turntable
@@ -6897,7 +7169,9 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   BOSS, summonBoss, updateBoss, getBoss: () => boss, checkWin, updateSplashes, splashPool, scene,
   NOZZLES, cycleNozzle, Nozzle, getNozzleIdx: () => nozzleIdx, setNozzle: (i) => { nozzleIdx = i; applyNozzleUI(); },
   Rush, startRush, startWave, updateRush, clearStoryContent, reapEntities,
-  platforms, bouncePads, groundHeightAt, tryBounce, updateBouncePads, removeCleanTargets,
+  platforms, solids, addSolid, collideSolids, solidTop, supportUnder, keepOnStructure,
+  bayFall, BAY_Y, VOID_Y,
+  bouncePads, groundHeightAt, tryBounce, updateBouncePads, removeCleanTargets,
   updateContactShadows, getContactMesh: () => contactMesh,
   PERKS, Perks, offerPerks, takePerk, getPerkOffer: () => perkOffer,
   // BUILD 12 weak points / crits / chain bursts

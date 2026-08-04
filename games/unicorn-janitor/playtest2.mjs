@@ -1076,10 +1076,16 @@ const terrain = await page.evaluate(() => {
   // on six of them, and landing on a roof you didn't aim for proves nothing
   const covered = (c) => UJ.platforms.some(o => o !== c && o.y > c.y &&
     o.x0 < c.x1 && o.x1 > c.x0 && o.z0 < c.z1 && o.z1 > c.z0);
-  const c = UJ.platforms.find(p => p.y > 2 && !covered(p));
+  // BUILD 21 put the whole world in this list — shopfronts, awnings, gangways,
+  // the deck itself. Pick a CONTAINER specifically: sitting on the deck
+  // (y0 === 0), inside the railings, and tall enough to stand on.
+  const c = UJ.platforms.find(p => p.y0 === 0 && p.y > 2 && p.y < 4.5 &&
+    p.x0 > -12 && p.x1 < 12 && Math.abs(p.x0 + p.x1) > 6 && !covered(p));
   const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2;
   const onTop = UJ.groundHeightAt(cx, cz, 10);        // falling from above
-  const beside = UJ.groundHeightAt(cx + 9, cz, 10);   // off to the side
+  // mirrored across the pier, not 9 m outboard: BUILD 21 made the flanking
+  // docks and shops real ground, so "9 m to the side" is no longer open air
+  const beside = UJ.groundHeightAt(-cx, cz, 10);
   const fromBelow = UJ.groundHeightAt(cx, cz, 0.2);   // jumping up through it
   // and actually land on it
   P.pos.set(cx, c.y + 4, cz); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
@@ -1092,6 +1098,97 @@ ok('cargo containers are standable terrain, and you pass up through them',
    terrain.count >= 12 && terrain.onTop === terrain.top && terrain.beside === 0 &&
    terrain.fromBelow === 0 && Math.abs(terrain.rest.y - terrain.top) < 0.05 && terrain.rest.onGround,
    `${terrain.count} platforms · ground on top ${terrain.onTop}m, beside ${terrain.beside}m, from below ${terrain.fromBelow}m · Jax settles at ${terrain.rest.y}m`);
+
+/* =====================================================================
+   B21. A SOLID, EXPLORABLE WHARF — the level used to be a painted corridor:
+   `platforms` knew only the tops of boxes, so you walked through the side of
+   every container and shopfront, and a clamp on x held you in a 22.8m lane.
+   These check the three things that changed, not that nothing broke.
+   ===================================================================== */
+
+// B21a. Walls exist. Walking into a container is stopped by the container.
+const wall = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const c = UJ.solids.find(s => s.y0 === 0 && s.y > 2 && s.y < 4.5 &&
+    s.x0 > -12 && s.x1 < 12 && Math.abs(s.x0 + s.x1) > 6);
+  const cx = (c.x0 + c.x1) / 2;
+  P.pos.set(cx, 0, c.z1 + 6); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+  P.yaw = Math.PI; UJ.Input.keys = {}; UJ.Input.keys.KeyW = true;   // walk at its face
+  for (let i = 0; i < 140; i++) UJ.step(0.03);
+  UJ.Input.keys = {};
+  const stop = P.pos.z;
+  P.pos.set(0, 0, -30);
+  return { face: +c.z1.toFixed(2), stop: +stop.toFixed(2), y: +P.pos.y.toFixed(2),
+           gap: +(stop - c.z1).toFixed(2) };
+});
+ok('containers are solid: you are stopped at the wall instead of walking through it',
+   wall.stop > wall.face && wall.gap < 1.2,
+   `walked into the face at z=${wall.face} and stopped at ${wall.stop} — ${wall.gap}m clear, not through it`);
+
+// B21b. The shop row and the sea-lion docks are reachable. Both sat 3-7m
+// outside the old x-clamp of 11.4: visible, signposted, and impossible to touch.
+const explore = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const out = { oldWall: UJ.CFG.bridge.playHalfW };
+  // shop roof — the highest continuous run on the map, well outboard
+  const roof = UJ.solids.filter(s => s.y > 4.5 && s.y < 5.2 && s.x1 < -12)
+    .sort((a, b) => a.z0 - b.z0)[0];
+  const rx = (roof.x0 + roof.x1) / 2, rz = (roof.z0 + roof.z1) / 2;
+  P.pos.set(rx, roof.y + 3, rz); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = false;
+  for (let i = 0; i < 80; i++) UJ.step(0.03);
+  out.shop = { x: +rx.toFixed(1), top: +roof.y.toFixed(2), rest: +P.pos.y.toFixed(2),
+               onGround: P.onGround };
+  // floating dock — walk out of the level down a gangway, no teleporting
+  const ramp = UJ.solids.find(s => s.slope);
+  const gz = (ramp.z0 + ramp.z1) / 2;
+  P.pos.set(ramp.x0 - 1, 0, gz); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+  P.yaw = Math.PI / 2; UJ.Input.keys = {}; UJ.Input.keys.KeyW = true;
+  let far = 0;
+  for (let i = 0; i < 150; i++) { UJ.step(0.03); far = Math.max(far, P.pos.x); }
+  UJ.Input.keys = {};
+  out.dock = { reached: +far.toFixed(2), y: +P.pos.y.toFixed(2) };
+  P.pos.set(0, 0, -30); P.vel.y = 0;
+  return out;
+});
+ok('the flanking world is reachable: shop roofs above, floating docks below',
+   Math.abs(explore.shop.rest - explore.shop.top) < 0.1 && explore.shop.onGround &&
+   explore.shop.x < -14 && explore.dock.reached > explore.oldWall + 5,
+   `stood on a shop roof at x=${explore.shop.x}, ${explore.shop.rest}m; walked the gangway out ` +
+   `to x=${explore.dock.reached} — the old invisible wall was ${explore.oldWall}`);
+
+// B21c. Going over the edge is a dunking, not a fall out of the world.
+const bay = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  P.pos.set(0, 0, -30); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+  for (let i = 0; i < 4; i++) UJ.step(0.03);        // bank a safe footing
+  const hp0 = P.hp;
+  P.pos.set(30, -3, -30); P.vel.y = -4; P.onGround = false;   // off the side, in the drink
+  UJ.step(0.03);
+  return { back: [+P.pos.x.toFixed(1), +P.pos.y.toFixed(1)], hp0, hp: P.hp,
+           onGround: P.onGround, ground: UJ.groundHeightAt(30, -30, 1) };
+});
+ok('falling in the bay fishes you out where you last stood, for a small toll',
+   bay.ground < -10 && Math.abs(bay.back[0]) < 13 && bay.back[1] > -1 &&
+   bay.hp < bay.hp0 && bay.hp0 - bay.hp < 20,
+   `open water reads ${bay.ground} (not phantom deck); dunked at x=30 and put back at ` +
+   `x=${bay.back[0]}, y=${bay.back[1]} for ${+(bay.hp0 - bay.hp).toFixed(1)} HP`);
+
+// B21d. Props share the world: they land on roofs and shove each other.
+const props = await page.evaluate(() => {
+  const UJ = window.UJ;
+  // an UNCOVERED container: six of them carry a second tier, and the support
+  // over one of those is correctly the stack's roof, not the container's
+  const covered = (c) => UJ.solids.some(o => o !== c && o.y > c.y &&
+    o.x0 < c.x1 && o.x1 > c.x0 && o.z0 < c.z1 && o.z1 > c.z0);
+  const c = UJ.solids.find(s => s.y0 === 0 && s.y > 2 && s.y < 4.5 &&
+    s.x0 > -12 && s.x1 < 12 && !covered(s));
+  const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2;
+  return { roofRest: +UJ.groundHeightAt(cx, cz, 10).toFixed(2), roofTop: +c.y.toFixed(2),
+           deckRest: +UJ.groundHeightAt(0, -30, 10).toFixed(2) };
+});
+ok('a prop dropped on a container rests on the container, not the deck below it',
+   props.roofRest === props.roofTop && props.deckRest === 0,
+   `support over a ${props.roofTop}m container reads ${props.roofRest}m, and plain deck reads ${props.deckRest}m`);
 
 // B9b. BOUNCE PADS — landing on one throws you well above a plain jump
 const bounce = await page.evaluate(() => {
@@ -1782,6 +1879,11 @@ const fovComp = await page.evaluate(() => {
   for (let i = 0; i < 60; i++) UJ.step(0.03);
   const walkFov = +UJ.camera.fov.toFixed(1);
   const walking = sweepFraction();
+  // sweepFraction() leaves the yaw swept ~59° off north. Before BUILD 21 that
+  // did not matter — you could sprint through shopfronts. Now the world is
+  // solid, so a diagonal sprint runs into the shop row and never reaches full
+  // speed, and the lens never stretches. Re-aim down the empty centreline.
+  P.pos.set(0, 0, -40); P.yaw = Math.PI; P.pitch = 0;
   UJ.Input.keys.KeyW = true; UJ.Input.keys.ShiftLeft = true;   // sprint stretches the lens
   for (let i = 0; i < 120; i++) UJ.step(0.03);
   const sprintFov = +UJ.camera.fov.toFixed(1);
