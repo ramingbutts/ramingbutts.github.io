@@ -636,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 21;
+const BUILD = 22;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -2853,6 +2853,9 @@ class Zombie {
     // `kind` is the modern form; the runner/brute booleans are still accepted
     // (and still exposed) because the layout, waves and playtests speak them
     this.kind = opts.kind || (opts.runner ? 'runner' : opts.brute ? 'brute' : 'shambler');
+    // which way this one prefers to go round an obstacle — fixed per zombie so
+    // a crowd fans around a container instead of queueing at one corner
+    this._side = Math.random() < 0.5 ? -1 : 1;
     const K = this.spec = ZKIND[this.kind] || ZKIND.shambler;
     this.runner = this.kind === 'runner';
     this.brute = this.kind === 'brute';
@@ -3243,7 +3246,48 @@ class Zombie {
   // BUILD 4 locomotion: a real steering model. Heading turns at a capped
   // rate (arcs, not pivots), speed ramps with acceleration and bleeds off in
   // hard turns, and the body faces its actual direction of travel.
+  /* Wall-follow (BUILD 22). `collideSolids` hands back the axis it had to push
+     along, which is the wall's outward normal. Turn along the tangent — the
+     one of the two that points more toward the player — and keep walking. No
+     nav mesh, no path search: for a map of axis-aligned boxes, "turn the
+     corner and re-aim" is the whole behaviour, and it resolves the moment the
+     obstacle stops overlapping. */
+  slideAround(hit, dt) {
+    const nx = hit.x || 0, nz = hit.z || 0;
+    if (!nx && !nz) return;
+    const pos = this.group.position;
+    // PICK A SIDE ONCE, AND COMMIT. Choosing the tangent every frame looks
+    // right and deadlocks: with the player straight through the wall the two
+    // tangents score identically, so the choice flips on floating-point noise
+    // and the zombie turns left, right, left, going nowhere. Measured: the
+    // detour target alternating between x=2.6 and x=12.6 every three frames.
+    // The side is chosen when a detour is armed and held while contact lasts.
+    if (!(this._detourT > 0)) {
+      const dx = Player.pos.x - pos.x, dz = Player.pos.z - pos.z;
+      let tx = -nz, tz = nx;
+      const along = tx * dx + tz * dz;
+      // Ties are the common case, not the edge case — it is what "hiding
+      // behind the box" means. Break them on a per-zombie bias so a crowd
+      // splits around an obstacle instead of stacking on one corner.
+      if (along < -0.05 || (Math.abs(along) <= 0.05 && this._side < 0)) { tx = -tx; tz = -tz; }
+      this._tan = this._tan || new THREE.Vector2();
+      this._tan.set(tx, tz);
+    }
+    // A DETOUR TARGET, not a heading. Steering the heading does nothing:
+    // moveToward re-aims at the player every frame, before collision runs, so
+    // the two fight and the zombie sits still. Overriding the target survives
+    // because moveToward is the thing being overridden.
+    this._detour = this._detour || new THREE.Vector3();
+    this._detour.set(pos.x + this._tan.x * 5, 0, pos.z + this._tan.y * 5);
+    this._detourT = 0.55;   // refreshed while in contact, so the side sticks
+  }
+
   moveToward(tx, tz, maxSpeed, dt) {
+    // a live detour outranks the real target until it lapses
+    if (this._detourT > 0) {
+      this._detourT -= dt;
+      tx = this._detour.x; tz = this._detour.z;
+    }
     this._moved = true;
     const pos = this.group.position;
     const dx = tx - pos.x, dz = tz - pos.z;
@@ -3448,11 +3492,17 @@ class Zombie {
       pos.z += (sz / d) * push;
     }
 
-    // BUILD 21: the horde shares the player's world. They shoulder into the
-    // same containers, carts and shopfronts and slide around them instead of
-    // strolling through — which is what turns a container from a decoration
-    // into cover you can actually break line of sight behind.
-    collideSolids(pos, 0.42, 1.6);
+    // BUILD 21: the horde shares the player's world — they shoulder into the
+    // same containers, carts and shopfronts instead of strolling through.
+    //
+    // BUILD 22: and they get around them. Blocking alone made cover absolute:
+    // `moveToward` drives straight at the player, the wall cancels exactly the
+    // component that would close the distance, and a zombie grinds against a
+    // container for as long as you care to stand behind it. Measured: 13.5s
+    // pinned at one spot, 17m away, never arriving. Cover should buy time and
+    // reposition, not immunity.
+    const hit = collideSolids(pos, 0.42, 1.6);
+    if (hit) this.slideAround(hit, dt);
     keepOnStructure(pos);
     pos.z = THREE.MathUtils.clamp(pos.z, CFG.bridge.playZEnd, CFG.bridge.zStart - 3);
 
