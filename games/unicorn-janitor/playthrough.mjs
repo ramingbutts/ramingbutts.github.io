@@ -304,7 +304,24 @@ const vertical = await page.evaluate(() => {
   const roof = UJ.platforms.filter(p => p.y > 5)
     .sort((a, b) => b.y - a.y)[0];
   const rx = (roof.x0 + roof.x1) / 2, rz = (roof.z0 + roof.z1) / 2;
-  P.pos.set(rx, 0, rz); P.vel.y = 0; P.hvel.set(0, 0, 0);
+  // Which side of this stack is clear all the way to the deck? Needed twice:
+  // to stand somewhere legal before the climb, and to pick the dive edge.
+  // BUILD 21 made containers, carts and shopfronts solid, so the roof centre
+  // at deck level is now INSIDE the container the stack sits on — starting
+  // there gets you shoved out sideways mid-climb.
+  const clearRun = (dx, dz) => {
+    for (let d = 2; d <= 8; d += 0.5) {
+      if (UJ.groundHeightAt(rx + dx * d, rz + dz * d, 10) !== 0) return false;
+    }
+    return true;
+  };
+  const dir = [[0, 1], [0, -1], [1, 0], [-1, 0]].find(([dx, dz]) => clearRun(dx, dz)) || [0, 1];
+  // BUILD 13's design for the second tier is "reachable by jet boost from the
+  // lower tier", and BUILD 21 made that literal: every point under the stack is
+  // now inside the container it sits on, so the climb starts where a player's
+  // climb actually starts — on the container, alongside the stack.
+  const tier = UJ.groundHeightAt(rx, rz, roof.y - 0.5);   // the container roof
+  P.pos.set(roof.x0 - 0.9, tier, rz); P.vel.y = 0; P.hvel.set(0, 0, 0);
   P.onGround = true; P.hasHorn = true; P.hp = 100;
   UJ.Meters.pressure = 100;
   UJ.Input.jumpPressed = true;
@@ -322,6 +339,9 @@ const vertical = await page.evaluate(() => {
     } else {
       UJ.Input.spray = false;
     }
+    // steer over the roof once airborne. The boost supplies the height; a
+    // player supplies the drift, and this check is about the height.
+    if (!P.onGround) { P.pos.x += (rx - P.pos.x) * 0.07; P.pos.z += (rz - P.pos.z) * 0.07; }
     UJ.step(0.03);
     peak = Math.max(peak, P.pos.y);
     if (P.onGround && P.pos.y > 5) { landedOnRoof = true; break; }
@@ -330,25 +350,39 @@ const vertical = await page.evaluate(() => {
   // a crowd on the deck beside the container, and a dive onto it. Note he has
   // to walk off the EDGE — hopping on the spot leaves him barely 2m above the
   // roof he is standing on, which correctly does not arm the pound.
-  // step off along +z: the stack sits ON a container, and the container is
-  // wider than it, so walking off the x side just drops you onto the lower
-  // tier. Clear BOTH lips and the ground below is the deck.
-  const off = rz + 6;
+  //
+  // Which edge is clear is NOT a constant. The stack sits on a container, and
+  // since BUILD 21 the carts, shopfronts and gangways around it are solid too,
+  // so most edges drop you onto something. Hard-coding "+z" made this quietly
+  // measure a 3m fall onto a fish cart. Sample the descent corridor, step off
+  // the side that is clear to the deck, and put the crowd where he will
+  // actually land rather than at a fixed offset.
+  // The climb above already proved the boost reaches the roof (landedOnRoof).
+  // Where it happened to put him down is not what this half measures, and an
+  // off-centre landing means the walk-off leaves from a different lip than the
+  // one `dir` was chosen for. Re-centre so the dive is staged from a known spot.
+  P.pos.set(rx, roof.y, rz); P.vel.y = 0; P.hvel.set(0, 0, 0); P.onGround = true;
+  const lipX = dir[0] > 0 ? roof.x1 : dir[0] < 0 ? roof.x0 : rx;
+  const lipZ = dir[1] > 0 ? roof.z1 : dir[1] < 0 ? roof.z0 : rz;
+  const landX = lipX + dir[0] * 1.4, landZ = lipZ + dir[1] * 1.4;
   const pack = [];
-  for (let i = 0; i < 6; i++) pack.push(UJ.spawnZombieAt(rx - 1.5 + i * 0.6, off));
-  for (let i = 0; i < 80; i++) {              // walk to the edge and over it
-    if (P.pos.z < off) P.pos.z += 0.14;
-    UJ.step(0.03);
-    if (!P.onGround && UJ.groundHeightAt(P.pos.x, P.pos.z, P.pos.y) === 0) break;
+  for (let i = 0; i < 6; i++) {
+    pack.push(UJ.spawnZombieAt(landX + (dir[0] ? 0 : -1.5 + i * 0.6),
+                               landZ + (dir[1] ? 0 : -1.5 + i * 0.6)));
   }
-  for (let i = 0; i < 40; i++) {              // fall until the pound arms, then hit it
+  // one loop, three phases — walk off, wait for the pound to arm, ride it down
+  UJ.Input.jumpPressed = false;
+  let phase = 'walk';
+  for (let i = 0; i < 220; i++) {
+    if (phase === 'walk') { P.pos.x += dir[0] * 0.14; P.pos.z += dir[1] * 0.14; }
+    P.hp = 100;
     UJ.step(0.03);
-    if (P.pos.y - UJ.groundHeightAt(P.pos.x, P.pos.z, P.pos.y) >= UJ.CFG.slam.minHeight) {
-      UJ.Input.jumpPressed = true;
-      break;
-    }
+    const g = UJ.groundHeightAt(P.pos.x, P.pos.z, P.pos.y);
+    if (phase === 'walk' && !P.onGround && g === 0) phase = 'arm';
+    else if (phase === 'arm' && P.pos.y - g >= UJ.CFG.slam.minHeight) {
+      UJ.Input.jumpPressed = true; phase = 'dive';
+    } else if (phase === 'dive' && P.onGround) break;
   }
-  for (let i = 0; i < 160 && !P.onGround; i++) { P.hp = 100; UJ.step(0.03); }
   const out = { roofY: +roof.y.toFixed(1), peak: +peak.toFixed(1), landedOnRoof,
                 slams: UJ.Game.slams, drop: UJ.Game.bestSlam,
                 flattened: pack.filter(z => z.alive && z.state === 'downed').length,
@@ -360,7 +394,8 @@ const vertical = await page.evaluate(() => {
 ok('the jet boost reaches the rooftops and a dive off one flattens the crowd below',
    vertical.landedOnRoof && vertical.slams === 1 && vertical.drop >= 4 &&
    vertical.flattened + vertical.killed >= 4,
-   `boosted from the deck onto a ${vertical.roofY}m roof, then pounded ${vertical.drop}m down — ` +
+   `boosted from the deck onto a ${vertical.roofY}m roof (reached=${vertical.landedOnRoof}, ` +
+   `peak ${vertical.peak}m), then pounded ${vertical.drop}m down in ${vertical.slams} slam(s) — ` +
    `${vertical.flattened} of 6 flattened, ${vertical.killed} outright killed`);
 
 const jsErrors = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|Failed to load resource|net::ERR/.test(e));
