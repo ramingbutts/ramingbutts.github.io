@@ -1156,6 +1156,33 @@ ok('the flanking world is reachable: shop roofs above, floating docks below',
    `stood on a shop roof at x=${explore.shop.x}, ${explore.shop.rest}m; walked the gangway out ` +
    `to x=${explore.dock.reached} — the old invisible wall was ${explore.oldWall}`);
 
+// B21e. Cover buys time, not immunity. Blocking without steering made a
+// container an invincibility field: the chase drives straight at you, the wall
+// cancels exactly the component that closes the distance, and the zombie
+// grinds in place forever. Measured before the fix: 13.5s pinned, 17m away.
+const cover = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  const C = UJ.solids.find(s => s.y0 === 0 && s.y > 2 && s.y < 4 && s.x0 > 0 && s.x1 < 12);
+  const cx = (C.x0 + C.x1) / 2, cz = (C.z0 + C.z1) / 2;
+  UJ.getZombies().length = 0;
+  P.pos.set(cx, 0, cz - 14); P.vel.y = 0; P.onGround = true; P.hp = 100;   // far side
+  const z = UJ.spawnZombieAt(cx, cz + 7);                                   // near side
+  const start = z.group.position.distanceTo(P.pos);
+  let closest = start;
+  for (let i = 0; i < 500; i++) {
+    P.hp = 100; UJ.step(0.03);
+    closest = Math.min(closest, z.group.position.distanceTo(P.pos));
+  }
+  const out = { start: +start.toFixed(1), closest: +closest.toFixed(2), state: z.state };
+  UJ.getZombies().length = 0; UJ.reapEntities?.();
+  P.pos.set(0, 0, -30);
+  return out;
+});
+ok('the horde walks around cover instead of grinding on it',
+   cover.closest < 2.5,
+   `zombie started ${cover.start}m away with a container between it and Jax, and closed to ` +
+   `${cover.closest}m (state "${cover.state}") — blocking alone left it stuck at 17m`);
+
 // B21c. Going over the edge is a dunking, not a fall out of the world.
 const bay = await page.evaluate(() => {
   const UJ = window.UJ, P = UJ.Player;

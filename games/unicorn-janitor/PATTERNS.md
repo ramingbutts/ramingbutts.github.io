@@ -1743,3 +1743,74 @@ this game's budget goes. The six gangways added 18 meshes, so they ship
 through BUILD 19's `fuse()` as 6: deck plus two kerbs share a material and
 never move relative to each other. Net **+12 draw calls** for a third of the
 map becoming reachable.
+
+## Cover was immunity (BUILD 22)
+
+BUILD 21 made the wharf solid. The comment I shipped next to the zombie
+collision call said they "slide around" obstacles. They did not. I wrote a
+comment describing behaviour I had not implemented, and every suite passed
+because no check had ever asked whether the horde could reach you.
+
+Going looking is what found it. A zombie chasing a player on the far side of
+a shipping container walks up to the wall and **grinds there forever**:
+`moveToward` drives straight at the player, `collideSolids` cancels exactly
+the component that would close the distance, and the equilibrium is perfect.
+Measured: 13.5 s pinned at one spot, 17 m away, speed a constant 3.05.
+
+That is worse than the bug it replaced. Before BUILD 21 the horde walked
+through containers and always arrived. After it, **standing behind any
+container was total immunity** — you could camp a box forever. Cover should
+buy time and reposition, not invulnerability.
+
+### Two false starts worth recording
+
+**Steering the heading does nothing.** The obvious fix — turn the zombie along
+the wall tangent when blocked — has no effect, because `moveToward` re-aims at
+the player at the *top* of the frame and collision runs at the *bottom*. The
+two fight, the zombie sits still, and the only visible symptom is its speed
+oscillating instead of holding constant. The fix has to override the **target**,
+because the target is what `moveToward` reads.
+
+**Choosing the side every frame deadlocks.** With the player straight through
+the wall, `dx ≈ 0`, so both tangents score identically and the choice flips on
+floating-point noise. Observed directly: the detour target alternating between
+x = 2.6 and x = 12.6 every three frames while the zombie turned left, right,
+left. A tie here is not an edge case — it is precisely what "hiding behind the
+box" means, so it is the case that has to be got right.
+
+### What works
+
+Pick a side **once**, when a detour is armed, and hold it while contact lasts.
+Ties break on a per-zombie `_side` fixed at construction, so a crowd fans
+around an obstacle instead of queueing at one corner. The detour is a point
+5 m along the committed tangent, re-projected from the current position each
+frame and expiring 0.55 s after contact stops.
+
+No nav mesh, no path search. For a map of axis-aligned boxes, "turn the corner
+and re-aim" is the whole behaviour, and it resolves the instant the obstacle
+stops overlapping.
+
+Result on the same setup: 21 m start, container in between, **closes to
+0.02 m** and lunges. Was 17.12 m and stuck.
+
+### The sweep
+
+1,080 drop points across the whole map, checking the player never ends up
+embedded in geometry: **0 genuine cases.** (Two flag as "inside" a gangway —
+a ramp's bounding box necessarily contains its own sloped walking surface, so
+that is the predicate being wrong, not the game.) The player rests stable,
+`onGround`, and walks off normally from every one of them.
+
+One cosmetic thing observed and **not** explained: at rest on the deck the
+player settles at y = −0.013 rather than exactly 0. It is 1.3 cm, `onGround`
+stays true, bounce pads and jumps behave, and movement is unaffected. Recorded
+as unexplained rather than dressed up as understood.
+
+### The lesson, again
+
+This is the third time in this file: **the suite passing after a change proves
+only that the old behaviour survived.** BUILD 14 (the stepper diverging),
+BUILD 21 (105 checks green on a world you could now walk through), and now
+this. New behaviour needs a check written for it, and the way to find out
+whether a system works is to go and try to break it — not to observe that
+nothing already-written complained.
