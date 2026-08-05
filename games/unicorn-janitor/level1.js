@@ -1882,8 +1882,10 @@ const NOZZLE_GUN = { up: 1.24, fwd: 2.4, right: 0.16 };
 
 function buildPlayer() {
   const g = Player.group = new THREE.Group();
-  Player.pos = g.position;
-  g.position.set(0, 0, 12);
+  // BUILD 24 (see level2): aliasing pos to the render transform let the
+  // cosmetic bob accumulate into the authoritative position every frame.
+  Player.pos = new THREE.Vector3(0, 0, 12);
+  g.position.copy(Player.pos);
 
   // concept art: navy short-sleeve jumpsuit over a black tee, leather
   // suspenders + belt, cargo pants, mohawk with shaved silver sides,
@@ -2209,7 +2211,8 @@ function updatePlayer(dt, t) {
   Player.group.rotation.y = Player.yaw;
   // running bob, or a slow idle-breathing rise when standing still
   const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
-  Player.group.position.y = Player.pos.y + bob;
+  Player.group.position.copy(Player.pos);
+  Player.group.position.y += bob;
 
   // landing squash-and-recover: the whole body (rig or GLB, gun included)
   // compresses on touchdown proportional to impact speed, then springs back
