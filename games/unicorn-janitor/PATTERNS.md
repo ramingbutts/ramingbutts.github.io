@@ -1890,3 +1890,91 @@ as 3, and each boat's 13 as 6, per BUILD 19's rule that anything static,
 repeated and same-material is one call. Randomised zombie spawns make this
 measurement useless — culling changes run to run — so the positions are fixed
 before anything is compared.
+
+## Fixing what was already written down (BUILD 24)
+
+Four things had been flagged in this file or in a hand-off and left unfixed.
+Going back for them found two worse bugs underneath.
+
+### 1. The bob was writing into the physics position
+
+BUILD 22 recorded "at rest the player settles at y = −0.013 rather than 0 …
+recorded as unexplained rather than dressed up as understood". Here is the
+explanation.
+
+```js
+Player.pos = g.position;                       // buildPlayer
+Player.group.position.y = Player.pos.y + bob;  // every frame
+```
+
+`Player.pos` **was** `Player.group.position` — the same `Vector3`. So the
+second line is `pos.y += bob`: the cosmetic walk/breathe bob was being added
+to the authoritative position on every frame. The ground code then snapped it
+back only if it fell *below* the ground, and there is a dead band —
+
+```js
+} else if (Player.pos.y > groundY + 0.05) { Player.onGround = false; }
+```
+
+— between `groundY` and `groundY + 0.05` where the player is neither snapped
+down nor called airborne. So he hovered there, a centimetre or two off the
+deck, forever, and every consumer of `pos.y` inherited it: the slam height
+gate, contact shadows, `_safe`, the reticle origin.
+
+The fix is to stop the render transform and the physics position being one
+object. `Player.pos` is its own vector; the group copies it and adds the bob.
+Only one line in the whole file read `Player.group.position`, which is how a
+five-year-old alias survives unnoticed. **Level 1 had the identical bug** and
+got the identical fix.
+
+Anything visual that should still ride the bob reads `Player.group.position`
+— the muzzle, so water keeps leaving the barrel the player can see. Anything
+physical reads `Player.pos`.
+
+### 2. The report button threw every time it was clicked
+
+```js
+Diag && Diag.log && Diag.log('report', 'diagnostic copied');
+```
+
+`Diag` lives in `js/diag.js`, which the dashboard loads and **this game does
+not**. A bare `Diag && …` on an undeclared identifier is a `ReferenceError`,
+not a falsy check. So the one button whose entire job is to report problems
+threw on every click — and because the throw was caught by the global handler
+into `window.__ujErrors`, the diagnostic report reported the report button.
+
+Verified on the shipped build before touching it:
+`PAGE ERRORS: ["Diag is not defined"]`.
+
+This is the third instance of the same shape in this file: a guard that looks
+defensive and isn't (`renderer.info` in BUILD 18, the stepper in BUILD 14).
+`typeof x !== 'undefined'` is the only guard that works on an identifier that
+may never have been declared.
+
+### 3. The silent fallback, made loud
+
+The models still live on a remote URL with **no vendored copy in `models/`**
+— this sandbox is denied the CDN by egress policy (403 at the proxy) and
+cannot download them, so the same expiry will happen again. What must not
+happen again is it being silent for six builds.
+
+- The menu label triggered only when **both** models failed. Either one means
+  you are looking at placeholder art. Now `||`.
+- A toast fires — but the loaders resolve during startup while the title card
+  is up, so a toast fired then is gone before anyone is playing. It is held
+  and flushed on the first playing frame.
+- A toast is also gone in ten seconds and the next gameplay message overwrites
+  it, so the build stamp — on screen for the whole run — becomes
+  `BUILD n · PLACEHOLDER ART` in amber.
+
+That last point cost an existing check, which asserted the stamp *equalled*
+`BUILD n`. It now asserts it *starts with* it. Worth the trade: a warning you
+can miss is not a warning.
+
+### 4. The airborne sweep points were fine
+
+BUILD 22's sweep left 12 of 1080 drop points airborne and did not investigate.
+They are all legitimate: mid-bounce off an awning pad (one had `vy = 15.5`),
+or mid-fall into the bay beside a dock, where `groundHeightAt` correctly reads
+`VOID_Y`. Nothing to fix — but "12 unexplained" and "12 explained and benign"
+are different states, and only one of them is honest.

@@ -431,7 +431,7 @@
 </script>
 
 <link rel="modulepreload" href="./lib/three.module.min.js">
-<link rel="modulepreload" href="./level2.js?v=23">
+<link rel="modulepreload" href="./level2.js?v=24">
 <script>
 // Boot the engine only after the shell has painted and the page has "loaded".
 // The page itself is just HTML+CSS, so load fires in milliseconds; Three.js
@@ -444,7 +444,7 @@
     // ?v= is not decoration: without it a browser can hold a cached level2.js
     // for as long as it likes, so a deploy updates the page around a game that
     // never changes. Bump it with BUILD.
-    s.src = './level2.js?v=23';
+    s.src = './level2.js?v=24';
     document.body.appendChild(s);
   };
   if (document.readyState === 'complete') boot();

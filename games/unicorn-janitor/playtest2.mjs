@@ -1156,6 +1156,85 @@ ok('the flanking world is reachable: shop roofs above, floating docks below',
    `stood on a shop roof at x=${explore.shop.x}, ${explore.shop.rest}m; walked the gangway out ` +
    `to x=${explore.dock.reached} — the old invisible wall was ${explore.oldWall}`);
 
+// B24a. The physics position is not the render transform. Player.pos used to
+// BE Player.group.position, so the cosmetic walk/breathe bob wrote itself into
+// the authoritative position every frame and a standing player drifted ~2cm up
+// into the dead band between groundY and groundY+0.05 — where the ground code
+// neither snaps him down nor calls him airborne, so he just hovered.
+const bobbing = await page.evaluate(() => {
+  const UJ = window.UJ, P = UJ.Player;
+  UJ.getZombies().length = 0;
+  UJ.Input.keys = {};
+  P.pos.set(0, 0, -30); P.vel.y = 0; P.hvel.set(0, 0, 0);
+  P.onGround = true; P.knock.set(0, 0, 0); P.hp = 100;
+  const ys = [];
+  for (let i = 0; i < 30; i++) { P.hp = 100; UJ.step(0.03); ys.push(P.pos.y); }
+  const idleDrift = Math.max(...ys.map(Math.abs));
+  // and while walking, where the bob is three times bigger
+  P.yaw = Math.PI; UJ.Input.keys.KeyW = true;
+  const wy = [];
+  for (let i = 0; i < 60; i++) { P.hp = 100; UJ.step(0.03); wy.push(P.pos.y); }
+  UJ.Input.keys = {};
+  const walkDrift = Math.max(...wy.map(Math.abs));
+  // the rig must still visibly bob — this is a decoupling, not a removal
+  const rigOffset = Math.abs(P.group.position.y - P.pos.y);
+  P.pos.set(0, 0, -30);
+  return { idleDrift: +idleDrift.toFixed(4), walkDrift: +walkDrift.toFixed(4),
+           rigOffset: +rigOffset.toFixed(4), aliased: P.pos === P.group.position };
+});
+ok('the walk bob moves the rig, not the position Jax is standing at',
+   !bobbing.aliased && bobbing.idleDrift < 0.001 && bobbing.walkDrift < 0.001,
+   `standing on flat deck the position stays within ${bobbing.idleDrift}m of the ground ` +
+   `(${bobbing.walkDrift}m while walking); the rig itself still rides ${bobbing.rigOffset}m of bob`);
+
+// B24b. The report button must not itself be a bug. `Diag` lives in js/diag.js,
+// which the dashboard loads and this game does not, so the bare
+// `Diag && Diag.log && ...` guarding the copy handler was a ReferenceError
+// rather than a falsy check — it threw on every click, and the throw landed in
+// __ujErrors, so the diagnostic report reported the report button.
+const reportBtn = await page.evaluate(async () => {
+  window.__ujErrors.length = 0;
+  const before = window.__ujErrors.length;
+  UJ.togglePause(true);
+  document.getElementById('copyReport').click();
+  await new Promise(r => setTimeout(r, 600));
+  const txt = UJ.buildReport();
+  UJ.togglePause(false);
+  return { errs: window.__ujErrors.slice(0, 2), before,
+           hasBuild: /BUILD/.test(txt), hasGpu: /gpu/i.test(txt), len: txt.length };
+});
+ok('copying the diagnostic report raises no error and produces a real report',
+   reportBtn.errs.length === 0 && reportBtn.hasBuild && reportBtn.len > 120,
+   `report is ${reportBtn.len} chars, names the build and the GPU, and the click threw ` +
+   `${reportBtn.errs.length} error(s)${reportBtn.errs.length ? ': ' + reportBtn.errs.join(' | ') : ''}`);
+
+// B24c. A silent fallback is the bug that cost this project six builds: both
+// character models 403'd and the only tell was a settings label you had to open
+// the pause menu to read. The warning also has to survive startup — the loaders
+// resolve while the title card is up, so a toast fired then is gone before
+// anyone is playing. Holds either way: this sandbox cannot reach the CDN, so
+// locally the models DO fail and the warning must fire.
+const artWarning = await page.evaluate(() => {
+  const failed = Object.keys(UJ.modelStatus).filter(k => UJ.modelStatus[k] === 'failed');
+  // assert the warning was DELIVERED, not that its toast is still on screen —
+  // gameplay messages overwrite the toast within seconds, which is exactly why
+  // the build stamp carries it too
+  return { failed, status: { ...UJ.modelStatus },
+           label: document.getElementById('setModels').textContent,
+           warned: UJ.modelWarned(),
+           stamp: document.getElementById('buildStamp').textContent };
+});
+const anyFailed = artWarning.failed.length > 0;
+ok('a character model that fails to load says so, out loud, once you are playing',
+   !anyFailed
+     ? (!/UNAVAILABLE/.test(artWarning.label) && !/PLACEHOLDER/.test(artWarning.stamp))
+     : (artWarning.warned && /UNAVAILABLE/.test(artWarning.label) &&
+        /PLACEHOLDER ART/.test(artWarning.stamp)),
+   anyFailed
+     ? `models ${JSON.stringify(artWarning.status)} — warned=${artWarning.warned}, menu reads ` +
+       `"${artWarning.label}", stamp reads "${artWarning.stamp}"`
+     : `models all loaded (${JSON.stringify(artWarning.status)}), so nothing is flagged`);
+
 // B21e. Cover buys time, not immunity. Blocking without steering made a
 // container an invincibility field: the chase drives straight at you, the wall
 // cancels exactly the component that closes the distance, and the zombie
@@ -1960,7 +2039,9 @@ const stamp = await page.evaluate(() => {
            chips, busted: src.every(u => /\?v=\d+/.test(u)), src };
 });
 ok('the running build is stamped on screen, and the script is cache-busted',
-   stamp.stamp === 'BUILD ' + stamp.BUILD && stamp.visible &&
+   // BUILD 24 appends "· PLACEHOLDER ART" here when a character model fails to
+   // load, so the stamp must START with the build rather than equal it
+   stamp.stamp.startsWith('BUILD ' + stamp.BUILD) && stamp.visible &&
    stamp.chips.every(c => c.includes('BUILD ' + stamp.BUILD)) &&
    stamp.busted && stamp.src.length > 0,
    `stamp reads "${stamp.stamp}" and the title chip agrees · ` +

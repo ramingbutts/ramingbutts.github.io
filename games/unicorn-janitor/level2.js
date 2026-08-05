@@ -636,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 23;
+const BUILD = 24;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -4085,7 +4085,42 @@ function loadModelWithFallback(spec, label, key, onLoad) {
         modelStatus[key] = 'failed';
         console.warn(`${label}: no local or CDN model — primitive rig stays on`);
         applyModelSetting();   // repaint the menu so it stops claiming 3D
+        announceModelFailure();
       }));
+}
+
+/* BUILD 24: say it out loud. Both character models 403'd for an unknown
+   number of builds and the only tell was a settings label you had to open the
+   pause menu to read — so the game shipped placeholder geometry to everyone
+   and nobody knew. The models still live on a remote URL with no vendored
+   copy in models/ (this sandbox cannot reach the CDN to download them), so
+   the same expiry WILL happen again; what must not happen again is it being
+   silent. One toast, once, naming the fix. */
+let _modelWarnPending = false, _modelWarned = false;
+function announceModelFailure() {
+  if (_modelWarned || _modelWarnPending) return;
+  const which = Object.keys(modelStatus).filter(k => modelStatus[k] === 'failed').join(' + ');
+  if (typeof Diag !== 'undefined' && Diag && Diag.warn) Diag.warn('models', `character model failed: ${which}`);
+  console.warn(`character art unavailable (${which}) — running on the primitive rig`);
+  _modelWarnPending = true;   // held until there is somebody playing to tell
+}
+/* The loaders resolve during startup, while the title card is still up — a
+   toast fired then is gone or overwritten before the run begins, which is how
+   a warning ends up as good as silent. Hold it until the first playing frame. */
+function flushModelWarning() {
+  if (!_modelWarnPending || _modelWarned || Game.state !== 'playing') return;
+  _modelWarned = true; _modelWarnPending = false;
+  const which = Object.keys(modelStatus).filter(k => modelStatus[k] === 'failed').join(' + ');
+  showToast(`⚠️ 3D character art didn't load (${which}) — you're seeing placeholder ` +
+            `blocks. Press P → COPY DIAGNOSTIC REPORT so this can be fixed.`, 10);
+  // A toast is gone in ten seconds and the next gameplay message overwrites it
+  // anyway, so the thing that must not be missable also goes somewhere
+  // permanent: the build stamp, which is on screen for the whole run.
+  const stamp = document.getElementById('buildStamp');
+  if (stamp) {
+    stamp.textContent = `BUILD ${BUILD} · PLACEHOLDER ART`;
+    stamp.style.color = '#ffb36a';
+  }
 }
 
 function loadCharacterModels() {
@@ -4977,8 +5012,16 @@ const NOZZLE_GUN = { up: 1.24, fwd: 2.4, right: 0.16 };
 
 function buildPlayer() {
   const g = Player.group = new THREE.Group();
-  Player.pos = g.position;
-  g.position.set(0, 0, 12);
+  /* BUILD 24: Player.pos used to BE g.position — the same Vector3 object. That
+     made the cosmetic walk/breathe bob below write straight into the
+     authoritative position every frame ("group.position.y = pos.y + bob" is
+     "pos.y += bob" when they alias), so a resting player drifted ~2cm up into
+     the dead band between groundY and groundY+0.05, where the ground code
+     neither snaps him down nor calls him airborne. It also polluted every
+     consumer of pos.y: the slam height gate, contact shadows, the reticle.
+     The physics position and the render transform are now two things. */
+  Player.pos = new THREE.Vector3(0, 0, 12);
+  g.position.copy(Player.pos);
 
   // concept art: navy short-sleeve jumpsuit over a black tee, leather
   // suspenders + belt, cargo pants, mohawk with shaved silver sides,
@@ -5414,7 +5457,9 @@ function updatePlayer(dt, t) {
   Player.group.rotation.y += bodyD * (1 - Math.pow(0.0005, dt));
   // running bob, or a slow idle-breathing rise when standing still
   const bob = moving && Player.onGround ? Math.abs(Math.sin(t * 9)) * 0.06 : Math.sin(t * 1.6) * 0.02;
-  Player.group.position.y = Player.pos.y + bob;
+  // the rig rides the bob; the position it is standing at does not
+  Player.group.position.copy(Player.pos);
+  Player.group.position.y += bob;
 
   // landing squash-and-recover: the whole body (rig or GLB, gun included)
   // compresses on touchdown proportional to impact speed, then springs back
@@ -5888,7 +5933,8 @@ function nozzleWorldPos(out) {
   const adj = (n === NOZZLE_GUN) ? Settings.nozzleAdj : null;
   const up = n.up + (adj ? adj.up : 0);
   const fwd = n.fwd + (adj ? adj.fwd : 0);
-  out.copy(Player.pos).add(_nozRight.set(0, up, 0)).addScaledVector(Player.forward, fwd);
+  // the visible barrel bobs with the rig, and the water leaves the barrel
+  out.copy(Player.group.position).add(_nozRight.set(0, up, 0)).addScaledVector(Player.forward, fwd);
   _nozRight.crossVectors(Player.forward, THREE.Object3D.DEFAULT_UP).normalize();
   return out.addScaledVector(_nozRight, n.right);
 }
@@ -6378,10 +6424,10 @@ const lvBadge = document.getElementById('lvBadge');
 const skillBtn = document.getElementById('skillBtn');
 const toastEl = document.getElementById('toastMsg');
 let toastT = 0;
-function showToast(text) {
+function showToast(text, dwell = 3.4) {
   toastEl.textContent = text;
   toastEl.style.opacity = 1;
-  toastT = 3.4;
+  toastT = dwell;
 }
 
 // XP awarded while the '+N XP' popup is still on screen accumulates into it
@@ -6947,7 +6993,8 @@ function refreshSettingsUI() {
   document.getElementById('setFps').textContent = Settings.showFps ? 'ON' : 'OFF';
   // say the truth, not the setting: if the GLBs never arrived the player is
   // looking at the block rig regardless of what this toggle is set to
-  const modelsBroken = modelStatus.jax === 'failed' && modelStatus.zombie === 'failed';
+  // either one failing means you are looking at placeholder art, so say so
+  const modelsBroken = modelStatus.jax === 'failed' || modelStatus.zombie === 'failed';
   document.getElementById('setModels').textContent =
     !Settings.models ? 'CLASSIC' : modelsBroken ? '3D — UNAVAILABLE' : '3D';
   fpsEl.style.display = Settings.showFps ? 'block' : 'none';
@@ -7452,7 +7499,11 @@ document.getElementById('copyReport').addEventListener('click', async (e) => {
     box.value = txt; box.classList.remove('hidden'); box.select();
     btn.textContent = 'SELECT ALL AND COPY ↑';
   }
-  Diag && Diag.log && Diag.log('report', 'diagnostic copied');
+  // `Diag` lives in js/diag.js, which the dashboard loads and this game does
+  // NOT — so a bare `Diag && ...` is a ReferenceError, not a falsy check. This
+  // threw on every click of the one button whose entire job is to report
+  // problems, and the error landed in __ujErrors, so the report reported it.
+  if (typeof Diag !== 'undefined' && Diag && Diag.log) Diag.log('report', 'diagnostic copied');
   setTimeout(() => { btn.textContent = '📋 COPY DIAGNOSTIC REPORT'; }, 4000);
 });
 document.getElementById('pauseRestart').addEventListener('click', () => location.reload());
@@ -7597,6 +7648,7 @@ window.UJ = { Game, Player, Tutorial, piles, zombies, civilians, Meters, cleanTa
   // BUILD 12 weak points / crits / chain bursts
   // BUILD 18 the feedback loop
   BUILD, Perf, buildReport, gpuName, modelStatus,
+  modelWarned: () => _modelWarned,
   QUALITY_TIERS, getUsePost: () => usePost, getLodRange: () => lodRange, fuse,
   // BUILD 17 aim: one truthful axis, focus mode, stick curve
   reticleDirFor, CAM_LOOK_AHEAD, getJetDir: () => _jetDir.clone(),
@@ -7677,6 +7729,7 @@ function simulate(dt, t) {
   if (Game.state === 'intro') {
     updateIntro(dt);
   } else if (Game.state === 'playing') {
+    flushModelWarning();
     updatePlayer(dt, t);
     updateHose(dt);
     updateBeam(dt);
