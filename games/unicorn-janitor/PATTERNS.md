@@ -1814,3 +1814,79 @@ BUILD 21 (105 checks green on a world you could now walk through), and now
 this. New behaviour needs a check written for it, and the way to find out
 whether a system works is to go and try to break it — not to observe that
 nothing already-written complained.
+
+## The actual Fisherman's Wharf (BUILD 23)
+
+The level was called Fisherman's Wharf and was "a pier with shops on it" —
+true of a thousand piers. What makes the real place recognisable in a second
+is a short list of landmarks, and almost none of them were here.
+
+Added, in rough order of how much recognition each buys:
+
+- **The crab sign.** The round cream plate with the red Dungeness crab and
+  "FISHERMAN'S WHARF · SAN FRANCISCO" curved top and bottom, on a gantry you
+  walk under at the pier head. It is *the* icon of the place and the level
+  did not have it. Drawn to a canvas, like the plank and asphalt textures.
+- **Alcatraz**, out in the bay with the cellhouse, the water tower and a
+  lighthouse flashing on a real 5-second characteristic.
+- **The Golden Gate Bridge** — International Orange, towers with their
+  stacked crossbraces, main-cable sag and back-stays. The silhouette is
+  specific enough that it reads from 340 m.
+- **Coit Tower** on Telegraph Hill, behind the wharf where it actually is.
+- **The crab fleet** — six trawlers moored between the sea-lion docks, lit
+  wheelhouses, masts and booms, crab pots stacked on the working deck, riding
+  the same swell as the docks. The real wharf is a working harbour first.
+- **Tenants with names**: Boudin, Pier 39, Alcatraz Tours, Ghirardelli, the
+  Cannery, painted on boards facing the pier.
+- **The cargo re-skinned.** The platform boxes were corrugated shipping
+  containers — that is a container terminal, the wrong port entirely. Same
+  boxes, because the whole platform layer stands on them; dressed now as the
+  painted timber fish crates a crab dock is stacked with.
+
+### Three things that had to be got right
+
+**Fog eats the horizon.** `FogExp2` at 0.03 is effectively opaque past ~120 m
+— exp(−(200·0.03)²) ≈ 1e-16 — so a landmark placed on the horizon without
+`fog: false` is a landmark nobody will ever see. The sun already worked this
+way; the bay does now.
+
+**A flat emissive on a pale sign erases the sign.** Lighting the crab plate
+with a uniform `emissive` plus bloom pushed the whole disc past white and
+wiped out exactly the crab and lettering that make it recognisable. An
+`emissiveMap` set to the sign's own texture keeps the dark ink dark and glows
+only the plate. Same fix on the shop boards. There was also a halo sprite
+centred *on* the plate, which was floodlighting it from the front; the real
+sign is lit from the gantry, and so is this one.
+
+**Curved text runs backwards on the lower arc.** Sweeping the angle
+left-to-right is correct along the top and mirrored along the bottom, so
+"SAN FRANCISCO" came out "OCSICNARF NAS". Reverse the string on the flipped
+arc. Caught only by looking at it — no test would have.
+
+### Framing is not the same as rendering
+
+Twice I concluded a landmark "wasn't rendering" when it was. Projecting
+Alcatraz's world position to screen coordinates put it at 601,327 in a
+1200×660 frame — dead centre, which is exactly where the third-person camera
+parks Jax. It was behind his head. `UJ.aimAt(target)` centres the target and
+therefore hides it; screenshots of a landmark have to aim *wide* of it.
+
+Cheap diagnostic worth reusing: project the world point and print the pixel,
+rather than staring at the picture wondering.
+
+### Cost
+
+Deterministic A/B — same viewpoint, same 20 zombies at fixed positions, the
+builders switched off and on:
+
+| | draw calls | triangles |
+|---|---|---|
+| without | 1168 | 67,093 |
+| with | 1238 | 69,523 |
+| **delta** | **+70** | **+2,430** |
+
+That is ~126 meshes fused down to 70 draw calls: the bridge's 23 pieces ship
+as 3, and each boat's 13 as 6, per BUILD 19's rule that anything static,
+repeated and same-material is one call. Randomised zombie spawns make this
+measurement useless — culling changes run to run — so the positions are fixed
+before anything is compared.
