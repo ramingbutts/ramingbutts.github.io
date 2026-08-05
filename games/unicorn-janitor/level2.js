@@ -636,7 +636,7 @@ function setupTouch() {
    are fixed here, because no amount of design work matters if it never
    reaches the player or lands at 15fps.
    --------------------------------------------------------------------- */
-const BUILD = 22;
+const BUILD = 23;
 
 // Real frame timing, always collected — not the optional on-screen counter.
 // Percentiles, not an average: an average of 60 and 20 reads as "fine", and
@@ -1080,10 +1080,358 @@ function gangway(grp, mat, x0, x1, z, yA, yB, width = 2.4) {
   return s;
 }
 
+/* =====================================================================
+   4.5 THE ACTUAL FISHERMAN'S WHARF (BUILD 23)
+
+   The level was "a pier with shops on it" — true of a thousand piers. What
+   makes the real place instantly recognisable is a short list of landmarks,
+   and almost none of them were here: no crab sign, an empty bay with no
+   Alcatraz and no Golden Gate, no crab fleet moored alongside, and cargo
+   dressed as a container port rather than a fish dock.
+
+   Everything distant is `fog: false`. FogExp2 at 0.03 is essentially opaque
+   past ~120 m (exp(-(200*0.03)^2) ≈ 1e-16), so a landmark on the horizon
+   without that flag is a landmark nobody will ever see. The sun already
+   works this way; the bay now does too.
+   ===================================================================== */
+
+// canvas → texture, the same trick the plank and asphalt textures use
+function signCanvas(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4;
+  return t;
+}
+
+// text bent around a circle — the Wharf sign's lettering follows the plate,
+// and straight lines across a round sign read as "generic logo" instead
+function arcText(g, text, cx, cy, r, midAngle, spread, size, flip) {
+  g.save();
+  g.fillStyle = '#16202c';
+  g.font = `700 ${size}px Georgia, "Times New Roman", serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  // On the lower arc the angle still sweeps left-to-right in canvas space but
+  // the glyphs face the other way, so the string comes out mirrored
+  // ("OCSICNARF NAS"). Reverse the order there and it reads correctly.
+  const chars = flip ? [...text].reverse() : [...text];
+  const per = spread / Math.max(1, chars.length - 1);
+  let a = midAngle - spread / 2;
+  for (const ch of chars) {
+    g.save();
+    g.translate(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    g.rotate(a + (flip ? -Math.PI / 2 : Math.PI / 2));
+    g.fillText(ch, 0, 0);
+    g.restore();
+    a += per;
+  }
+  g.restore();
+}
+
+/* The sign itself: a cream plate, a red Dungeness crab, and the two lines of
+   serif lettering curved top and bottom. This is the single most recognisable
+   object at Fisherman's Wharf and the level did not have it. */
+function makeCrabSignTexture() {
+  return signCanvas(512, 512, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    const cx = 256, cy = 256;
+    g.fillStyle = '#f3e8d2';
+    g.beginPath(); g.arc(cx, cy, 244, 0, Math.PI * 2); g.fill();
+    g.lineWidth = 16; g.strokeStyle = '#16202c';
+    g.beginPath(); g.arc(cx, cy, 236, 0, Math.PI * 2); g.stroke();
+    g.lineWidth = 5;
+    g.beginPath(); g.arc(cx, cy, 214, 0, Math.PI * 2); g.stroke();
+
+    arcText(g, "FISHERMAN'S WHARF", cx, cy, 178, -Math.PI / 2, 2.35, 44, false);
+    arcText(g, 'SAN FRANCISCO', cx, cy, 180, Math.PI / 2, 1.75, 36, true);
+
+    // Dungeness crab, top-down: shell, eyes, two claws, three legs a side
+    const shell = '#c8452c', shellDark = '#9c3220', shellLit = '#e0664a';
+    g.save(); g.translate(cx, cy + 6);
+    g.strokeStyle = shellDark; g.lineCap = 'round';
+    for (const s of [-1, 1]) {
+      g.lineWidth = 11;
+      for (let i = 0; i < 3; i++) {
+        const y = -6 + i * 22, spread = 60 + i * 6;
+        g.beginPath();
+        g.moveTo(s * 44, y);
+        g.quadraticCurveTo(s * (spread + 18), y + 14, s * (spread + 34), y + 40 + i * 6);
+        g.stroke();
+      }
+      // claw arm + pincer
+      g.lineWidth = 13;
+      g.beginPath(); g.moveTo(s * 42, -18); g.quadraticCurveTo(s * 92, -46, s * 104, -84); g.stroke();
+      g.fillStyle = shell;
+      g.save(); g.translate(s * 104, -92); g.rotate(s * 0.5);
+      g.beginPath(); g.ellipse(0, 0, 17, 27, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#f3e8d2';
+      g.fillRect(s * -3, -26, 6, 22);
+      g.restore();
+    }
+    g.fillStyle = shell;
+    g.beginPath(); g.ellipse(0, 6, 62, 44, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = shellLit;
+    g.beginPath(); g.ellipse(0, -4, 50, 26, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#16202c';
+    g.beginPath(); g.arc(-20, -14, 6, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(20, -14, 6, 0, Math.PI * 2); g.fill();
+    g.restore();
+  });
+}
+
+// a painted shopfront board — the real wharf sells crab, chowder and sourdough
+function makeShopSignTexture(text, bg, ink) {
+  return signCanvas(512, 128, (g, w, h) => {
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(0, h - 10, w, 10);
+    g.fillStyle = ink;
+    g.font = '700 62px Georgia, "Times New Roman", serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, w / 2, h / 2 + 2);
+  });
+}
+
+/* The gantry over the pier head. You walk under it on the way in, which is
+   how you meet the real one. Deliberately NOT a solid: an arch that can trap
+   the player is worse than no arch. */
+function buildWharfSign(grp) {
+  const g = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x2b3442, roughness: 0.6, metalness: 0.35 });
+  const postGeo = new THREE.CylinderGeometry(0.24, 0.3, 8.4, 10);
+  for (const s of [-1, 1]) {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(s * 11.2, 4.2, 0);
+    post.castShadow = true;
+    g.add(post);
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(23, 0.42, 0.42), postMat);
+  beam.position.y = 8.1;
+  g.add(beam);
+  // Lit through an emissiveMap, not a flat emissive. A uniform glow on a cream
+  // plate pushes the whole thing past white under bloom and erases exactly the
+  // crab and lettering that make it the Fisherman's Wharf sign; mapping the
+  // emission to the texture keeps the dark ink dark and glows only the plate.
+  const crabTex = makeCrabSignTexture();
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(7, 7),
+    new THREE.MeshStandardMaterial({ map: crabTex, transparent: true,
+      side: THREE.DoubleSide, roughness: 0.55,
+      emissiveMap: crabTex, emissive: 0xffffff, emissiveIntensity: 0.4 }));
+  sign.position.y = 5.5;
+  g.add(sign);
+  // The real sign is floodlit after dark and this level is permanently at
+  // dusk — but a halo centred ON the plate washes the crab and the lettering
+  // straight out, which is the whole point of the object. Light it from the
+  // gantry instead, the way it is actually lit.
+  for (const s of [-1, 1]) {
+    const lamp = glowSprite(0xfff0c8, 1.6, 0.6);
+    lamp.position.set(s * 3.5, 7.6, 0.35);
+    g.add(lamp);
+  }
+  // At z=-4 the plate sat directly over the crater, and the crater's glow and
+  // the fog sprites washed the lettering out. Move it to the pier head, where
+  // you walk under it on the way in and it has clean sky behind it.
+  g.position.set(0, 0, 6.5);
+  grp.add(g);
+}
+
+/* Alcatraz, the Golden Gate and the city — the three things on the horizon
+   that say San Francisco rather than "a pier somewhere". All far outside the
+   play area, all fog-exempt, all built from a handful of boxes because at
+   250-340 m that is all anyone can resolve. */
+function buildBayLandmarks(grp) {
+  const far = (color, emissive = 0x000000, ei = 0) => new THREE.MeshBasicMaterial({
+    color, fog: false, toneMapped: false });
+
+  // ---- Alcatraz: rock, cellhouse, water tower, lighthouse with a live flash
+  const rock = new THREE.Group();
+  const rockMat = far(0x8f8496);
+  const island = new THREE.Mesh(new THREE.SphereGeometry(30, 14, 8), rockMat);
+  island.scale.set(1.9, 0.34, 1);
+  rock.add(island);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(46, 9, 13), far(0xd8d0dc));
+  cell.position.set(-2, 12, 0);
+  rock.add(cell);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(47, 1.6, 14), far(0x8b8296));
+  roof.position.set(-2, 17.2, 0);
+  rock.add(roof);
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.6, 16, 8), far(0xc6bed0));
+  tower.position.set(-26, 15, 2);
+  rock.add(tower);
+  const light = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.9, 15, 10), far(0xefe9f2));
+  light.position.set(22, 15, -1);
+  rock.add(light);
+  const beacon = glowSprite(0xfff2c0, 9, 0.9);
+  beacon.material.fog = false;
+  beacon.position.set(22, 24, -1);
+  rock.add(beacon);
+  rock.position.set(-120, 1, -305);
+  rock.rotation.y = 0.32;
+  grp.add(rock);
+  alcatrazBeacon = beacon;
+
+  // ---- Golden Gate Bridge: two towers, the deck, and the main cable sag.
+  // International Orange, and it reads from a long way off precisely because
+  // the silhouette is so specific — so the towers get their crossbraces.
+  const gg = new THREE.Group();
+  const orange = far(0xba4a2e), orangeDark = far(0x8f3720), landMat = far(0x4d4460);
+  const oParts = [], odParts = [], landParts = [];
+  const SPAN = 210, TOWER_H = 96, DECK_Y = 26;
+  const towerXs = [-SPAN / 2, SPAN / 2];
+  for (const tx of towerXs) {
+    for (const s of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(5, TOWER_H, 5), orange);
+      leg.position.set(tx, TOWER_H / 2, s * 9);
+      gg.add(leg); oParts.push(leg);
+    }
+    for (let i = 0; i < 5; i++) {   // the stacked crossbraces
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(4.4, 3.4, 23), orangeDark);
+      brace.position.set(tx, 16 + i * 19, 0);
+      gg.add(brace); odParts.push(brace);
+    }
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(SPAN + 210, 2.6, 17), orange);
+  deck.position.y = DECK_Y;
+  gg.add(deck); oParts.push(deck);
+  // main cables: a quadratic sag between the tower tops, one per side
+  for (const s of [-1, 1]) {
+    const curve = new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(-SPAN / 2, TOWER_H - 4, s * 9),
+      new THREE.Vector3(0, DECK_Y + 2, s * 9),
+      new THREE.Vector3(SPAN / 2, TOWER_H - 4, s * 9));
+    { const c = new THREE.Mesh(new THREE.TubeGeometry(curve, 18, 1.3, 5, false), orange); gg.add(c); oParts.push(c); }
+    // and the back-stays running off to the anchorages
+    for (const tx of towerXs) {
+      const back = new THREE.QuadraticBezierCurve3(
+        new THREE.Vector3(tx, TOWER_H - 4, s * 9),
+        new THREE.Vector3(tx + Math.sign(tx) * 55, DECK_Y + 22, s * 9),
+        new THREE.Vector3(tx + Math.sign(tx) * 105, DECK_Y - 2, s * 9));
+      { const c = new THREE.Mesh(new THREE.TubeGeometry(back, 10, 1.1, 5, false), orange); gg.add(c); oParts.push(c); }
+    }
+  }
+  // The span needs something to land on. Without the headlands the bridge is
+  // a toy hanging in the sky; with them it reads as the strait it crosses.
+  for (const [hx, hz, sx, sy, sz] of [[-165, 0, 1.5, 0.62, 1.1], [175, 0, 1.7, 0.78, 1.2]]) {
+    const head = new THREE.Mesh(new THREE.SphereGeometry(58, 12, 8), landMat);
+    head.scale.set(sx, sy, sz);
+    head.position.set(hx, -6, hz);
+    gg.add(head); landParts.push(head);
+  }
+  // BUILD 19's rule: static, repeated, same material -> one draw call. The
+  // span alone was 23 meshes on the horizon that nothing will ever look at
+  // closely.
+  fuse(oParts, orange); fuse(odParts, orangeDark); fuse(landParts, landMat);
+  gg.position.set(-330, 0, -140);
+  gg.rotation.y = 0.62;
+  grp.add(gg);
+
+  // ---- Coit Tower on Telegraph Hill, behind the wharf where it really is
+  const hill = new THREE.Mesh(new THREE.SphereGeometry(70, 14, 8), far(0x4a4460));
+  hill.scale.set(1.5, 0.5, 1);
+  hill.position.set(60, -6, 190);
+  grp.add(hill);
+  const coit = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 6.5, 44, 12), far(0xa9a2b4));
+  coit.position.set(52, 52, 186);
+  grp.add(coit);
+  const coitCap = new THREE.Mesh(new THREE.CylinderGeometry(4.4, 5.6, 7, 12), far(0x8d8698));
+  coitCap.position.set(52, 77, 186);
+  grp.add(coitCap);
+}
+
+/* The crab fleet. Real Fisherman's Wharf is a working harbour before it is a
+   tourist strip — the boats are the reason the rest of it exists. Moored in
+   the gaps between the sea-lion docks so they frame the water without
+   blocking a gangway. */
+function buildFishingFleet(grp) {
+  const hullCols = [0xd8dde2, 0x3f6f8e, 0xc4462f, 0xe2d3a8, 0x2f6a5a, 0xd9a03c];
+  const names = ['MARIA G', 'SEA FOX', 'LADY LUCK', 'ANNA MARIE', 'PELICAN', 'ST. ROSE'];
+  const woodDark = new THREE.MeshStandardMaterial({ color: 0x4a3620, roughness: 0.9 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xdfe3e6, roughness: 0.7 });
+  const spots = [[-27, 0.5], [-50, -0.35], [-80, 0.5], [-113, -0.3], [-147, 0.55], [-180, -0.4]];
+  spots.forEach(([bz, rot], i) => {
+    const boat = new THREE.Group();
+    const hullParts = [], darkParts = [], whiteParts = [], potParts = [];
+    const col = hullCols[i % hullCols.length];
+    const hullMat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.65 });
+    // hull: a box with a raked bow cone, which at this scale reads as a boat
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(3.3, 1.9, 9.5), hullMat);
+    hull.position.y = 0.5;
+    boat.add(hull); hullParts.push(hull);
+    const bow = new THREE.Mesh(new THREE.ConeGeometry(1.68, 3.6, 4), hullMat);
+    bow.rotation.x = -Math.PI / 2; bow.rotation.y = Math.PI / 4;
+    bow.position.set(0, 0.5, 6.4);
+    boat.add(bow); hullParts.push(bow);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.42, 0.34, 9.6), woodDark);
+    stripe.position.y = 1.32;
+    boat.add(stripe); darkParts.push(stripe);
+    // wheelhouse forward, open working deck aft — that is a crab boat
+    const house = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.1, 3.1), white);
+    house.position.set(0, 2.5, 1.6);
+    boat.add(house); whiteParts.push(house);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(2.75, 0.24, 3.35), woodDark);
+    cap.position.set(0, 3.65, 1.6);
+    boat.add(cap); darkParts.push(cap);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(2.56, 0.72, 3.16),
+      new THREE.MeshStandardMaterial({ color: 0x1d2a38, roughness: 0.25, metalness: 0.5,
+        emissive: 0xffcf7a, emissiveIntensity: 0.35 }));
+    glass.position.set(0, 3.0, 1.6);
+    boat.add(glass);
+    // mast and boom, with the deck light every one of these carries
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 7.2, 6), white);
+    mast.position.set(0, 6.6, 1.2);
+    boat.add(mast); whiteParts.push(mast);
+    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 5.6, 5), white);
+    boom.rotation.x = Math.PI / 2; boom.position.set(0, 8.4, -0.6);
+    boat.add(boom); whiteParts.push(boom);
+    const lamp = glowSprite(0xffe6b0, 2.4, 0.55);
+    lamp.position.set(0, 8.0, 1.2);
+    boat.add(lamp);
+    // a stack of crab pots on the working deck — the cargo that belongs here
+    for (let k = 0; k < 3; k++) {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.68, 0.42, 8),
+        new THREE.MeshStandardMaterial({ color: 0x7d5a2e, roughness: 0.85, wireframe: true }));
+      pot.position.set(-0.7 + (k % 2) * 1.4, 1.7 + Math.floor(k / 2) * 0.44, -2.6 - (k % 2) * 0.2);
+      boat.add(pot); potParts.push(pot);
+    }
+    const nameTag = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65),
+      new THREE.MeshBasicMaterial({ map: makeShopSignTexture(names[i], '#f0e7d4', '#1d2a38'),
+        transparent: true, side: THREE.DoubleSide }));
+    nameTag.position.set(-1.68, 1.0, 1.4);
+    nameTag.rotation.y = -Math.PI / 2;
+    boat.add(nameTag);
+
+    fuse(hullParts, hullMat); fuse(darkParts, woodDark); fuse(whiteParts, white);
+    fuse(potParts, potParts[0].material);
+    boat.position.set(18.8, -1.25, bz);
+    boat.rotation.y = rot;
+    grp.add(boat);
+    mooredBoats.push({ g: boat, phase: i * 1.7, baseY: -1.25, roll: rot });
+  });
+}
+
+// boats ride the same swell the docks do — a harbour where nothing moves
+// reads as a diorama
+function updateBoats(t) {
+  for (const b of mooredBoats) {
+    b.g.position.y = b.baseY + Math.sin(t * 0.7 + b.phase) * 0.16;
+    b.g.rotation.z = Math.sin(t * 0.55 + b.phase * 1.3) * 0.035;
+    b.g.rotation.x = Math.sin(t * 0.63 + b.phase) * 0.022;
+  }
+  if (alcatrazBeacon) {
+    // Alcatraz light: 5s period, a real characteristic rather than a pulse
+    const ph = (t % 5) / 5;
+    alcatrazBeacon.material.opacity = ph < 0.13 ? 0.95 : 0.12;
+  }
+}
+
 function buildTerrain(grp) {
-  const steelA = new THREE.MeshStandardMaterial({ color: 0x9a4a3a, roughness: 0.7, metalness: 0.25 });
-  const steelB = new THREE.MeshStandardMaterial({ color: 0x2f6a7a, roughness: 0.7, metalness: 0.25 });
-  const steelC = new THREE.MeshStandardMaterial({ color: 0x6a6a3a, roughness: 0.7, metalness: 0.25 });
+  // BUILD 23: these were corrugated shipping containers, which is a container
+  // terminal — the wrong port. Same boxes (the whole platform layer stands on
+  // them), dressed as the painted timber fish crates and cold-store lockers a
+  // working crab dock is stacked with.
+  const steelA = new THREE.MeshStandardMaterial({ color: 0x8c4536, roughness: 0.88, metalness: 0.05 });
+  const steelB = new THREE.MeshStandardMaterial({ color: 0x35657a, roughness: 0.88, metalness: 0.05 });
+  const steelC = new THREE.MeshStandardMaterial({ color: 0xa9a08a, roughness: 0.9, metalness: 0.04 });
   const mats = [steelA, steelB, steelC];
   const ribGeo = new THREE.BoxGeometry(0.12, 2.3, 0.12);
   // [x, z, width, depth, height, rotated?]
@@ -1171,6 +1519,8 @@ function tryBounce(mult = 1) {
 }
 
 const ambientSeaLions = [];
+const mooredBoats = [];      // the crab fleet, riding the same swell as the docks
+let alcatrazBeacon = null;  // its light has a characteristic, so it has to be driven
 // solid geometry the camera boom collides against (shops, carts, pilings) —
 // a short explicit list, because raycasting the whole scene every frame is waste
 const camBlockers = [];
@@ -1265,14 +1615,23 @@ function buildWharf() {
   instanced(new THREE.CylinderGeometry(0.035, 0.035, 5.7, 5), ropeMat, ropeSpots);
 
   // shop row along the -x side: colorful shacks, striped awnings, glowing signs
-  const shopDefs = [ // [z, width, hull color, awning color, sign color]
-    [-8, 9, 0x7e4a5a, 0xe8e4da, 0x8fe0ff], [-24, 11, 0x4a6a5e, 0xd66a6a, 0xffd94f],
-    [-42, 8, 0x5a5a7e, 0xe8b04a, 0xff9ae0], [-58, 10, 0x6a4a3a, 0x9ad6c2, 0x9fdcff],
-    [-76, 9, 0x44585a, 0xe8e4da, 0xffb36a], [-96, 10, 0x5e4a6e, 0xd6c26a, 0x8fffc9],
-    [-116, 9, 0x3f5a6a, 0xe8a4b8, 0xffd0f0], [-136, 11, 0x6a5a3f, 0xa8d6e8, 0xfff08f],
-    [-158, 9, 0x4a3f5a, 0xd6e8a8, 0x9fb0ff], [-180, 10, 0x5a6a4a, 0xe8b8d6, 0x8fe0ff],
+  // The tenants of the real wharf, in the order you meet them walking out:
+  // crab stands with steaming pots on the pavement, chowder in a sourdough
+  // bowl, the boat-tour kiosks, the arcade. Naming them is most of what turns
+  // "a row of coloured shacks" into somewhere.
+  const shopDefs = [ // [z, width, hull color, awning color, sign color, name]
+    [-8, 9, 0x7e4a5a, 0xe8e4da, 0x8fe0ff, 'CRAB & CHOWDER'],
+    [-24, 11, 0x4a6a5e, 0xd66a6a, 0xffd94f, 'BOUDIN SOURDOUGH'],
+    [-42, 8, 0x5a5a7e, 0xe8b04a, 0xff9ae0, 'PIER 39'],
+    [-58, 10, 0x6a4a3a, 0x9ad6c2, 0x9fdcff, 'DUNGENESS DAILY'],
+    [-76, 9, 0x44585a, 0xe8e4da, 0xffb36a, 'BAY CRUISES'],
+    [-96, 10, 0x5e4a6e, 0xd6c26a, 0x8fffc9, 'ALCATRAZ TOURS'],
+    [-116, 9, 0x3f5a6a, 0xe8a4b8, 0xffd0f0, 'MUSEE MECANIQUE'],
+    [-136, 11, 0x6a5a3f, 0xa8d6e8, 0xfff08f, 'FRESH CATCH'],
+    [-158, 9, 0x4a3f5a, 0xd6e8a8, 0x9fb0ff, 'GHIRARDELLI'],
+    [-180, 10, 0x5a6a4a, 0xe8b8d6, 0x8fe0ff, 'THE CANNERY'],
   ];
-  for (const [z, w, hull, awn, sign] of shopDefs) {
+  for (const [z, w, hull, awn, sign, name] of shopDefs) {
     const shopX = -(B.width / 2 + 3.2);
     const shop = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(6, 4.6, w),
@@ -1300,6 +1659,14 @@ function buildWharf() {
     const glow = glowSprite(sign, 3.4, 0.35);
     glow.position.set(3.4, 4.1, 0);
     shop.add(glow);
+    // the painted name board, facing the pier where you actually walk
+    const boardTex = makeShopSignTexture(name, '#f2e8d6', '#1d2a38');
+    const board = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w - 1.5, 7), 1.5),
+      new THREE.MeshStandardMaterial({ map: boardTex, transparent: true, roughness: 0.6,
+        emissiveMap: boardTex, emissive: 0xffffff, emissiveIntensity: 0.35 }));
+    board.position.set(3.02, 2.5, 0);
+    board.rotation.y = Math.PI / 2;
+    shop.add(board);
     shop.position.set(shopX, 0, z);
     grp.add(shop);
     // BUILD 21: the shop row is real estate now, not a backdrop. The hull is
@@ -1415,6 +1782,9 @@ function buildWharf() {
   sunGlow.position.set(120, 26, -70);
   grp.add(sunGlow);
 
+  buildWharfSign(grp);
+  buildBayLandmarks(grp);
+  buildFishingFleet(grp);
   buildTerrain(grp);
   scene.add(grp);
 }
@@ -7280,7 +7650,7 @@ function simulate(dt, t) {
   updateFogParticles(dt, t);
   updateOcean(t);
   updateGulls(t);
-  updateSeaLions(t, dt);
+  updateSeaLions(t, dt); updateBoats(t);
   updateBouncePads(dt, t);
   updateContactShadows();
   updateGlitter(dt);
